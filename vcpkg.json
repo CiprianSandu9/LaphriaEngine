@@ -1,0 +1,19 @@
+{
+  "name": "vulkan-tutorial",
+  "version": "1.0.0",
+  "dependencies": [
+    "glfw3",
+    "glm",
+    "stb",
+    "nlohmann-json",
+    "fastgltf",
+    "ktx",
+    {
+      "name": "imgui",
+      "features": [
+        "glfw-binding",
+        "vulkan-binding"
+      ]
+    }
+  ]
+}
