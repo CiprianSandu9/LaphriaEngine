@@ -25,9 +25,9 @@ class UISystem
 	void cleanup();
 
 	// ── State shared with EngineCore's main loop ──────────────────────────────
-	bool      useGPUPhysics     = false;
-	bool      useRayTracing     = false;
-	bool      simulationRunning = false;
+	bool       useGPUPhysics     = false;
+	RenderMode renderMode        = RenderMode::Rasterizer;
+	bool       simulationRunning = false;
 	float     physicsTime       = 0.0f;        // updated by EngineCore after each tick
 	glm::vec3 lightDirection    = glm::vec3(-0.25f, -1.0f, 0.0f);
 

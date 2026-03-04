@@ -55,10 +55,20 @@ class EngineCore
 	// Ray Tracing Resources
 	std::vector<vk::raii::DescriptorSet> rtDescriptorSets;
 
+	// Denoiser Resources (one set per frame in flight)
+	vk::raii::DescriptorPool             denoiserDescriptorPool{nullptr};
+	std::vector<vk::raii::DescriptorSet> denoiserDescriptorSets;
+
 	// Scene System
 	std::unique_ptr<Scene>           scene;
 	std::unique_ptr<ResourceManager> resourceManager;
 	std::unique_ptr<PhysicsSystem>   physicsSystem;
+
+	// Path tracer camera movement detection (history reset on camera change)
+	glm::vec3 ptPrevCameraPos{0.f};
+	float     ptPrevPitch{0.f};
+	float     ptPrevYaw{0.f};
+	bool      ptCameraMoved{false};
 
 	void initWindow();
 
@@ -81,8 +91,10 @@ class EngineCore
 	void createComputeDescriptorSets();
 
 	void createRayTracingDescriptorSets();
+	void createDenoiserDescriptorSets();
 
 	void recordComputeCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
+	void recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 
 	void createDescriptorPool();

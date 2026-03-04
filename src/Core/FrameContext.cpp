@@ -17,6 +17,9 @@ void FrameContext::init(VulkanDevice &dev, SwapchainManager &swapchain)
 	createDepthResources(dev, swapchain);
 	createStorageResources(dev, swapchain);
 	createRayTracingOutputImages(dev, swapchain);
+	createGBufferResources(dev, swapchain);
+	createHistoryResources(dev, swapchain);
+	createAtrousResources(dev, swapchain);
 	// Shadow resources are extent-independent and live for the engine's full lifetime.
 	createShadowResources(dev);
 
@@ -36,6 +39,28 @@ void FrameContext::cleanupSwapChainDependents()
 	depthImageViews.clear();
 	depthImages.clear();
 	depthImagesMemory.clear();
+
+	// G-Buffer images are extent-dependent.
+	rtGBufferNormalsViews.clear();
+	rtGBufferNormals.clear();
+	rtGBufferNormalsMemory.clear();
+	rtGBufferDepthViews.clear();
+	rtGBufferDepth.clear();
+	rtGBufferDepthMemory.clear();
+	rtMotionVectorsViews.clear();
+	rtMotionVectors.clear();
+	rtMotionVectorsMemory.clear();
+
+	// History and A-Trous images are extent-dependent.
+	historyColorViews.clear();
+	historyColor.clear();
+	historyColorMemory.clear();
+	historyMomentsViews.clear();
+	historyMoments.clear();
+	historyMomentsMemory.clear();
+	atrousTempViews.clear();
+	atrousTemp.clear();
+	atrousTempMemory.clear();
 }
 
 void FrameContext::recreate(VulkanDevice &dev, SwapchainManager &swapchain)
@@ -44,6 +69,9 @@ void FrameContext::recreate(VulkanDevice &dev, SwapchainManager &swapchain)
 	createStorageResources(dev, swapchain);
 	createRayTracingOutputImages(dev, swapchain);
 	createDepthResources(dev, swapchain);
+	createGBufferResources(dev, swapchain);
+	createHistoryResources(dev, swapchain);
+	createAtrousResources(dev, swapchain);
 }
 
 void FrameContext::createCommandPool(VulkanDevice &dev)
@@ -145,6 +173,16 @@ void FrameContext::createStorageResources(VulkanDevice &dev, SwapchainManager &s
 		                                                         vk::Format::eR16G16B16A16Sfloat,
 		                                                         vk::ImageAspectFlagBits::eColor));
 	}
+
+	// Pre-transition all storage images to eGeneral so they always match the layout declared
+	// in computeDescriptorSets, even on frames where the compute pass hasn't run yet.
+	{
+		auto cmd = VulkanUtils::beginSingleTimeCommands(dev.logicalDevice, commandPool);
+		for (auto &img : storageImages)
+			VulkanUtils::recordImageLayoutTransition(cmd, *img,
+			    vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
+		VulkanUtils::endSingleTimeCommands(dev.logicalDevice, dev.queue, commandPool, cmd);
+	}
 }
 
 void FrameContext::createRayTracingOutputImages(VulkanDevice &dev, SwapchainManager &swapchain)
@@ -176,6 +214,16 @@ void FrameContext::createRayTracingOutputImages(VulkanDevice &dev, SwapchainMana
 		                                                                  vk::Format::eR16G16B16A16Sfloat,
 		                                                                  vk::ImageAspectFlagBits::eColor));
 	}
+
+	// Pre-transition to eGeneral so the layout always matches rtDescriptorSets / denoiserDescriptorSets
+	// even when the path tracer or classic RT hasn't rendered yet (e.g. on the first rasterizer frame).
+	{
+		auto cmd = VulkanUtils::beginSingleTimeCommands(dev.logicalDevice, commandPool);
+		for (auto &img : rayTracingOutputImages)
+			VulkanUtils::recordImageLayoutTransition(cmd, *img,
+			    vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
+		VulkanUtils::endSingleTimeCommands(dev.logicalDevice, dev.queue, commandPool, cmd);
+	}
 }
 
 void FrameContext::createUniformBuffers(VulkanDevice &dev)
@@ -201,7 +249,7 @@ void FrameContext::createUniformBuffers(VulkanDevice &dev)
 	}
 }
 
-void FrameContext::updateUniformBuffer(uint32_t frameIdx, const Camera &camera, vk::Extent2D extent, glm::vec3 lightDirection) const
+void FrameContext::updateUniformBuffer(uint32_t frameIdx, const Camera &camera, vk::Extent2D extent, glm::vec3 lightDirection)
 {
 	Laphria::UniformBufferObject ubo{};
 	ubo.view = camera.getViewMatrix();
@@ -317,6 +365,17 @@ void FrameContext::updateUniformBuffer(uint32_t frameIdx, const Camera &camera, 
 		ubo.cascadeViewProj[i] = lightProj * lightView;
 	}
 
+	// Path tracer temporal fields — carry the previous frame's VP and advance the frame counter.
+	ubo.prevViewProj = prevViewProj;
+	ubo.frameCount   = frameCount;
+	ubo.jitter_x     = 0.0f;   // Sub-pixel jitter disabled; set to halton values to enable TAA
+	ubo.jitter_y     = 0.0f;
+	ubo._pad0        = 0;
+
+	// Update persistent state for the next frame.
+	prevViewProj = ubo.proj * ubo.view;
+	++frameCount;
+
 	memcpy(uniformBuffersMapped[frameIdx], &ubo, sizeof(ubo));
 }
 
@@ -387,6 +446,184 @@ void FrameContext::createShadowResources(VulkanDevice &dev)
 	    .borderColor             = vk::BorderColor::eFloatOpaqueWhite,
 	    .unnormalizedCoordinates = vk::False};
 	shadowSampler = vk::raii::Sampler(dev.logicalDevice, samplerInfo);
+}
+
+void FrameContext::createGBufferResources(VulkanDevice &dev, SwapchainManager &swapchain)
+{
+	rtGBufferNormals.clear();      rtGBufferNormalsMemory.clear();      rtGBufferNormalsViews.clear();
+	rtGBufferDepth.clear();        rtGBufferDepthMemory.clear();        rtGBufferDepthViews.clear();
+	rtMotionVectors.clear();       rtMotionVectorsMemory.clear();       rtMotionVectorsViews.clear();
+
+	rtGBufferNormals.reserve(MAX_FRAMES_IN_FLIGHT);
+	rtGBufferNormalsMemory.reserve(MAX_FRAMES_IN_FLIGHT);
+	rtGBufferNormalsViews.reserve(MAX_FRAMES_IN_FLIGHT);
+	rtGBufferDepth.reserve(MAX_FRAMES_IN_FLIGHT);
+	rtGBufferDepthMemory.reserve(MAX_FRAMES_IN_FLIGHT);
+	rtGBufferDepthViews.reserve(MAX_FRAMES_IN_FLIGHT);
+	rtMotionVectors.reserve(MAX_FRAMES_IN_FLIGHT);
+	rtMotionVectorsMemory.reserve(MAX_FRAMES_IN_FLIGHT);
+	rtMotionVectorsViews.reserve(MAX_FRAMES_IN_FLIGHT);
+
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		// Normals — R16G16B16A16_SFLOAT: world-space XYZ packed into RGB, W unused.
+		{
+			vk::raii::Image        img{nullptr};
+			vk::raii::DeviceMemory mem{nullptr};
+			VulkanUtils::createImage(dev.logicalDevice, dev.physicalDevice,
+			                         swapchain.extent.width, swapchain.extent.height,
+			                         vk::Format::eR16G16B16A16Sfloat, vk::ImageTiling::eOptimal,
+			                         vk::ImageUsageFlagBits::eStorage,
+			                         vk::MemoryPropertyFlagBits::eDeviceLocal, img, mem);
+			rtGBufferNormals.push_back(std::move(img));
+			rtGBufferNormalsMemory.push_back(std::move(mem));
+			rtGBufferNormalsViews.push_back(VulkanUtils::createImageView(dev.logicalDevice,
+			    *rtGBufferNormals.back(), vk::Format::eR16G16B16A16Sfloat, vk::ImageAspectFlagBits::eColor));
+		}
+
+		// Depth — R32_SFLOAT: linear ray hit distance (negative = sky miss).
+		{
+			vk::raii::Image        img{nullptr};
+			vk::raii::DeviceMemory mem{nullptr};
+			VulkanUtils::createImage(dev.logicalDevice, dev.physicalDevice,
+			                         swapchain.extent.width, swapchain.extent.height,
+			                         vk::Format::eR32Sfloat, vk::ImageTiling::eOptimal,
+			                         vk::ImageUsageFlagBits::eStorage,
+			                         vk::MemoryPropertyFlagBits::eDeviceLocal, img, mem);
+			rtGBufferDepth.push_back(std::move(img));
+			rtGBufferDepthMemory.push_back(std::move(mem));
+			rtGBufferDepthViews.push_back(VulkanUtils::createImageView(dev.logicalDevice,
+			    *rtGBufferDepth.back(), vk::Format::eR32Sfloat, vk::ImageAspectFlagBits::eColor));
+		}
+
+		// Motion vectors — R16G16_SFLOAT: screen-space pixel offset in UV space.
+		{
+			vk::raii::Image        img{nullptr};
+			vk::raii::DeviceMemory mem{nullptr};
+			VulkanUtils::createImage(dev.logicalDevice, dev.physicalDevice,
+			                         swapchain.extent.width, swapchain.extent.height,
+			                         vk::Format::eR16G16Sfloat, vk::ImageTiling::eOptimal,
+			                         vk::ImageUsageFlagBits::eStorage,
+			                         vk::MemoryPropertyFlagBits::eDeviceLocal, img, mem);
+			rtMotionVectors.push_back(std::move(img));
+			rtMotionVectorsMemory.push_back(std::move(mem));
+			rtMotionVectorsViews.push_back(VulkanUtils::createImageView(dev.logicalDevice,
+			    *rtMotionVectors.back(), vk::Format::eR16G16Sfloat, vk::ImageAspectFlagBits::eColor));
+		}
+	}
+
+	// Pre-transition all G-Buffer images to eGeneral so they match the declared layout in
+	// rtDescriptorSets and denoiserDescriptorSets, even when no RT pass has run yet.
+	{
+		auto cmd = VulkanUtils::beginSingleTimeCommands(dev.logicalDevice, commandPool);
+		for (auto &img : rtGBufferNormals)
+			VulkanUtils::recordImageLayoutTransition(cmd, *img,
+			    vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
+		for (auto &img : rtGBufferDepth)
+			VulkanUtils::recordImageLayoutTransition(cmd, *img,
+			    vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
+		for (auto &img : rtMotionVectors)
+			VulkanUtils::recordImageLayoutTransition(cmd, *img,
+			    vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
+		VulkanUtils::endSingleTimeCommands(dev.logicalDevice, dev.queue, commandPool, cmd);
+	}
+}
+
+void FrameContext::createHistoryResources(VulkanDevice &dev, SwapchainManager &swapchain)
+{
+	historyColor.clear();   historyColorMemory.clear();   historyColorViews.clear();
+	historyMoments.clear(); historyMomentsMemory.clear(); historyMomentsViews.clear();
+
+	historyColor.reserve(MAX_FRAMES_IN_FLIGHT);
+	historyColorMemory.reserve(MAX_FRAMES_IN_FLIGHT);
+	historyColorViews.reserve(MAX_FRAMES_IN_FLIGHT);
+	historyMoments.reserve(MAX_FRAMES_IN_FLIGHT);
+	historyMomentsMemory.reserve(MAX_FRAMES_IN_FLIGHT);
+	historyMomentsViews.reserve(MAX_FRAMES_IN_FLIGHT);
+
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		// Accumulated color history — R16G16B16A16_SFLOAT; written by reprojection, read next frame.
+		{
+			vk::raii::Image        img{nullptr};
+			vk::raii::DeviceMemory mem{nullptr};
+			VulkanUtils::createImage(dev.logicalDevice, dev.physicalDevice,
+			                         swapchain.extent.width, swapchain.extent.height,
+			                         vk::Format::eR16G16B16A16Sfloat, vk::ImageTiling::eOptimal,
+			                         vk::ImageUsageFlagBits::eStorage,
+			                         vk::MemoryPropertyFlagBits::eDeviceLocal, img, mem);
+			historyColor.push_back(std::move(img));
+			historyColorMemory.push_back(std::move(mem));
+			historyColorViews.push_back(VulkanUtils::createImageView(dev.logicalDevice,
+			    *historyColor.back(), vk::Format::eR16G16B16A16Sfloat, vk::ImageAspectFlagBits::eColor));
+		}
+
+		// Moments — R16G16_SFLOAT: R = first moment (mean luminance), G = second moment (mean lum²).
+		{
+			vk::raii::Image        img{nullptr};
+			vk::raii::DeviceMemory mem{nullptr};
+			VulkanUtils::createImage(dev.logicalDevice, dev.physicalDevice,
+			                         swapchain.extent.width, swapchain.extent.height,
+			                         vk::Format::eR16G16Sfloat, vk::ImageTiling::eOptimal,
+			                         vk::ImageUsageFlagBits::eStorage,
+			                         vk::MemoryPropertyFlagBits::eDeviceLocal, img, mem);
+			historyMoments.push_back(std::move(img));
+			historyMomentsMemory.push_back(std::move(mem));
+			historyMomentsViews.push_back(VulkanUtils::createImageView(dev.logicalDevice,
+			    *historyMoments.back(), vk::Format::eR16G16Sfloat, vk::ImageAspectFlagBits::eColor));
+		}
+	}
+
+	// Transition all history images from UNDEFINED to GENERAL once so the layout matches
+	// the eGeneral written in the denoiser descriptor set on the first frame (and after any
+	// swapchain resize that recreates these images).  atrousTemp gets the same treatment
+	// inside recordRayTracingCommandBuffer each frame, but history images must NOT be
+	// discarded frame-to-frame, so a one-time init here is the correct approach.
+	{
+		auto cmd = VulkanUtils::beginSingleTimeCommands(dev.logicalDevice, commandPool);
+		for (auto &img : historyColor)
+			VulkanUtils::recordImageLayoutTransition(cmd, *img,
+			    vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
+		for (auto &img : historyMoments)
+			VulkanUtils::recordImageLayoutTransition(cmd, *img,
+			    vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
+		VulkanUtils::endSingleTimeCommands(dev.logicalDevice, dev.queue, commandPool, cmd);
+	}
+}
+
+void FrameContext::createAtrousResources(VulkanDevice &dev, SwapchainManager &swapchain)
+{
+	atrousTemp.clear();   atrousTempMemory.clear();   atrousTempViews.clear();
+	atrousTemp.reserve(2);
+	atrousTempMemory.reserve(2);
+	atrousTempViews.reserve(2);
+
+	// Two ping-pong buffers — shared across frame slots since only one frame runs the denoiser at a time.
+	// Reprojection writes its output to atrousTemp[0]; A-Trous iterations alternate between [0] and [1].
+	for (size_t i = 0; i < 2; i++)
+	{
+		vk::raii::Image        img{nullptr};
+		vk::raii::DeviceMemory mem{nullptr};
+		VulkanUtils::createImage(dev.logicalDevice, dev.physicalDevice,
+		                         swapchain.extent.width, swapchain.extent.height,
+		                         vk::Format::eR16G16B16A16Sfloat, vk::ImageTiling::eOptimal,
+		                         vk::ImageUsageFlagBits::eStorage,
+		                         vk::MemoryPropertyFlagBits::eDeviceLocal, img, mem);
+		atrousTemp.push_back(std::move(img));
+		atrousTempMemory.push_back(std::move(mem));
+		atrousTempViews.push_back(VulkanUtils::createImageView(dev.logicalDevice,
+		    *atrousTemp.back(), vk::Format::eR16G16B16A16Sfloat, vk::ImageAspectFlagBits::eColor));
+	}
+
+	// Pre-transition A-Trous ping-pong buffers to eGeneral so they match the declared layout in
+	// denoiserDescriptorSets, even when no path tracer denoiser pass has run yet.
+	{
+		auto cmd = VulkanUtils::beginSingleTimeCommands(dev.logicalDevice, commandPool);
+		for (auto &img : atrousTemp)
+			VulkanUtils::recordImageLayoutTransition(cmd, *img,
+			    vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
+		VulkanUtils::endSingleTimeCommands(dev.logicalDevice, dev.queue, commandPool, cmd);
+	}
 }
 
 void FrameContext::createTLASResources(VulkanDevice &dev)

@@ -53,6 +53,14 @@ constexpr int      MAX_FRAMES_IN_FLIGHT = 2;
 constexpr uint32_t NUM_SHADOW_CASCADES  = 4;
 constexpr uint32_t SHADOW_MAP_DIM       = 2048;
 
+// Selects which rendering backend is active.
+enum class RenderMode
+{
+	Rasterizer,   // shadow + starfield compute + raster graphics pipeline
+	RayTracer,    // classic RT: direct illumination with RT shadows, tone-mapped in ClosestHit
+	PathTracer,   // path tracer with temporal reprojection and A-Trous denoiser
+};
+
 namespace Laphria
 {
 #ifdef NDEBUG
@@ -106,6 +114,21 @@ struct UniformBufferObject
 	// cascadeSplits: far-plane depth for each cascade in view space (positive, in camera units)
 	alignas(16) glm::vec4 cascadeSplits;
 	alignas(16) glm::mat4 cascadeViewProj[NUM_SHADOW_CASCADES];
+
+	// Path tracer temporal fields
+	alignas(16) glm::mat4 prevViewProj;   // previous frame VP for motion vector reprojection
+	alignas(4)  uint32_t  frameCount;     // monotonically increasing; seeds per-pixel RNG in Raygen
+	alignas(4)  float     jitter_x;       // sub-pixel x jitter in NDC (Halton sequence, zero when TAA disabled)
+	alignas(4)  float     jitter_y;       // sub-pixel y jitter in NDC
+	alignas(4)  uint32_t  _pad0;          // padding for 16-byte struct alignment
+};
+
+struct DenoisePushConstants
+{
+	int32_t stepSize;    // A-Trous step size: 1, 2, 4, 8, 16 for iterations 0-4; unused in reprojection pass
+	int32_t isLastPass;  // 1 on the final A-Trous iteration: triggers tone mapping + history copy
+	float   phiColor;    // luminance edge-stopping weight (typical: 10.0)
+	float   phiNormal;   // normal edge-stopping exponent (typical: 128.0)
 };
 
 struct ScenePushConstants
