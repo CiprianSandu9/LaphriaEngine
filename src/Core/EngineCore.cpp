@@ -66,11 +66,15 @@ void EngineCore::initVulkan()
 	pipelines.createPhysicsPipeline(vulkan);
 	pipelines.createRayTracingPipeline(vulkan);
 	pipelines.createShaderBindingTable(vulkan);
+	pipelines.createDenoiserPipelines(vulkan);
+	pipelines.createClassicRTPipeline(vulkan);
+	pipelines.createClassicRTShaderBindingTable(vulkan);
 
 	createDescriptorSets();
 	createComputeDescriptorSets();
 	createPhysicsDescriptorSets();
 	createRayTracingDescriptorSets();
+	createDenoiserDescriptorSets();
 }
 
 void EngineCore::initImgui()
@@ -130,7 +134,7 @@ void EngineCore::mainLoop()
 
 		ui.draw(window, *scene, *physicsSystem, *resourceManager, *pipelines.descriptorSetLayoutMaterial);
 
-		// If models were loaded during the UI frame, the RT descriptor sets (bindings 2-5:
+		// If models were loaded during the UI frame, the RT descriptor sets (bindings 5-8:
 		// vertex/index/material/texture arrays) must be rebuilt to include the new buffers.
 		// buildBLAS already called queue.waitIdle(), so the queue is idle here.
 		size_t currentModelCount = resourceManager->getModelCount();
@@ -178,11 +182,12 @@ void EngineCore::recreateSwapChain()
 	cleanupSwapChain();
 	swapchain.init(vulkan, window);
 	frames.recreate(vulkan, swapchain);
-	// Compute and RT descriptor sets reference images that are recreated above
-	// (storageImages and rayTracingOutputImages are extent-dependent), so both
-	// must be rewritten after frames.recreate().
+	// Compute, RT, and denoiser descriptor sets reference images that are recreated above
+	// (storageImages, rayTracingOutputImages, and G-Buffer images are extent-dependent),
+	// so all three must be rewritten after frames.recreate().
 	createComputeDescriptorSets();
 	createRayTracingDescriptorSets();
+	createDenoiserDescriptorSets();
 }
 
 void EngineCore::createPhysicsDescriptorSets()
@@ -257,11 +262,11 @@ void EngineCore::createComputeDescriptorSets()
 
 void EngineCore::createRayTracingDescriptorSets()
 {
-	// One set per frame in flight: each set references that frame's TLAS and RT output image.
+	// One set per frame in flight; bindings shifted to accommodate the new G-Buffer images.
+	// RT set bindings: 0 = TLAS, 1 = noisy colour, 2 = normals, 3 = depth, 4 = motion vectors,
+	//                  5 = vertex arrays, 6 = index arrays, 7 = material arrays, 8 = texture array.
 	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *pipelines.rayTracingDescriptorSetLayout);
 
-	// RT set bindings: 0 = TLAS, 1 = output image, 2 = vertex arrays, 3 = index arrays,
-	// 4 = material arrays, 5 = texture array (variably-sized; up to 1000 descriptors per set).
 	std::vector<uint32_t>                                variableDescCounts(MAX_FRAMES_IN_FLIGHT, 1000);
 	vk::DescriptorSetVariableDescriptorCountAllocateInfo variableDescCountInfo{
 	    .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
@@ -293,22 +298,42 @@ void EngineCore::createRayTracingDescriptorSets()
 		    .descriptorCount = 1,
 		    .descriptorType  = vk::DescriptorType::eAccelerationStructureKHR};
 
-		// Binding 1 — RT output image (written by the raygen shader in General layout).
+		// Binding 1 — noisy colour output (written by the raygen shader in General layout).
 		vk::DescriptorImageInfo rtOutputImageInfo{
 		    .imageView   = *frames.rayTracingOutputImageViews[i],
 		    .imageLayout = vk::ImageLayout::eGeneral};
-
 		vk::WriteDescriptorSet rtOutputWrite{
-		    .dstSet          = *rtDescriptorSets[i],
-		    .dstBinding      = 1,
-		    .dstArrayElement = 0,
-		    .descriptorCount = 1,
-		    .descriptorType  = vk::DescriptorType::eStorageImage,
-		    .pImageInfo      = &rtOutputImageInfo};
+		    .dstSet = *rtDescriptorSets[i], .dstBinding = 1, .dstArrayElement = 0,
+		    .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+		    .pImageInfo = &rtOutputImageInfo};
+
+		// Binding 2 — G-Buffer world normals.
+		vk::DescriptorImageInfo normalsInfo{.imageView = *frames.rtGBufferNormalsViews[i], .imageLayout = vk::ImageLayout::eGeneral};
+		vk::WriteDescriptorSet normalsWrite{
+		    .dstSet = *rtDescriptorSets[i], .dstBinding = 2, .dstArrayElement = 0,
+		    .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+		    .pImageInfo = &normalsInfo};
+
+		// Binding 3 — G-Buffer linear depth.
+		vk::DescriptorImageInfo depthInfo{.imageView = *frames.rtGBufferDepthViews[i], .imageLayout = vk::ImageLayout::eGeneral};
+		vk::WriteDescriptorSet depthWrite{
+		    .dstSet = *rtDescriptorSets[i], .dstBinding = 3, .dstArrayElement = 0,
+		    .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+		    .pImageInfo = &depthInfo};
+
+		// Binding 4 — motion vectors.
+		vk::DescriptorImageInfo mvInfo{.imageView = *frames.rtMotionVectorsViews[i], .imageLayout = vk::ImageLayout::eGeneral};
+		vk::WriteDescriptorSet mvWrite{
+		    .dstSet = *rtDescriptorSets[i], .dstBinding = 4, .dstArrayElement = 0,
+		    .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+		    .pImageInfo = &mvInfo};
 
 		std::vector<vk::WriteDescriptorSet> descriptorWrites;
 		descriptorWrites.push_back(tlasWrite);
 		descriptorWrites.push_back(rtOutputWrite);
+		descriptorWrites.push_back(normalsWrite);
+		descriptorWrites.push_back(depthWrite);
+		descriptorWrites.push_back(mvWrite);
 
 		// Now we extract ALL global vertices, indices, materials, and textures
 		// across all Scene Nodes that have been uploaded into VRAM by ResourceManager
@@ -355,7 +380,7 @@ void EngineCore::createRayTracingDescriptorSets()
 		{
 			descriptorWrites.push_back(vk::WriteDescriptorSet{
 			    .dstSet          = *rtDescriptorSets[i],
-			    .dstBinding      = 2,
+			    .dstBinding      = 5,
 			    .dstArrayElement = 0,
 			    .descriptorCount = static_cast<uint32_t>(vertexInfos.size()),
 			    .descriptorType  = vk::DescriptorType::eStorageBuffer,
@@ -366,7 +391,7 @@ void EngineCore::createRayTracingDescriptorSets()
 		{
 			descriptorWrites.push_back(vk::WriteDescriptorSet{
 			    .dstSet          = *rtDescriptorSets[i],
-			    .dstBinding      = 3,
+			    .dstBinding      = 6,
 			    .dstArrayElement = 0,
 			    .descriptorCount = static_cast<uint32_t>(indexInfos.size()),
 			    .descriptorType  = vk::DescriptorType::eStorageBuffer,
@@ -377,7 +402,7 @@ void EngineCore::createRayTracingDescriptorSets()
 		{
 			descriptorWrites.push_back(vk::WriteDescriptorSet{
 			    .dstSet          = *rtDescriptorSets[i],
-			    .dstBinding      = 4,
+			    .dstBinding      = 7,
 			    .dstArrayElement = 0,
 			    .descriptorCount = static_cast<uint32_t>(materialInfos.size()),
 			    .descriptorType  = vk::DescriptorType::eStorageBuffer,
@@ -388,7 +413,7 @@ void EngineCore::createRayTracingDescriptorSets()
 		{
 			descriptorWrites.push_back(vk::WriteDescriptorSet{
 			    .dstSet          = *rtDescriptorSets[i],
-			    .dstBinding      = 5,
+			    .dstBinding      = 8,
 			    .dstArrayElement = 0,
 			    .descriptorCount = static_cast<uint32_t>(textureInfos.size()),
 			    .descriptorType  = vk::DescriptorType::eCombinedImageSampler,
@@ -399,17 +424,75 @@ void EngineCore::createRayTracingDescriptorSets()
 	}
 }
 
+void EngineCore::createDenoiserDescriptorSets()
+{
+	// One set per frame in flight. All 13 bindings are storage images.
+	std::vector<vk::DescriptorPoolSize> poolSizes = {
+	    {vk::DescriptorType::eStorageImage, 13 * MAX_FRAMES_IN_FLIGHT}};
+	vk::DescriptorPoolCreateInfo poolInfo{
+	    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+	    .maxSets       = MAX_FRAMES_IN_FLIGHT,
+	    .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+	    .pPoolSizes    = poolSizes.data()};
+	denoiserDescriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
+
+	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *pipelines.denoiserDescriptorSetLayout);
+	vk::DescriptorSetAllocateInfo allocInfo{
+	    .descriptorPool     = *denoiserDescriptorPool,
+	    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+	    .pSetLayouts        = layouts.data()};
+	denoiserDescriptorSets.clear();
+	denoiserDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
+
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		size_t prevSlot = (i + 1) % MAX_FRAMES_IN_FLIGHT;
+
+		// Build the 13 image info structs in binding order.
+		vk::DescriptorImageInfo infos[13] = {
+		    {.imageView = *frames.rayTracingOutputImageViews[i],  .imageLayout = vk::ImageLayout::eGeneral},  // 0: noisy colour
+		    {.imageView = *frames.rtGBufferNormalsViews[i],       .imageLayout = vk::ImageLayout::eGeneral},  // 1: current normals
+		    {.imageView = *frames.rtGBufferDepthViews[i],         .imageLayout = vk::ImageLayout::eGeneral},  // 2: current depth
+		    {.imageView = *frames.rtMotionVectorsViews[i],        .imageLayout = vk::ImageLayout::eGeneral},  // 3: motion vectors
+		    {.imageView = *frames.historyColorViews[prevSlot],    .imageLayout = vk::ImageLayout::eGeneral},  // 4: history colour read
+		    {.imageView = *frames.historyColorViews[i],           .imageLayout = vk::ImageLayout::eGeneral},  // 5: history colour write
+		    {.imageView = *frames.historyMomentsViews[prevSlot],  .imageLayout = vk::ImageLayout::eGeneral},  // 6: history moments read
+		    {.imageView = *frames.historyMomentsViews[i],         .imageLayout = vk::ImageLayout::eGeneral},  // 7: history moments write
+		    {.imageView = *frames.atrousTempViews[0],             .imageLayout = vk::ImageLayout::eGeneral},  // 8: A-Trous buffer A
+		    {.imageView = *frames.atrousTempViews[1],             .imageLayout = vk::ImageLayout::eGeneral},  // 9: A-Trous buffer B
+		    {.imageView = *frames.rayTracingOutputImageViews[i],  .imageLayout = vk::ImageLayout::eGeneral},  // 10: final denoised output (reuses slot 0 image)
+		    {.imageView = *frames.rtGBufferNormalsViews[prevSlot],.imageLayout = vk::ImageLayout::eGeneral},  // 11: previous-frame normals
+		    {.imageView = *frames.rtGBufferDepthViews[prevSlot],  .imageLayout = vk::ImageLayout::eGeneral},  // 12: previous-frame depth
+		};
+
+		std::vector<vk::WriteDescriptorSet> writes;
+		writes.reserve(13);
+		for (uint32_t b = 0; b < 13; ++b)
+		{
+			writes.push_back(vk::WriteDescriptorSet{
+			    .dstSet          = *denoiserDescriptorSets[i],
+			    .dstBinding      = b,
+			    .dstArrayElement = 0,
+			    .descriptorCount = 1,
+			    .descriptorType  = vk::DescriptorType::eStorageImage,
+			    .pImageInfo      = &infos[b]});
+		}
+		vulkan.logicalDevice.updateDescriptorSets(writes, {});
+	}
+}
+
 void EngineCore::recordComputeCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
 {
-	// 1. Transition Storage Image (frameIndex) to General layout for writing
-	// Barrier waiting for the previous frame's Blit (Transfer Read) to finish before we start Compute Write
+	// 1. Execution Barrier — General Layout for Compute Write
+	// eGeneral→eGeneral: no content discard; waits for the previous frame's TRANSFER_SRC→eGeneral
+	// restore (or the one-time creation pre-transition) before the compute shader writes.
 	transition_image_layout(
 	    *frames.storageImages[frames.frameIndex],
-	    vk::ImageLayout::eUndefined,        // Discard content but wait for execution
 	    vk::ImageLayout::eGeneral,
-	    {},        // srcAccess ignored for Undefined, but we rely on stage dependency
+	    vk::ImageLayout::eGeneral,
+	    {},
 	    vk::AccessFlagBits2::eShaderWrite,
-	    vk::PipelineStageFlagBits2::eTransfer,        // Wait for the previous frame's blit
+	    vk::PipelineStageFlagBits2::eTransfer,        // Wait for the previous frame's restore
 	    vk::PipelineStageFlagBits2::eComputeShader,
 	    vk::ImageAspectFlagBits::eColor);
 
@@ -468,7 +551,121 @@ void EngineCore::recordComputeCommandBuffer(const vk::raii::CommandBuffer &comma
 	                        swapchain.images[imageIndex], vk::ImageLayout::eTransferDstOptimal,
 	                        blitRegion, vk::Filter::eLinear);
 
+	// 3b. Restore storage image to eGeneral so it always matches the layout declared in
+	// computeDescriptorSets. This prevents VUID-vkCmdDraw-None-09600 when the rasterizer's
+	// draw commands follow in the same command buffer.
+	transition_image_layout(
+	    *frames.storageImages[frames.frameIndex],
+	    vk::ImageLayout::eTransferSrcOptimal,
+	    vk::ImageLayout::eGeneral,
+	    vk::AccessFlagBits2::eTransferRead,
+	    {},
+	    vk::PipelineStageFlagBits2::eTransfer,
+	    vk::PipelineStageFlagBits2::eBottomOfPipe,
+	    vk::ImageAspectFlagBits::eColor);
+
 	// 4. Transition SwapChain to Color Attachment for Rendering
+	transition_image_layout(
+	    swapchain.images[imageIndex],
+	    vk::ImageLayout::eTransferDstOptimal,
+	    vk::ImageLayout::eColorAttachmentOptimal,
+	    vk::AccessFlagBits2::eTransferWrite,
+	    vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
+	    vk::PipelineStageFlagBits2::eTransfer,
+	    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+	    vk::ImageAspectFlagBits::eColor);
+}
+
+void EngineCore::recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
+{
+	const uint32_t fi = frames.frameIndex;
+
+	// 1. Transition RT Output Image to General Layout for Writing
+	transition_image_layout(
+	    *frames.rayTracingOutputImages[fi],
+	    vk::ImageLayout::eUndefined,
+	    vk::ImageLayout::eGeneral,
+	    {},
+	    vk::AccessFlagBits2::eShaderWrite,
+	    vk::PipelineStageFlagBits2::eTopOfPipe,
+	    vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    vk::ImageAspectFlagBits::eColor);
+
+	// 2. Bind Classic RT Pipeline and Descriptor Sets
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.classicRTPipeline);
+	commandBuffer.bindDescriptorSets(
+	    vk::PipelineBindPoint::eRayTracingKHR,
+	    *pipelines.rayTracingPipelineLayout,
+	    0,
+	    {*rtDescriptorSets[fi], *descriptorSets[fi]},
+	    nullptr);
+
+	ScenePushConstants pushConstants{};
+	pushConstants.modelMatrix = glm::mat4(1.0f);
+	commandBuffer.pushConstants<ScenePushConstants>(
+	    *pipelines.rayTracingPipelineLayout,
+	    vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
+	    0,
+	    pushConstants);
+
+	// 3. Dispatch Rays
+	vk::StridedDeviceAddressRegionKHR callableRegion{};
+	commandBuffer.traceRaysKHR(
+	    pipelines.classicRTRaygenRegion,
+	    pipelines.classicRTMissRegion,
+	    pipelines.classicRTHitRegion,
+	    callableRegion,
+	    swapchain.extent.width,
+	    swapchain.extent.height,
+	    1);
+
+	// 4. Transition RT Output Image for Blit (General → TransferSrcOptimal)
+	transition_image_layout(
+	    *frames.rayTracingOutputImages[fi],
+	    vk::ImageLayout::eGeneral,
+	    vk::ImageLayout::eTransferSrcOptimal,
+	    vk::AccessFlagBits2::eShaderWrite,
+	    vk::AccessFlagBits2::eTransferRead,
+	    vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    vk::PipelineStageFlagBits2::eTransfer,
+	    vk::ImageAspectFlagBits::eColor);
+
+	// 5. Transition SwapChain Image for Blit
+	transition_image_layout(
+	    swapchain.images[imageIndex],
+	    vk::ImageLayout::eUndefined,
+	    vk::ImageLayout::eTransferDstOptimal,
+	    {},
+	    vk::AccessFlagBits2::eTransferWrite,
+	    vk::PipelineStageFlagBits2::eTopOfPipe,
+	    vk::PipelineStageFlagBits2::eTransfer,
+	    vk::ImageAspectFlagBits::eColor);
+
+	// 6. Blit RT Output to SwapChain Image
+	vk::ImageBlit blitRegion{
+	    .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .srcOffsets     = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}},
+	    .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .dstOffsets     = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}}};
+	commandBuffer.blitImage(
+	    *frames.rayTracingOutputImages[fi], vk::ImageLayout::eTransferSrcOptimal,
+	    swapchain.images[imageIndex],       vk::ImageLayout::eTransferDstOptimal,
+	    blitRegion, vk::Filter::eLinear);
+
+	// 6b. Restore RT output image to eGeneral so it always matches the layout declared in
+	// rtDescriptorSets and denoiserDescriptorSets (prevents VUID-vkCmdDraw-None-09600 if
+	// the render mode is switched back to Rasterizer in a subsequent frame).
+	transition_image_layout(
+	    *frames.rayTracingOutputImages[fi],
+	    vk::ImageLayout::eTransferSrcOptimal,
+	    vk::ImageLayout::eGeneral,
+	    vk::AccessFlagBits2::eTransferRead,
+	    {},
+	    vk::PipelineStageFlagBits2::eTransfer,
+	    vk::PipelineStageFlagBits2::eBottomOfPipe,
+	    vk::ImageAspectFlagBits::eColor);
+
+	// 7. Transition SwapChain to Color Attachment for UI Rendering
 	transition_image_layout(
 	    swapchain.images[imageIndex],
 	    vk::ImageLayout::eTransferDstOptimal,
@@ -482,92 +679,148 @@ void EngineCore::recordComputeCommandBuffer(const vk::raii::CommandBuffer &comma
 
 void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
 {
-	// 1. Transition RT Output Image to General layout for writing
-	transition_image_layout(
-	    *frames.rayTracingOutputImages[frames.frameIndex],
-	    vk::ImageLayout::eUndefined,
-	    vk::ImageLayout::eGeneral,
-	    {},
-	    vk::AccessFlagBits2::eShaderWrite,
-	    vk::PipelineStageFlagBits2::eTopOfPipe,
-	    vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-	    vk::ImageAspectFlagBits::eColor);
+	const uint32_t fi = frames.frameIndex;
 
-	// 4. Bind Pipeline and Descriptor Sets
+	// 1. Transition All RT Output Images to General Layout for Writing
+	auto transitionToGeneral = [&](vk::Image img) {
+		transition_image_layout(img, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
+		    {}, vk::AccessFlagBits2::eShaderWrite,
+		    vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+		    vk::ImageAspectFlagBits::eColor);
+	};
+	transitionToGeneral(*frames.rayTracingOutputImages[fi]);
+	transitionToGeneral(*frames.rtGBufferNormals[fi]);
+	transitionToGeneral(*frames.rtGBufferDepth[fi]);
+	transitionToGeneral(*frames.rtMotionVectors[fi]);
+
+	// 2. Ray Tracing Dispatch (1 SPP Path Tracer)
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.rayTracingPipeline);
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR,
+	    *pipelines.rayTracingPipelineLayout, 0,
+	    {*rtDescriptorSets[fi], *descriptorSets[fi]}, nullptr);
 
-	// Set 0 = RT layout (TLAS, output image, vertex/index/material/texture arrays)
-	// Set 1 = global layout (UBO, CSM shadow maps)
-	commandBuffer.bindDescriptorSets(
-	    vk::PipelineBindPoint::eRayTracingKHR,
-	    *pipelines.rayTracingPipelineLayout,
-	    0,
-	    {*rtDescriptorSets[frames.frameIndex], *descriptorSets[frames.frameIndex]},
-	    nullptr);
-
-	// 5. Push Constants (ScenePushConstants)
-	ScenePushConstants pushConstants{};
-	pushConstants.modelMatrix = glm::mat4(1.0f);        // Default identity
-
-	commandBuffer.pushConstants<ScenePushConstants>(
-	    *pipelines.rayTracingPipelineLayout,
+	ScenePushConstants rtPush{};
+	rtPush.modelMatrix = glm::mat4(1.0f);
+	commandBuffer.pushConstants<ScenePushConstants>(*pipelines.rayTracingPipelineLayout,
 	    vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
-	    0,
-	    pushConstants);
+	    0, rtPush);
 
-	// 5. Trace Rays Dispatch
 	vk::StridedDeviceAddressRegionKHR callableRegion{};
-	commandBuffer.traceRaysKHR(
-	    pipelines.raygenRegion,
-	    pipelines.missRegion,
-	    pipelines.hitRegion,
-	    callableRegion,
-	    swapchain.extent.width,
-	    swapchain.extent.height,
-	    1);
+	commandBuffer.traceRaysKHR(pipelines.raygenRegion, pipelines.missRegion, pipelines.hitRegion,
+	    callableRegion, swapchain.extent.width, swapchain.extent.height, 1);
 
-	// 6. Transition RT Image for Transfer
-	transition_image_layout(
-	    *frames.rayTracingOutputImages[frames.frameIndex],
-	    vk::ImageLayout::eGeneral,
-	    vk::ImageLayout::eTransferSrcOptimal,
-	    vk::AccessFlagBits2::eShaderWrite,
-	    vk::AccessFlagBits2::eTransferRead,
-	    vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-	    vk::PipelineStageFlagBits2::eTransfer,
+	// 3. Barrier: RT Writes → Compute Reads
+	auto barrierRTtoCompute = [&](vk::Image img) {
+		transition_image_layout(img, vk::ImageLayout::eGeneral, vk::ImageLayout::eGeneral,
+		    vk::AccessFlagBits2::eShaderWrite, vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+		    vk::PipelineStageFlagBits2::eRayTracingShaderKHR, vk::PipelineStageFlagBits2::eComputeShader,
+		    vk::ImageAspectFlagBits::eColor);
+	};
+	barrierRTtoCompute(*frames.rayTracingOutputImages[fi]);
+	barrierRTtoCompute(*frames.rtGBufferNormals[fi]);
+	barrierRTtoCompute(*frames.rtGBufferDepth[fi]);
+	barrierRTtoCompute(*frames.rtMotionVectors[fi]);
+
+	// Transition the A-Trous ping-pong buffers to General (scratch buffers, discarded each frame).
+	// History images (historyColor/historyMoments) are initialized to General once in
+	// FrameContext::createHistoryResources and stay in General across frames.
+	for (size_t k = 0; k < 2; ++k)
+		transition_image_layout(*frames.atrousTemp[k], vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
+		    {}, vk::AccessFlagBits2::eShaderWrite,
+		    vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eComputeShader,
+		    vk::ImageAspectFlagBits::eColor);
+
+	// 4. Reprojection Pass
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.reprojectionPipeline);
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+	    *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
+
+	// phiColor doubles as historyAlpha here: 0.1 when camera is static (90% history),
+	// 1.0 when it moved (discard history to prevent ghosting bands).
+	float                historyAlpha = ptCameraMoved ? 1.0f : 0.1f;
+	DenoisePushConstants reproPush{.stepSize = 0, .isLastPass = 0, .phiColor = historyAlpha, .phiNormal = 128.0f};
+	commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
+	    vk::ShaderStageFlagBits::eCompute, 0, reproPush);
+
+	const uint32_t gx = (swapchain.extent.width  + 15) / 16;
+	const uint32_t gy = (swapchain.extent.height + 15) / 16;
+	commandBuffer.dispatch(gx, gy, 1);
+
+	// 5. Barrier: Reprojection → A-Trous
+	auto barrierCompute = [&](vk::Image img) {
+		transition_image_layout(img, vk::ImageLayout::eGeneral, vk::ImageLayout::eGeneral,
+		    vk::AccessFlagBits2::eShaderWrite, vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+		    vk::PipelineStageFlagBits2::eComputeShader, vk::PipelineStageFlagBits2::eComputeShader,
+		    vk::ImageAspectFlagBits::eColor);
+	};
+	barrierCompute(*frames.atrousTemp[0]);
+	barrierCompute(*frames.historyMoments[fi]);   // A-Trous reads historyMomentsOut for variance
+
+	// 6. A-Trous Spatial Filter (5 Iterations)
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.atrousPipeline);
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+	    *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
+
+	static constexpr int ATROUS_ITERATIONS = 5;
+	for (int iter = 0; iter < ATROUS_ITERATIONS; ++iter)
+	{
+		int32_t stepSize   = 1 << iter;   // 1, 2, 4, 8, 16
+		int32_t isLastPass = (iter == ATROUS_ITERATIONS - 1) ? 1 : 0;
+
+		DenoisePushConstants atrousPush{
+		    .stepSize   = stepSize,
+		    .isLastPass = isLastPass,
+		    .phiColor   = 1.0f,
+		    .phiNormal  = 128.0f};
+		commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
+		    vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
+		commandBuffer.dispatch(gx, gy, 1);
+
+		if (!isLastPass)
+		{
+			// Barrier between iterations: wait for this pass's write before the next pass reads it.
+			int writeBuf = iter % 2;        // 0→writes[1], 1→writes[0], ...
+			barrierCompute(*frames.atrousTemp[1 - writeBuf]);
+		}
+	}
+
+	// 7. Transition Final Denoised Image for Blit
+	// The last A-Trous pass wrote the tonemapped result to rayTracingOutputImages[fi].
+	transition_image_layout(*frames.rayTracingOutputImages[fi],
+	    vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal,
+	    vk::AccessFlagBits2::eShaderWrite, vk::AccessFlagBits2::eTransferRead,
+	    vk::PipelineStageFlagBits2::eComputeShader, vk::PipelineStageFlagBits2::eTransfer,
 	    vk::ImageAspectFlagBits::eColor);
 
-	// 7. Transition SwapChain image for Transfer
-	transition_image_layout(
-	    swapchain.images[imageIndex],
-	    vk::ImageLayout::eUndefined,
-	    vk::ImageLayout::eTransferDstOptimal,
-	    {},
-	    vk::AccessFlagBits2::eTransferWrite,
-	    vk::PipelineStageFlagBits2::eTopOfPipe,
-	    vk::PipelineStageFlagBits2::eTransfer,
+	// 8. Transition SwapChain Image for Blit
+	transition_image_layout(swapchain.images[imageIndex],
+	    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+	    {}, vk::AccessFlagBits2::eTransferWrite,
+	    vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eTransfer,
 	    vk::ImageAspectFlagBits::eColor);
 
-	// 8. Blit RT Output to Swapchain Image
+	// 9. Blit Denoised Result to SwapChain
 	vk::ImageBlit blitRegion{
 	    .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
 	    .srcOffsets     = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}},
 	    .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
 	    .dstOffsets     = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}}};
+	commandBuffer.blitImage(*frames.rayTracingOutputImages[fi], vk::ImageLayout::eTransferSrcOptimal,
+	    swapchain.images[imageIndex], vk::ImageLayout::eTransferDstOptimal, blitRegion, vk::Filter::eLinear);
 
-	commandBuffer.blitImage(*frames.rayTracingOutputImages[frames.frameIndex], vk::ImageLayout::eTransferSrcOptimal,
-	                        swapchain.images[imageIndex], vk::ImageLayout::eTransferDstOptimal,
-	                        blitRegion, vk::Filter::eLinear);
+	// 9b. Restore RT Output Image to eGeneral so It Matches rtDescriptorSets / denoiserDescriptorSets
+	// (prevents VUID-vkCmdDraw-None-09600 when switching back to Rasterizer mode).
+	transition_image_layout(*frames.rayTracingOutputImages[fi],
+	    vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eGeneral,
+	    vk::AccessFlagBits2::eTransferRead, {},
+	    vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eBottomOfPipe,
+	    vk::ImageAspectFlagBits::eColor);
 
-	// 9. Transition SwapChain to Color Attachment for UI Rendering
-	transition_image_layout(
-	    swapchain.images[imageIndex],
-	    vk::ImageLayout::eTransferDstOptimal,
-	    vk::ImageLayout::eColorAttachmentOptimal,
-	    vk::AccessFlagBits2::eTransferWrite,
-	    vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
-	    vk::PipelineStageFlagBits2::eTransfer,
-	    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+	// 10. Transition SwapChain to Color Attachment for UI Rendering
+	transition_image_layout(swapchain.images[imageIndex],
+	    vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eColorAttachmentOptimal,
+	    vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
+	    vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
 	    vk::ImageAspectFlagBits::eColor);
 }
 
@@ -725,7 +978,7 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 		}
 	}
 
-	if (ui.useRayTracing)
+	if (ui.renderMode != RenderMode::Rasterizer)
 	{
 		// Only copy instance data when there is something to copy; building with
 		// primitiveCount = 0 is valid and produces a traversable empty TLAS.
@@ -789,8 +1042,8 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 	// --- End TLAS Build ---
 
 	// ── Cascaded Shadow Map Pass ──────────────────────────────────────────────
-	// Only run for the raster path; the RT pipeline handles its own shadowing.
-	if (!ui.useRayTracing)
+	// Only run for the raster path; both RT pipelines handle their own shadowing.
+	if (ui.renderMode == RenderMode::Rasterizer)
 	{
 		vk::Image shadowImg = *frames.shadowImages[frames.frameIndex];
 
@@ -904,10 +1157,13 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 		recordComputeCommandBuffer(commandBuffer, imageIndex);
 	}
 
-	if (ui.useRayTracing)
+	if (ui.renderMode == RenderMode::PathTracer)
 	{
-		// Run Ray Tracing Pipeline
 		recordRayTracingCommandBuffer(commandBuffer, imageIndex);
+	}
+	else if (ui.renderMode == RenderMode::RayTracer)
+	{
+		recordClassicRTCommandBuffer(commandBuffer, imageIndex);
 	}
 
 	transition_image_layout(
@@ -943,7 +1199,7 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 
 	commandBuffer.beginRendering(renderingInfo);
 
-	if (!ui.useRayTracing)
+	if (ui.renderMode == RenderMode::Rasterizer)
 	{
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *pipelines.graphicsPipeline);
 
@@ -1046,6 +1302,15 @@ void EngineCore::drawFrame()
 		throw std::runtime_error("failed to acquire swap chain image!");
 	}
 	frames.updateUniformBuffer(frames.frameIndex, camera, swapchain.extent, ui.lightDirection);
+
+	// Detect camera movement for path tracer history reset.
+	// Any translation or rotation invalidates the reprojected history.
+	ptCameraMoved = (glm::distance(camera.position, ptPrevCameraPos) > 1e-5f ||
+	                 std::abs(camera.pitch - ptPrevPitch)             > 1e-5f ||
+	                 std::abs(camera.yaw   - ptPrevYaw)               > 1e-5f);
+	ptPrevCameraPos = camera.position;
+	ptPrevPitch     = camera.pitch;
+	ptPrevYaw       = camera.yaw;
 
 	// Only reset the fence if we are submitting work
 	vulkan.logicalDevice.resetFences(*frames.inFlightFences[frames.frameIndex]);

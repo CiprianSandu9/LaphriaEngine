@@ -19,6 +19,7 @@ void PipelineCollection::createDescriptorSetLayouts(VulkanDevice &dev)
 	createComputeDescriptorSetLayout(dev);
 	createRayTracingDescriptorSetLayout(dev);
 	createPhysicsDescriptorSetLayout(dev);
+	createDenoiserDescriptorSetLayout(dev);
 }
 
 // ── Descriptor Set Layout Implementations ──────────────────────────────────
@@ -120,44 +121,65 @@ void PipelineCollection::createPhysicsDescriptorSetLayout(VulkanDevice &dev)
 
 void PipelineCollection::createRayTracingDescriptorSetLayout(VulkanDevice &dev)
 {
-	std::array<vk::DescriptorSetLayoutBinding, 6> bindings = {
-	    vk::DescriptorSetLayoutBinding{// TLAS
+	// Set 0 — RT pipeline bindings.
+	// Bindings 0-4: acceleration structure + storage images written by Raygen.
+	// Bindings 5-8: mesh data arrays read by ClosestHit (shifted from old 2-5 to make room).
+	std::array<vk::DescriptorSetLayoutBinding, 9> bindings = {
+	    vk::DescriptorSetLayoutBinding{// 0: TLAS
 	                                   .binding         = 0,
 	                                   .descriptorType  = vk::DescriptorType::eAccelerationStructureKHR,
 	                                   .descriptorCount = 1,
 	                                   .stageFlags      = vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
-	    vk::DescriptorSetLayoutBinding{// Output Image
+	    vk::DescriptorSetLayoutBinding{// 1: Noisy colour output (1 SPP path tracer)
 	                                   .binding         = 1,
 	                                   .descriptorType  = vk::DescriptorType::eStorageImage,
 	                                   .descriptorCount = 1,
 	                                   .stageFlags      = vk::ShaderStageFlagBits::eRaygenKHR},
-	    vk::DescriptorSetLayoutBinding{// Vertex Buffers Array
+	    vk::DescriptorSetLayoutBinding{// 2: G-Buffer world normals
 	                                   .binding         = 2,
-	                                   .descriptorType  = vk::DescriptorType::eStorageBuffer,
-	                                   .descriptorCount = 1000,
-	                                   .stageFlags      = vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eAnyHitKHR},
-	    vk::DescriptorSetLayoutBinding{// Index Buffers Array
+	                                   .descriptorType  = vk::DescriptorType::eStorageImage,
+	                                   .descriptorCount = 1,
+	                                   .stageFlags      = vk::ShaderStageFlagBits::eRaygenKHR},
+	    vk::DescriptorSetLayoutBinding{// 3: G-Buffer linear depth (ray hit t)
 	                                   .binding         = 3,
-	                                   .descriptorType  = vk::DescriptorType::eStorageBuffer,
-	                                   .descriptorCount = 1000,
-	                                   .stageFlags      = vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eAnyHitKHR},
-	    vk::DescriptorSetLayoutBinding{// Material Buffers Array
+	                                   .descriptorType  = vk::DescriptorType::eStorageImage,
+	                                   .descriptorCount = 1,
+	                                   .stageFlags      = vk::ShaderStageFlagBits::eRaygenKHR},
+	    vk::DescriptorSetLayoutBinding{// 4: Motion vectors
 	                                   .binding         = 4,
+	                                   .descriptorType  = vk::DescriptorType::eStorageImage,
+	                                   .descriptorCount = 1,
+	                                   .stageFlags      = vk::ShaderStageFlagBits::eRaygenKHR},
+	    vk::DescriptorSetLayoutBinding{// 5: Vertex buffers array
+	                                   .binding         = 5,
 	                                   .descriptorType  = vk::DescriptorType::eStorageBuffer,
 	                                   .descriptorCount = 1000,
 	                                   .stageFlags      = vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eAnyHitKHR},
-	    vk::DescriptorSetLayoutBinding{// Textures Array
-	                                   .binding         = 5,
+	    vk::DescriptorSetLayoutBinding{// 6: Index buffers array
+	                                   .binding         = 6,
+	                                   .descriptorType  = vk::DescriptorType::eStorageBuffer,
+	                                   .descriptorCount = 1000,
+	                                   .stageFlags      = vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eAnyHitKHR},
+	    vk::DescriptorSetLayoutBinding{// 7: Material buffers array
+	                                   .binding         = 7,
+	                                   .descriptorType  = vk::DescriptorType::eStorageBuffer,
+	                                   .descriptorCount = 1000,
+	                                   .stageFlags      = vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eAnyHitKHR},
+	    vk::DescriptorSetLayoutBinding{// 8: Textures array — variably sized
+	                                   .binding         = 8,
 	                                   .descriptorType  = vk::DescriptorType::eCombinedImageSampler,
 	                                   .descriptorCount = 1000,
 	                                   .stageFlags      = vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eAnyHitKHR}};
-	std::array<vk::DescriptorBindingFlags, 6> flags = {
-	    vk::DescriptorBindingFlags{},
-	    vk::DescriptorBindingFlags{},
-	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind};
+	std::array<vk::DescriptorBindingFlags, 9> flags = {
+	    vk::DescriptorBindingFlags{},   // 0: TLAS
+	    vk::DescriptorBindingFlags{},   // 1: noisy colour
+	    vk::DescriptorBindingFlags{},   // 2: normals
+	    vk::DescriptorBindingFlags{},   // 3: depth
+	    vk::DescriptorBindingFlags{},   // 4: motion vectors
+	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,  // 5
+	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,  // 6
+	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,  // 7
+	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind}; // 8
 	vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlags{
 	    .bindingCount  = static_cast<uint32_t>(flags.size()),
 	    .pBindingFlags = flags.data()};
@@ -167,6 +189,31 @@ void PipelineCollection::createRayTracingDescriptorSetLayout(VulkanDevice &dev)
 	    .bindingCount = static_cast<uint32_t>(bindings.size()),
 	    .pBindings    = bindings.data()};
 	rayTracingDescriptorSetLayout = vk::raii::DescriptorSetLayout(dev.logicalDevice, layoutInfo);
+}
+
+void PipelineCollection::createDenoiserDescriptorSetLayout(VulkanDevice &dev)
+{
+	// 13 storage image bindings covering all denoiser pass inputs and outputs.
+	// Both reprojection and A-Trous shaders share this single layout, selecting
+	// the relevant bindings via the shader source.
+	std::array<vk::DescriptorSetLayoutBinding, 13> bindings = {
+	    vk::DescriptorSetLayoutBinding{.binding = 0,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // noisy colour (reprojection input)
+	    vk::DescriptorSetLayoutBinding{.binding = 1,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // G-Buffer normals (current frame)
+	    vk::DescriptorSetLayoutBinding{.binding = 2,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // G-Buffer depth (current frame)
+	    vk::DescriptorSetLayoutBinding{.binding = 3,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // motion vectors
+	    vk::DescriptorSetLayoutBinding{.binding = 4,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // history colour read  [(i+1)%2]
+	    vk::DescriptorSetLayoutBinding{.binding = 5,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // history colour write [i]
+	    vk::DescriptorSetLayoutBinding{.binding = 6,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // history moments read [(i+1)%2]
+	    vk::DescriptorSetLayoutBinding{.binding = 7,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // history moments write [i]
+	    vk::DescriptorSetLayoutBinding{.binding = 8,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // A-Trous ping-pong buffer A
+	    vk::DescriptorSetLayoutBinding{.binding = 9,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // A-Trous ping-pong buffer B
+	    vk::DescriptorSetLayoutBinding{.binding = 10, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // final denoised output (= noisy colour image, reused)
+	    vk::DescriptorSetLayoutBinding{.binding = 11, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // previous-frame G-Buffer normals [(i+1)%2]
+	    vk::DescriptorSetLayoutBinding{.binding = 12, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute}};  // previous-frame G-Buffer depth   [(i+1)%2]
+	vk::DescriptorSetLayoutCreateInfo layoutInfo{
+	    .bindingCount = static_cast<uint32_t>(bindings.size()),
+	    .pBindings    = bindings.data()};
+	denoiserDescriptorSetLayout = vk::raii::DescriptorSetLayout(dev.logicalDevice, layoutInfo);
 }
 
 // ── Pipeline Layout Implementations ────────────────────────────────────────
@@ -551,6 +598,152 @@ void PipelineCollection::createShaderBindingTable(VulkanDevice &dev)
 	hitRegion.deviceAddress = dev.logicalDevice.getBufferAddress(hitInfo);
 	hitRegion.stride        = handleSizeAligned;
 	hitRegion.size          = hitSBTSize;
+}
+
+void PipelineCollection::createClassicRTPipeline(VulkanDevice &dev)
+{
+	// The classic RT pipeline reuses rayTracingPipelineLayout (same descriptor sets and push constants).
+	// Only the shader stages differ: RT_ prefixed shaders with the simple RayPayload.
+	vk::raii::ShaderModule rgenModule  = createShaderModule(dev, readFile("Shaders/RT_Raygen.slang.spv"));
+	vk::raii::ShaderModule rmissModule = createShaderModule(dev, readFile("Shaders/RT_Miss.slang.spv"));
+	vk::raii::ShaderModule rchitModule = createShaderModule(dev, readFile("Shaders/RT_ClosestHit.slang.spv"));
+	vk::raii::ShaderModule ranyModule  = createShaderModule(dev, readFile("Shaders/RT_AnyHit.slang.spv"));
+
+	std::array<vk::PipelineShaderStageCreateInfo, 4> stages = {
+	    vk::PipelineShaderStageCreateInfo{
+	        .stage  = vk::ShaderStageFlagBits::eRaygenKHR,
+	        .module = *rgenModule,
+	        .pName  = "main"},
+	    vk::PipelineShaderStageCreateInfo{
+	        .stage  = vk::ShaderStageFlagBits::eMissKHR,
+	        .module = *rmissModule,
+	        .pName  = "main"},
+	    vk::PipelineShaderStageCreateInfo{
+	        .stage  = vk::ShaderStageFlagBits::eClosestHitKHR,
+	        .module = *rchitModule,
+	        .pName  = "main"},
+	    vk::PipelineShaderStageCreateInfo{
+	        .stage  = vk::ShaderStageFlagBits::eAnyHitKHR,
+	        .module = *ranyModule,
+	        .pName  = "main"}};
+
+	std::array<vk::RayTracingShaderGroupCreateInfoKHR, 3> groups = {
+	    vk::RayTracingShaderGroupCreateInfoKHR{// Group 0 - RayGen
+	                                           .type               = vk::RayTracingShaderGroupTypeKHR::eGeneral,
+	                                           .generalShader      = 0,
+	                                           .closestHitShader   = VK_SHADER_UNUSED_KHR,
+	                                           .anyHitShader       = VK_SHADER_UNUSED_KHR,
+	                                           .intersectionShader = VK_SHADER_UNUSED_KHR},
+	    vk::RayTracingShaderGroupCreateInfoKHR{// Group 1 - Miss
+	                                           .type               = vk::RayTracingShaderGroupTypeKHR::eGeneral,
+	                                           .generalShader      = 1,
+	                                           .closestHitShader   = VK_SHADER_UNUSED_KHR,
+	                                           .anyHitShader       = VK_SHADER_UNUSED_KHR,
+	                                           .intersectionShader = VK_SHADER_UNUSED_KHR},
+	    vk::RayTracingShaderGroupCreateInfoKHR{// Group 2 - Closest Hit + Any Hit
+	                                           .type               = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup,
+	                                           .generalShader      = VK_SHADER_UNUSED_KHR,
+	                                           .closestHitShader   = 2,
+	                                           .anyHitShader       = 3,
+	                                           .intersectionShader = VK_SHADER_UNUSED_KHR}};
+
+	vk::RayTracingPipelineCreateInfoKHR pipelineInfo{
+	    .stageCount                   = static_cast<uint32_t>(stages.size()),
+	    .pStages                      = stages.data(),
+	    .groupCount                   = static_cast<uint32_t>(groups.size()),
+	    .pGroups                      = groups.data(),
+	    .maxPipelineRayRecursionDepth = 2,   // Primary ray + one shadow ray from ClosestHit
+	    .layout                       = *rayTracingPipelineLayout};
+
+	classicRTPipeline = dev.logicalDevice.createRayTracingPipelineKHR(nullptr, nullptr, pipelineInfo);
+}
+
+void PipelineCollection::createClassicRTShaderBindingTable(VulkanDevice &dev)
+{
+	const uint32_t handleSize      = dev.rayTracingProperties.shaderGroupHandleSize;
+	const uint32_t handleAlignment = dev.rayTracingProperties.shaderGroupHandleAlignment;
+	const uint32_t baseAlignment   = dev.rayTracingProperties.shaderGroupBaseAlignment;
+
+	const uint32_t handleSizeAligned = VulkanUtils::alignUp(handleSize, handleAlignment);
+	const uint32_t raygenSBTSize     = VulkanUtils::alignUp(handleSizeAligned, baseAlignment);
+	const uint32_t missSBTSize       = VulkanUtils::alignUp(handleSizeAligned, baseAlignment);
+	const uint32_t hitSBTSize        = VulkanUtils::alignUp(handleSizeAligned, baseAlignment);
+
+	const uint32_t       groupCount = 3;
+	const uint32_t       sbtSize    = groupCount * handleSize;
+	std::vector<uint8_t> handles    = classicRTPipeline.getRayTracingShaderGroupHandlesKHR<uint8_t>(0, groupCount, sbtSize);
+
+	auto createSBTBuffer = [&](vk::raii::Buffer &buffer, vk::raii::DeviceMemory &memory, uint32_t size, void *data, uint32_t handleOffset) {
+		VulkanUtils::createBuffer(
+		    dev.logicalDevice, dev.physicalDevice, size,
+		    vk::BufferUsageFlagBits::eShaderBindingTableKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+		    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+		    buffer, memory);
+
+		void *mapped = memory.mapMemory(0, size);
+		memcpy(mapped, (uint8_t *) data + handleOffset, handleSize);
+		memory.unmapMemory();
+	};
+
+	createSBTBuffer(classicRTRaygenSBTBuffer, classicRTRaygenSBTMemory, raygenSBTSize, handles.data(), 0);
+	createSBTBuffer(classicRTMissSBTBuffer,   classicRTMissSBTMemory,   missSBTSize,   handles.data(), handleSize);
+	createSBTBuffer(classicRTHitSBTBuffer,    classicRTHitSBTMemory,    hitSBTSize,    handles.data(), handleSize * 2);
+
+	vk::BufferDeviceAddressInfo raygenInfo{.buffer = *classicRTRaygenSBTBuffer};
+	classicRTRaygenRegion.deviceAddress = dev.logicalDevice.getBufferAddress(raygenInfo);
+	classicRTRaygenRegion.stride        = raygenSBTSize;
+	classicRTRaygenRegion.size          = raygenSBTSize;
+
+	vk::BufferDeviceAddressInfo missInfo{.buffer = *classicRTMissSBTBuffer};
+	classicRTMissRegion.deviceAddress = dev.logicalDevice.getBufferAddress(missInfo);
+	classicRTMissRegion.stride        = handleSizeAligned;
+	classicRTMissRegion.size          = missSBTSize;
+
+	vk::BufferDeviceAddressInfo hitInfo{.buffer = *classicRTHitSBTBuffer};
+	classicRTHitRegion.deviceAddress = dev.logicalDevice.getBufferAddress(hitInfo);
+	classicRTHitRegion.stride        = handleSizeAligned;
+	classicRTHitRegion.size          = hitSBTSize;
+}
+
+void PipelineCollection::createDenoiserPipelineLayout(VulkanDevice &dev)
+{
+	vk::PushConstantRange pushRange{
+	    .stageFlags = vk::ShaderStageFlagBits::eCompute,
+	    .offset     = 0,
+	    .size       = sizeof(DenoisePushConstants)};
+	vk::PipelineLayoutCreateInfo info{
+	    .setLayoutCount         = 1,
+	    .pSetLayouts            = &*denoiserDescriptorSetLayout,
+	    .pushConstantRangeCount = 1,
+	    .pPushConstantRanges    = &pushRange};
+	denoiserPipelineLayout = vk::raii::PipelineLayout(dev.logicalDevice, info);
+}
+
+void PipelineCollection::createDenoiserPipelines(VulkanDevice &dev)
+{
+	createDenoiserPipelineLayout(dev);
+
+	// Reprojection compute pipeline
+	{
+		vk::raii::ShaderModule mod = createShaderModule(dev, readFile("Shaders/Reprojection.slang.spv"));
+		vk::PipelineShaderStageCreateInfo stage{
+		    .stage  = vk::ShaderStageFlagBits::eCompute,
+		    .module = *mod,
+		    .pName  = "reprojectionMain"};
+		vk::ComputePipelineCreateInfo info{.stage = stage, .layout = *denoiserPipelineLayout};
+		reprojectionPipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, info);
+	}
+
+	// A-Trous spatial filter compute pipeline
+	{
+		vk::raii::ShaderModule mod = createShaderModule(dev, readFile("Shaders/Denoiser.slang.spv"));
+		vk::PipelineShaderStageCreateInfo stage{
+		    .stage  = vk::ShaderStageFlagBits::eCompute,
+		    .module = *mod,
+		    .pName  = "atrousMain"};
+		vk::ComputePipelineCreateInfo info{.stage = stage, .layout = *denoiserPipelineLayout};
+		atrousPipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, info);
+	}
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

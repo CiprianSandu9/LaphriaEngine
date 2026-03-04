@@ -18,7 +18,7 @@ class FrameContext
 	void init(VulkanDevice &dev, SwapchainManager &swapchain);
 	void cleanupSwapChainDependents();
 	void recreate(VulkanDevice &dev, SwapchainManager &swapchain);
-	void updateUniformBuffer(uint32_t frameIdx, const Camera &camera, vk::Extent2D extent, glm::vec3 lightDirection) const;
+	void updateUniformBuffer(uint32_t frameIdx, const Camera &camera, vk::Extent2D extent, glm::vec3 lightDirection);
 
 	// ── CSM Shadow resources (extent-independent, NOT cleaned on swapchain resize) ──
 	// One depth array image per frame-in-flight; each has NUM_SHADOW_CASCADES layers at SHADOW_MAP_DIM x SHADOW_MAP_DIM.
@@ -54,11 +54,46 @@ class FrameContext
 	std::vector<vk::raii::ImageView>    storageImageViews;
 
 	// ── RT output images (per frame in flight) ────────────────────────────
-	// Separate from the compute storage images: the RT pipeline writes here,
-	// then these are blitted to the swapchain independently of the starfield.
+	// Noisy 1-SPP path tracer output. After denoising, the final denoised result is
+	// written back here so the existing swapchain blit path remains unchanged.
 	std::vector<vk::raii::Image>        rayTracingOutputImages;
 	std::vector<vk::raii::DeviceMemory> rayTracingOutputImagesMemory;
 	std::vector<vk::raii::ImageView>    rayTracingOutputImageViews;
+
+	// ── G-Buffer images written by the Raygen shader (per frame in flight) ──
+	// All are swapchain-extent-dependent and recreated on resize.
+	std::vector<vk::raii::Image>        rtGBufferNormals;        // R16G16B16A16_SFLOAT world normals
+	std::vector<vk::raii::DeviceMemory> rtGBufferNormalsMemory;
+	std::vector<vk::raii::ImageView>    rtGBufferNormalsViews;
+
+	std::vector<vk::raii::Image>        rtGBufferDepth;          // R32_SFLOAT linear depth (ray hit t)
+	std::vector<vk::raii::DeviceMemory> rtGBufferDepthMemory;
+	std::vector<vk::raii::ImageView>    rtGBufferDepthViews;
+
+	std::vector<vk::raii::Image>        rtMotionVectors;         // R16G16_SFLOAT screen-space motion
+	std::vector<vk::raii::DeviceMemory> rtMotionVectorsMemory;
+	std::vector<vk::raii::ImageView>    rtMotionVectorsViews;
+
+	// ── Temporal accumulation history buffers (per frame in flight) ─────────
+	// historyColor[i] stores the blended reprojection output from frame slot i,
+	// read by frame slot (i+1)%2 as "previous frame" and written by frame slot i.
+	std::vector<vk::raii::Image>        historyColor;            // R16G16B16A16_SFLOAT
+	std::vector<vk::raii::DeviceMemory> historyColorMemory;
+	std::vector<vk::raii::ImageView>    historyColorViews;
+
+	std::vector<vk::raii::Image>        historyMoments;          // R16G16_SFLOAT (mean, variance)
+	std::vector<vk::raii::DeviceMemory> historyMomentsMemory;
+	std::vector<vk::raii::ImageView>    historyMomentsViews;
+
+	// ── A-Trous ping-pong buffers (2, shared across frames — not per-slot) ──
+	// atrousTemp[0] receives the reprojection output; iterations alternate between [0] and [1].
+	std::vector<vk::raii::Image>        atrousTemp;              // 2 × R16G16B16A16_SFLOAT
+	std::vector<vk::raii::DeviceMemory> atrousTempMemory;
+	std::vector<vk::raii::ImageView>    atrousTempViews;
+
+	// ── Temporal tracking (updated each frame by updateUniformBuffer) ────────
+	glm::mat4 prevViewProj{1.0f};   // VP matrix of the last submitted frame
+	uint32_t  frameCount = 0;       // monotonically increasing, seeds per-pixel RNG
 
 	// ── Uniform buffers (per frame in flight) ─────────────────────────────
 	std::vector<vk::raii::Buffer>       uniformBuffers;
@@ -87,6 +122,9 @@ class FrameContext
 	void createDepthResources(VulkanDevice &dev, SwapchainManager &swapchain);
 	void createStorageResources(VulkanDevice &dev, SwapchainManager &swapchain);
 	void createRayTracingOutputImages(VulkanDevice &dev, SwapchainManager &swapchain);
+	void createGBufferResources(VulkanDevice &dev, SwapchainManager &swapchain);
+	void createHistoryResources(VulkanDevice &dev, SwapchainManager &swapchain);
+	void createAtrousResources(VulkanDevice &dev, SwapchainManager &swapchain);
 
 	void createUniformBuffers(VulkanDevice &dev);
 	void createTLASResources(VulkanDevice &dev);

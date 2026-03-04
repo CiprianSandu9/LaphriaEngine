@@ -329,11 +329,14 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
 	ImGui::Begin("Engine Controls");
 
 	ImGui::Text("Rendering Backend:");
-	if (ImGui::RadioButton("Rasterizer", !useRayTracing))
-		useRayTracing = false;
+	if (ImGui::RadioButton("Rasterizer", renderMode == RenderMode::Rasterizer))
+		renderMode = RenderMode::Rasterizer;
 	ImGui::SameLine();
-	if (ImGui::RadioButton("Ray Tracer (RTX)", useRayTracing))
-		useRayTracing = true;
+	if (ImGui::RadioButton("Ray Tracer", renderMode == RenderMode::RayTracer))
+		renderMode = RenderMode::RayTracer;
+	ImGui::SameLine();
+	if (ImGui::RadioButton("Path Tracer", renderMode == RenderMode::PathTracer))
+		renderMode = RenderMode::PathTracer;
 
 	ImGui::Separator();
 

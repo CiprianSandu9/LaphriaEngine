@@ -221,6 +221,15 @@ void recordImageLayoutTransition(const vk::raii::CommandBuffer &commandBuffer, v
 		sourceStage           = vk::PipelineStageFlagBits::eTopOfPipe;
 		destinationStage      = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
 	}
+	else if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eGeneral)
+	{
+		// Used to initialize storage images (eStorage) before the first compute/RT write.
+		// No previous content to preserve; any subsequent access will issue its own barrier.
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+		sourceStage           = vk::PipelineStageFlagBits::eTopOfPipe;
+		destinationStage      = vk::PipelineStageFlagBits::eComputeShader;
+	}
 	else
 	{
 		throw std::invalid_argument("unsupported layout transition!");

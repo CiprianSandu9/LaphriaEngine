@@ -2,7 +2,7 @@
 
 A Vulkan 1.4 real-time 3D game engine written in C++20, developed as a dissertation project.
 
-It features a physically-based rasterization pipeline, a hardware ray tracing pipeline, cascaded shadow maps, a GPU-accelerated starfield compute pass, GPU-accelerated physics simulation, a hierarchical scene graph with spatial culling, and an integrated ImGui editor.
+It supports three selectable rendering backends — rasterizer, classic ray tracer, and path tracer — all switchable at runtime. It also includes cascaded shadow maps, a GPU-accelerated starfield compute pass, GPU-accelerated physics simulation, a hierarchical scene graph with spatial culling, and an integrated ImGui editor.
 
 ---
 
@@ -18,14 +18,31 @@ It features a physically-based rasterization pipeline, a hardware ray tracing pi
 - Dynamic rendering (no VkRenderPass / VkFramebuffer objects)
 - Vulkan synchronization2 barriers throughout
 
-**Ray tracing pipeline** (VK_KHR_ray_tracing_pipeline + VK_KHR_acceleration_structure)
-- Hardware TLAS/BLAS acceleration structures, rebuilt each frame
-- Raygen → ClosestHit / AnyHit / Miss shader stages
-- Alpha-cutout transparency in AnyHit
-- RT shadow rays for hard shadows
-- Bindless per-model vertex, index, material, and texture arrays
+**Classic ray tracing pipeline** — direct illumination only (VK_KHR_ray_tracing_pipeline + VK_KHR_acceleration_structure)
 
-**Common**
+Traces one primary ray per pixel. On a surface hit, shading is evaluated analytically using PBR (GGX/Smith/Schlick), and a single shadow ray is fired toward the light source to determine occlusion. No indirect bounces are traced — the result is comparable to rasterization with perfect per-pixel shadows, but no global illumination.
+
+- Hardware TLAS/BLAS acceleration structures, rebuilt each frame
+- Alpha-cutout transparency in AnyHit
+- Hard RT shadows via a secondary shadow ray from ClosestHit
+- Bindless per-model vertex, index, material, and texture arrays (bindings 5–8)
+
+**Path tracing pipeline** — full global illumination (same Vulkan RT extension set)
+
+Traces one primary ray per pixel (1 SPP). At each surface hit, a new ray direction is sampled from the BRDF lobe instead of evaluating a light analytically — the process repeats for multiple bounces until a light source is hit or Russian roulette terminates the path. This captures indirect illumination (colour bleeding, inter-reflections) that the classic RT pipeline cannot produce, but at the cost of significant noise at 1 SPP.
+
+- 1 SPP unbiased path tracer with cosine-weighted hemisphere sampling and Russian roulette
+- G-Buffer outputs written by Raygen: world normals (R16G16B16A16), linear depth (R32), motion vectors (R16G16)
+- Temporal reprojection: accumulates history across frames using motion vectors; history is discarded on camera movement to prevent ghosting
+- SVGF-style A-Trous spatial denoiser: 5 wavelet iterations with luminance and normal edge-stopping weights, applied after reprojection
+- Final tonemapped result written back to the RT output image and blitted to the swapchain
+
+**Common to all hardware RT modes**
+- Hardware TLAS/BLAS acceleration structures, rebuilt each frame
+- Raygen → ClosestHit / AnyHit / Miss shader pipeline stages
+- Three-way runtime backend selection via `RenderMode` enum (`Rasterizer`, `RayTracer`, `PathTracer`)
+
+**Common to all modes**
 - Multi-frame buffering (2 frames in flight)
 - Dynamic swapchain resize handling
 - Slang shaders compiled to SPIR-V at build time
@@ -51,7 +68,7 @@ It features a physically-based rasterization pipeline, a hardware ray tracing pi
 - Object selection and transform manipulation
 - Light direction control
 - Physics simulation play / pause
-- Toggle between rasterization and ray tracing at runtime
+- Toggle between rasterizer, classic ray tracer, and path tracer at runtime
 
 ---
 
@@ -75,12 +92,18 @@ Source is organized under `src/` into three areas:
 | `LaphriaEngine.slang` | `vertMain`, `fragMain` | PBR vertex + fragment (CSM lookup, normal mapping, PBR lighting) |
 | `Compute.slang` | `computeMain` | Starfield background — writes to a storage image, blitted to the swapchain |
 | `Shadow.slang` | `shadowVert`, `shadowFrag` | Depth-only CSM pass (4 cascades); alpha-cutout discard in fragment |
-| `Raygen.slang` | `main` | RT camera ray generation — unprojects each pixel into a world-space ray |
-| `ClosestHit.slang` | `main` | RT surface shading — PBR + shadow ray + normal mapping |
-| `AnyHit.slang` | `main` | RT alpha-cutout transparency test |
-| `Miss.slang` | `main` | RT background sky gradient; shadow ray miss → not occluded |
+| `Raygen.slang` | `main` | **Path tracer** — 1 SPP ray generation; writes noisy colour and G-Buffer (normals, depth, motion vectors) |
+| `ClosestHit.slang` | `main` | **Path tracer** — BRDF-sampled bounce; continues the path or returns emissive radiance |
+| `AnyHit.slang` | `main` | **Path tracer** — alpha-cutout transparency test |
+| `Miss.slang` | `main` | **Path tracer** — background sky radiance; shadow ray miss returns unoccluded |
+| `RT_Raygen.slang` | `main` | **Classic RT** — primary ray generation; evaluates direct illumination at the first hit |
+| `RT_ClosestHit.slang` | `main` | **Classic RT** — PBR shading + shadow ray + normal mapping; no indirect bounce |
+| `RT_AnyHit.slang` | `main` | **Classic RT** — alpha-cutout transparency test |
+| `RT_Miss.slang` | `main` | **Classic RT** — background sky gradient; shadow ray miss → not occluded |
+| `Reprojection.slang` | `reprojectionMain` | Temporal reprojection — blends noisy 1 SPP output with history using motion vectors |
+| `Denoiser.slang` | `atrousMain` | A-Trous spatial filter — 5 wavelet iterations; edge-stopping by luminance and surface normals |
 | `Physics.slang` | `physicsMain` | GPU rigid-body integration compute shader |
-| `ShaderCommon.slang` | — | Shared structs (`UniformBuffer`, `ScenePushConstants`, `MaterialData`, `RayPayload`), PBR functions, `mat3Inverse` |
+| `ShaderCommon.slang` | — | Shared structs (`UniformBuffer`, `ScenePushConstants`, `MaterialData`), PBR functions, `mat3Inverse` |
 
 All shaders are compiled from source with `slangc` as part of the CMake build.
 

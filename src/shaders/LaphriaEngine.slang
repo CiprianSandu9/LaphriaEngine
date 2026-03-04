@@ -247,10 +247,11 @@ float4 fragMain(VSOutput input) : SV_TARGET {
         Lo += (diffuse + specular) * radiance * NdotL;
     }
 
-    // Ambient
-    float3 skyColor = float3(0.3, 0.4, 0.6);
-    float3 groundColor = float3(0.1, 0.08, 0.06);
-    float3 ambient = lerp(groundColor, skyColor, N.y * 0.5 + 0.5);
+    // Ambient — sky/ground colours driven by the same procedural sky model.
+    float3 sunDir3     = normalize(-ubo.lightDir.xyz);
+    float3 skyColor    = evalSkyColor(float3(0.0, 1.0, 0.0), sunDir3); // zenith sky sample
+    float3 groundColor = evalGroundColor(sunDir3);                      // earth-toned lower lobe
+    float3 ambient     = lerp(groundColor, skyColor, N.y * 0.5 + 0.5);
 
     float3 kS = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
     float3 kD = (1.0 - kS) * (1.0 - metallic);

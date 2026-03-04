@@ -20,6 +20,9 @@ class PipelineCollection
 	void createPhysicsPipeline(VulkanDevice &dev);
 	void createRayTracingPipeline(VulkanDevice &dev);
 	void createShaderBindingTable(VulkanDevice &dev);
+	void createDenoiserPipelines(VulkanDevice &dev);
+	void createClassicRTPipeline(VulkanDevice &dev);
+	void createClassicRTShaderBindingTable(VulkanDevice &dev);
 
 	// ── Descriptor Set Layouts ────────────────────────────────────────────
 	vk::raii::DescriptorSetLayout descriptorSetLayoutGlobal{nullptr};
@@ -27,6 +30,7 @@ class PipelineCollection
 	vk::raii::DescriptorSetLayout computeDescriptorSetLayout{nullptr};
 	vk::raii::DescriptorSetLayout physicsDescriptorSetLayout{nullptr};
 	vk::raii::DescriptorSetLayout rayTracingDescriptorSetLayout{nullptr};
+	vk::raii::DescriptorSetLayout denoiserDescriptorSetLayout{nullptr};
 
 	// ── Pipelines ─────────────────────────────────────────────────────────
 	vk::raii::Pipeline graphicsPipeline{nullptr};
@@ -34,7 +38,12 @@ class PipelineCollection
 	vk::raii::Pipeline computePipeline{nullptr};
 	vk::raii::Pipeline physicsPipeline{nullptr};
 
-	vk::raii::Pipeline rayTracingPipeline{nullptr};
+	vk::raii::Pipeline rayTracingPipeline{nullptr};   // path tracer
+	vk::raii::Pipeline classicRTPipeline{nullptr};    // classic ray tracer (direct illumination)
+
+	// Denoiser: two compute pipelines (temporal reprojection + spatial A-Trous).
+	vk::raii::Pipeline reprojectionPipeline{nullptr};
+	vk::raii::Pipeline atrousPipeline{nullptr};
 
 	// ── Pipeline Layouts ──────────────────────────────────────────────────
 	vk::raii::PipelineLayout graphicsPipelineLayout{nullptr};
@@ -43,8 +52,9 @@ class PipelineCollection
 	vk::raii::PipelineLayout physicsPipelineLayout{nullptr};
 
 	vk::raii::PipelineLayout rayTracingPipelineLayout{nullptr};
+	vk::raii::PipelineLayout denoiserPipelineLayout{nullptr};
 
-	// ── Shader Binding Table (SBT) ────────────────────────────────────────
+	// ── Shader Binding Table (SBT) — Path Tracer ─────────────────────────
 	vk::raii::Buffer                  raygenSBTBuffer{nullptr};
 	vk::raii::DeviceMemory            raygenSBTMemory{nullptr};
 	vk::StridedDeviceAddressRegionKHR raygenRegion{};
@@ -57,12 +67,27 @@ class PipelineCollection
 	vk::raii::DeviceMemory            hitSBTMemory{nullptr};
 	vk::StridedDeviceAddressRegionKHR hitRegion{};
 
+	// ── Shader Binding Table (SBT) — Classic Ray Tracer ──────────────────
+	vk::raii::Buffer                  classicRTRaygenSBTBuffer{nullptr};
+	vk::raii::DeviceMemory            classicRTRaygenSBTMemory{nullptr};
+	vk::StridedDeviceAddressRegionKHR classicRTRaygenRegion{};
+
+	vk::raii::Buffer                  classicRTMissSBTBuffer{nullptr};
+	vk::raii::DeviceMemory            classicRTMissSBTMemory{nullptr};
+	vk::StridedDeviceAddressRegionKHR classicRTMissRegion{};
+
+	vk::raii::Buffer                  classicRTHitSBTBuffer{nullptr};
+	vk::raii::DeviceMemory            classicRTHitSBTMemory{nullptr};
+	vk::StridedDeviceAddressRegionKHR classicRTHitRegion{};
+
   private:
 	void createGlobalDescriptorSetLayout(VulkanDevice &dev);
 	void createMaterialDescriptorSetLayout(VulkanDevice &dev);
 	void createComputeDescriptorSetLayout(VulkanDevice &dev);
 	void createPhysicsDescriptorSetLayout(VulkanDevice &dev);
 	void createRayTracingDescriptorSetLayout(VulkanDevice &dev);
+	void createDenoiserDescriptorSetLayout(VulkanDevice &dev);
+	void createDenoiserPipelineLayout(VulkanDevice &dev);
 	void createGraphicsPipelineLayout(VulkanDevice &dev);
 	void createShadowPipelineLayout(VulkanDevice &dev);
 	void createComputePipelineLayout(VulkanDevice &dev);

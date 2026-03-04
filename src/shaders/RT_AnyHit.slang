@@ -1,24 +1,16 @@
 #include "ShaderCommon.slang"
 
-// Path tracer RayPayload — surface properties returned by ClosestHit to Raygen.
+// Classic ray tracer RayPayload.
 struct RayPayload {
-    float3 albedo;
-    float3 emission;
-    float3 worldNormal;
-    float3 hitPos;
-    float  roughness;
-    float  metallic;
-    float3 F0;
-    float  hitT;
-    uint   instanceID;
+    float3 color;
+    uint   isShadowed;
 };
 
 struct BuiltInTriangleIntersectionAttributes {
     float2 barycentrics;
 };
 
-// Set 0 Bindings — must match createRayTracingDescriptorSetLayout() in PipelineCollection.cpp.
-// Bindings 1-4 are G-Buffer/RT output images written by Raygen; AnyHit doesn't use them.
+// Set 0 Bindings — binding numbers match the shared RT/PT descriptor set layout.
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure topLevelAS;
 [[vk::binding(5, 0)]] ByteAddressBuffer globalVertices[];
 [[vk::binding(6, 0)]] ByteAddressBuffer globalIndices[];
@@ -44,18 +36,18 @@ uint loadIndex(ByteAddressBuffer buf, uint idx)
 [shader("anyhit")]
 void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes attribs) {
 
-    uint customIndex    = InstanceID();
-    uint modelId        = customIndex >> 14;
+    uint customIndex     = InstanceID();
+    uint modelId         = customIndex >> 14;
     uint primitiveOffset = customIndex & 0x3FFF;
-    uint geometryIndex  = GeometryIndex();
+    uint geometryIndex   = GeometryIndex();
 
     MaterialData mat = globalMaterials[NonUniformResourceIndex(modelId)][primitiveOffset + geometryIndex];
 
     if (mat.alphaCutoff <= 0.0) {
-        return; // alphaCutoff disabled — accept all hits without a texture lookup
+        return;  // alphaCutoff disabled — accept all hits without a texture lookup.
     }
 
-    uint firstIndex  = mat.firstIndex;
+    uint firstIndex   = mat.firstIndex;
     uint vertexOffset = mat.vertexOffset;
     uint primitiveIndex = PrimitiveIndex();
 
