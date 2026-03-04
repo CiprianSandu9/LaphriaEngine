@@ -15,15 +15,18 @@ find_package(stb REQUIRED)
 find_program(SLANGC_EXECUTABLE slangc HINTS $ENV{VULKAN_SDK}/bin REQUIRED)
 
 # Compile Slang shaders to SPIR-V
+# Each shader is listed as "source|entry1|entry2|..." (pipe-separated).
+# Explicit entry points avoid false matches from comments or included files.
+# Pipe is used instead of semicolon because semicolons are CMake list separators.
 set(SHADER_SOURCES
-    src/Shaders/LaphriaEngine.slang
-    src/Shaders/Compute.slang
-    src/Shaders/Shadow.slang
-    src/Shaders/Physics.slang
-    src/Shaders/ClosestHit.slang
-    src/Shaders/AnyHit.slang
-    src/Shaders/Miss.slang
-    src/Shaders/Raygen.slang
+    "src/Shaders/LaphriaEngine.slang|vertMain|fragMain"
+    "src/Shaders/Compute.slang|computeMain"
+    "src/Shaders/Shadow.slang|shadowVert|shadowFrag"
+    "src/Shaders/Physics.slang|physicsMain"
+    "src/Shaders/ClosestHit.slang|main"
+    "src/Shaders/AnyHit.slang|main"
+    "src/Shaders/Miss.slang|main"
+    "src/Shaders/Raygen.slang|main"
 )
 # Multi-config generators (VS, Ninja Multi-Config) automatically append <Config>/ to
 # RUNTIME_OUTPUT_DIRECTORY, so the exe lands in LaphriaEngine/<Config>/. Single-config
@@ -35,34 +38,19 @@ else()
 endif()
 set(GENERATED_SPV_FILES "")
 
-foreach(SHADER_SOURCE ${SHADER_SOURCES})
+foreach(SHADER_ENTRY ${SHADER_SOURCES})
+    # Split "path|entry1|entry2|..." into a CMake list
+    string(REPLACE "|" ";" SHADER_PARTS "${SHADER_ENTRY}")
+    list(GET SHADER_PARTS 0 SHADER_SOURCE)
+    list(REMOVE_AT SHADER_PARTS 0)
+
     get_filename_component(SHADER_NAME ${SHADER_SOURCE} NAME)
     set(SHADER_OUTPUT "${SHADERS_DIR}/${SHADER_NAME}.spv")
 
-    file(READ ${SHADER_SOURCE} SHADER_CONTENT)
     set(ENTRY_POINTS "")
-    if(SHADER_CONTENT MATCHES "vertMain")
-        list(APPEND ENTRY_POINTS -entry vertMain)
-    endif()
-    if(SHADER_CONTENT MATCHES "fragMain")
-        list(APPEND ENTRY_POINTS -entry fragMain)
-    endif()
-    if(SHADER_CONTENT MATCHES "computeMain")
-        list(APPEND ENTRY_POINTS -entry computeMain)
-    endif()
-    if(SHADER_CONTENT MATCHES "physicsMain")
-        list(APPEND ENTRY_POINTS -entry physicsMain)
-    endif()
-    if(SHADER_CONTENT MATCHES "shadowVert")
-        list(APPEND ENTRY_POINTS -entry shadowVert)
-    endif()
-    if(SHADER_CONTENT MATCHES "shadowFrag")
-        list(APPEND ENTRY_POINTS -entry shadowFrag)
-    endif()
-    if(NOT ENTRY_POINTS)
-        message(WARNING "No standard entry points found in ${SHADER_NAME}, defaulting to '-entry main'")
-        list(APPEND ENTRY_POINTS -entry main)
-    endif()
+    foreach(EP ${SHADER_PARTS})
+        list(APPEND ENTRY_POINTS -entry ${EP})
+    endforeach()
 
     add_custom_command(
         OUTPUT ${SHADER_OUTPUT}

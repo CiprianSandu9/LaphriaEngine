@@ -350,11 +350,9 @@ void EngineCore::createRayTracingDescriptorSets()
 			if (ModelResource *model = resourceManager->getModelResource(modelId))
 			{
 				// Writing a null VkBuffer into a descriptor is invalid even with ePartiallyBound.
-				// A loaded model must always have all three buffers; assert to catch regressions.
-				assert(*model->vertexBuffer   && "RT descriptor: model has no vertex buffer");
-				assert(*model->indexBuffer    && "RT descriptor: model has no index buffer");
-				assert(*model->materialBuffer && "RT descriptor: model has no material buffer");
-
+				if (!*model->vertexBuffer || !*model->indexBuffer || !*model->materialBuffer)
+					throw std::runtime_error("RT descriptor: model " + std::to_string(modelId) + " has null buffer(s)");
+		
 				// 1. Accumulate Vertex Buffers
 				vertexInfos.push_back({*model->vertexBuffer, 0, VK_WHOLE_SIZE});
 
@@ -446,7 +444,7 @@ void EngineCore::createDenoiserDescriptorSets()
 
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 	{
-		size_t prevSlot = (i + 1) % MAX_FRAMES_IN_FLIGHT;
+		size_t prevSlot = (i - 1 + MAX_FRAMES_IN_FLIGHT) % MAX_FRAMES_IN_FLIGHT;
 
 		// Build the 13 image info structs in binding order.
 		vk::DescriptorImageInfo infos[13] = {
