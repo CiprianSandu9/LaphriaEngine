@@ -16,7 +16,7 @@ glm::mat4 Camera::getViewMatrix() const {
 
 glm::mat4 Camera::getRotationMatrix() const {
     glm::quat pitchRotation = glm::angleAxis(pitch, glm::vec3{1.f, 0.f, 0.f});
-    glm::quat yawRotation   = glm::angleAxis(yaw,   glm::vec3{0.f, 1.f, 0.f});
+    glm::quat yawRotation = glm::angleAxis(yaw, glm::vec3{0.f, 1.f, 0.f});
 
     // Yaw is applied first (world-space Y) then pitch (local X).
     // Multiplying in this order keeps the horizon level when the camera pans.
@@ -29,10 +29,10 @@ void Camera::processInput(float x, float y, float z) {
     velocity.z = z;
 }
 
-void Camera::update() {
+void Camera::update(float deltaTime) {
     glm::mat4 cameraRotation = getRotationMatrix();
     // Transform the local-space velocity into world space and advance the position.
-    // The 0.5f factor is a fixed speed scalar; velocity components are set to ±0.1
-    // by the InputSystem, giving a final step of ±0.05 units per frame.
-    position += glm::vec3(cameraRotation * glm::vec4(velocity * 0.5f, 0.f));
+    // The movementSpeed factor is a speed scalar; velocity components are set to ±0.1
+    // by the InputSystem. Multiplied by 60 to maintain consistency with historical 60FPS feel.
+    position += glm::vec3(cameraRotation * glm::vec4(velocity * movementSpeed * deltaTime * 60.0f, 0.f));
 }
