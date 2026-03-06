@@ -14,7 +14,7 @@ flowchart TD
     subgraph AssetLoading [Asset Processing & GPU Uploads]
         initModelRes --> loadTex[1. loadTextures<br/><i>Load KTX/PNG -> Staging -> ImageBuffer -> ImageView/Sampler</i>]
         
-        loadTex --> loadMat[2. loadMaterials<br/><i>Extract PBR Params -> Upload to MaterialBuffer (SSBO)</i>]
+        loadTex --> loadMat["2. loadMaterials<br/><i>Extract PBR Params -> Upload to MaterialBuffer (SSBO)"</i>]
         
         loadMat --> processNodes[3. processSceneNodes<br/><i>Parse Hierarchy -> Create SceneNode Tree<br/>Extract Vertices & Indices</i>]
         
@@ -26,6 +26,7 @@ flowchart TD
         
         createDesc --> buildBLAS[6. buildBLAS<br/><i>Create Bottom-Level Acceleration Structure<br/>vkCmdBuildAccelerationStructuresKHR</i>]
         
+        buildBLAS -.-> tlasNote["TLAS rebuilt per-frame at runtime<br/><i>Gather BLAS + Transforms → see high_level_architecture.md</i>"]
         buildBLAS --> cache[Store in Model Cache]
     end
     
@@ -37,8 +38,10 @@ flowchart TD
     classDef parse fill:#2A4365,stroke:#4299E1,stroke-width:2px,color:#fff
     classDef asset fill:#744210,stroke:#D69E2E,stroke-width:2px,color:#fff
     classDef bind fill:#22543D,stroke:#48BB78,stroke-width:2px,color:#fff
-    
+    classDef note fill:#1A202C,stroke:#718096,stroke-width:1px,color:#A0AEC0,stroke-dasharray: 4 4
+
     class FastGLTF parse
     class AssetLoading asset
     class BindingData bind
+    class tlasNote note
 ```

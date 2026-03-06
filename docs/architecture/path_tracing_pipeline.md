@@ -33,7 +33,7 @@ flowchart TD
         camCheck -- No --> reproPushStatic[DenoisePushConstants<br/><i>phiColor = 0.1 — Blend 90% History</i>]
         reproPushMove --> bindReproj[Bind reprojectionPipeline<br/><i>Reprojection.slang</i>]
         reproPushStatic --> bindReproj
-        bindReproj --> execReproj[Dispatch Reprojection<br/><i>Combines GBuffer + History</i>]
+        bindReproj --> execReproj[Dispatch Reprojection<br/><i>Color History + Temporal Variance Estimation</i>]
 
         execReproj --> barrierCS1[Memory Barrier<br/><i>Compute -> Compute</i>]
 
