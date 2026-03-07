@@ -8,35 +8,35 @@ flowchart TD
     
     %% CPU Path
     subgraph CPUPhysics [CPU Physics Execution]
-        gpuCheck -- No --> cpuUpdate[PhysicsSystem::updateCPU<br/><i>std::vector&lt;SceneNode::Ptr&gt;</i>]
+        gpuCheck -->|No| cpuUpdate[PhysicsSystem::updateCPU<br/><i>std::vector&lt;SceneNode::Ptr&gt;</i>]
         
         cpuUpdate --> integrate[1. Integrate Velocities & Positions<br/><i>Gravity, Damping, Euler Integration</i>]
         integrate --> bounds[2. Check Boundaries<br/><i>World AABB Collisions/Bounces</i>]
-        bounds --> resolve[3. Resolve Collisions<br/><i>O(N^2) Broadphase loop</i>]
+        bounds --> resolve["3. Resolve Collisions<br/><i>O(N^2) Broadphase loop</i>"]
         
         resolve --> narrow{Narrowphase Shape Check}
-        narrow -- "Sphere vs Sphere" --> ss[checkSphereSphere]
-        narrow -- "AABB vs AABB" --> aa[checkAABBAABB]
-        narrow -- "Sphere vs AABB" --> sa[checkSphereAABB]
+        narrow -->|"Sphere vs Sphere"| ss[checkSphereSphere]
+        narrow -->|"AABB vs AABB"| aa[checkAABBAABB]
+        narrow -->|"Sphere vs AABB"| sa[checkSphereAABB]
         
         ss --> solver{Collision Detected?}
         aa --> solver
         sa --> solver
         
-        solver -- Yes --> solve[solveContact<br/><i>Impulse Response & Positional Correction</i>]
+        solver -->|Yes| solve[solveContact<br/><i>Impulse Response & Positional Correction</i>]
         solve -.-> resolve
         
-        solver -- No -.-> resolve
+        solver -.->|No| resolve
     end
     
     %% GPU Path
     subgraph GPUPhysics [GPU Compute Physics]
-        gpuCheck -- Yes --> gpuUpdate[PhysicsSystem::updateGPU]
+        gpuCheck -->|Yes| gpuUpdate[PhysicsSystem::updateGPU]
         
         gpuUpdate --> ssboUpdate[1. updateSSBO<br/><i>Host -> Device Transfer</i>]
         ssboUpdate --> dispatch1[2. Dispatch Physics.slang<br/><i>Stage 0: Integration & Bounds</i>]
         dispatch1 --> barrierCS[Compute Barrier]
-        barrierCS --> dispatch2[3. Dispatch Physics.slang<br/><i>Stage 1: Naive O(N^2) Collision Solver</i>]
+        barrierCS --> dispatch2["3. Dispatch Physics.slang<br/><i>Stage 1: Naive O(N^2) Collision Solver</i>"]
         
         dispatch2 --> gpuDone([GPU Dispatch Complete])
     end
