@@ -105,8 +105,8 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
     // Normal Mapping
     float3 N = normalize(worldNormal);
     if (mat.normalIndex >= 0) {
-        float3 T = normalize(mul((float3x3)ObjectToWorld3x4(), v0.tangent.xyz * barycentrics.x + v1.tangent.xyz * barycentrics.y + v2.tangent.xyz * barycentrics.z));
-        float tangentW = v0.tangent.w * barycentrics.x + v1.tangent.w * barycentrics.y + v2.tangent.w * barycentrics.z;
+        float3 T = mul((float3x3)ObjectToWorld3x4(), v0.tangent.xyz * barycentrics.x + v1.tangent.xyz * barycentrics.y + v2.tangent.xyz * barycentrics.z);
+        float tangentW = sign(v0.tangent.w * barycentrics.x + v1.tangent.w * barycentrics.y + v2.tangent.w * barycentrics.z);
 
         float tangentLengthSq = dot(T, T);
         if (tangentLengthSq > 0.0001) {

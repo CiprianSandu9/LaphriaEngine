@@ -9,6 +9,7 @@ struct RayPayload {
     float  roughness;
     float  metallic;
     float3 F0;
+    float  ao;
     float  hitT;
     uint   instanceID;
 };
@@ -95,9 +96,9 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
 
     // Normal mapping
     if (mat.normalIndex >= 0) {
-        float3 T = normalize(mul((float3x3)ObjectToWorld3x4(),
-            v0.tangent.xyz * barycentrics.x + v1.tangent.xyz * barycentrics.y + v2.tangent.xyz * barycentrics.z));
-        float tangentW = v0.tangent.w * barycentrics.x + v1.tangent.w * barycentrics.y + v2.tangent.w * barycentrics.z;
+        float3 T = mul((float3x3)ObjectToWorld3x4(),
+            v0.tangent.xyz * barycentrics.x + v1.tangent.xyz * barycentrics.y + v2.tangent.xyz * barycentrics.z);
+        float tangentW = sign(v0.tangent.w * barycentrics.x + v1.tangent.w * barycentrics.y + v2.tangent.w * barycentrics.z);
 
         float tls = dot(T, T);
         if (tls > 0.0001) {
@@ -142,6 +143,13 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
             globalTextures[NonUniformResourceIndex(mat.emissiveIndex + mat.globalTextureOffset)].SampleLevel(uv, 0.0).rgb);
     }
 
+    // Ambient Occlusion
+    float ao = 1.0;
+    if (mat.occlusionIndex >= 0) {
+        float aoSample = globalTextures[NonUniformResourceIndex(mat.occlusionIndex + mat.globalTextureOffset)].SampleLevel(uv, 0.0).r;
+        ao = 1.0 + mat.occlusionStrength * (aoSample - 1.0);
+    }
+
     // Fresnel base reflectance
     float dielectricSpec = mat.specularFactor;
     if (mat.specularTextureIndex >= 0)
@@ -156,6 +164,7 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
     payload.roughness   = roughness;
     payload.metallic    = metallic;
     payload.F0          = F0;
+    payload.ao          = ao;
     payload.hitT        = RayTCurrent();
     payload.instanceID  = InstanceID();
 }

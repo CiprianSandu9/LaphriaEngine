@@ -2,7 +2,7 @@
 
 // Path tracer RayPayload — surface properties returned by ClosestHit to Raygen.
 // hitT < 0 is the escape sentinel set by Miss to indicate a sky hit.
-// Total size: 3+3+3+3+1+1+3+1+1 floats × 4 = 19 × 4 = 76 bytes (within 128-byte limit).
+// Total size: 3+3+3+3+1+1+3+1+1+1 floats × 4 = 20 × 4 = 80 bytes (within 128-byte limit).
 struct RayPayload {
     float3 albedo;       // Linear base color × (1 - metallic) diffuse weight
     float3 emission;     // Emissive radiance; Miss writes sky radiance here
@@ -11,6 +11,7 @@ struct RayPayload {
     float  roughness;    // PBR roughness [MIN_ROUGHNESS, 1]
     float  metallic;     // PBR metallic [0, 1]
     float3 F0;           // Fresnel base reflectance (precomputed from albedo + metallic)
+    float  ao;           // Baked ambient occlusion factor [0, 1]
     float  hitT;         // Ray t-value; negative means ray escaped to sky (Miss fired)
     uint   instanceID;   // InstanceID() from ClosestHit; 0 on sky hit
 };
@@ -93,6 +94,7 @@ void main() {
             shadowPayload.roughness   = 1.0;
             shadowPayload.metallic    = 0.0;
             shadowPayload.F0          = float3(0.0, 0.0, 0.0);
+            shadowPayload.ao          = 1.0;
             shadowPayload.instanceID  = 0;
 
             RayDesc shadowRay;
@@ -177,7 +179,7 @@ void main() {
             if (max(dot(N, newDir), 0.0) <= 0.0) break;
 
             float3 kD  = (float3(1.0, 1.0, 1.0) - F) * (1.0 - payload.metallic);
-            bsdfWeight = kD * payload.albedo;
+            bsdfWeight = kD * payload.albedo * payload.ao;
             pdf        = 1.0 - specProb;
         }
 
