@@ -208,7 +208,7 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
     float3 ambientL    = lerp(groundColor, skyColor, N.y * 0.5 + 0.5);
     float3 kS          = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
     float3 kD_amb      = (1.0 - kS) * (1.0 - metallic);
-    float3 ambientContribution = (kD_amb * baseColor.rgb * ambientL + kS * ambientL * (1.0 - roughness * 0.5)) * ao * 0.3;
+    float3 ambientContribution = (kD_amb * baseColor.rgb * ambientL + kS * ambientL * (1.0 - roughness * 0.5)) * ao;
 
     float3 finalColor = ambientContribution + Lo + emissive;
     finalColor = acesTonemap(finalColor);

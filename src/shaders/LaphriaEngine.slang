@@ -258,7 +258,7 @@ float4 fragMain(VSOutput input) : SV_TARGET {
 
     float3 ambientDiffuse = kD * baseColor.rgb * ambient;
     float3 ambientSpecular = kS * ambient * (1.0 - roughness * 0.5);
-    float3 ambientContribution = (ambientDiffuse + ambientSpecular) * ao * 0.3;
+    float3 ambientContribution = (ambientDiffuse + ambientSpecular) * ao;
 
     // ========================================================================
     // Final Output

@@ -305,6 +305,56 @@ SceneNode::Ptr ResourceManager::processGltfNode(const fastgltf::Asset &gltf, con
                     indices.push_back(i);
             }
 
+            // Generate tangents when the glTF primitive does not supply a TANGENT attribute.
+            // Uses per-triangle UV/position derivatives to build a tangent space compatible
+            // with the Gram-Schmidt re-orthogonalization already performed in the shaders.
+            if (tanIt == primitive.attributes.end()) {
+                const size_t primVertexCount = vertices.size() - meshPrim.vertexOffset;
+
+                // Accumulate un-normalised tangent vectors from each triangle.
+                for (size_t t = 0; t < meshPrim.indexCount / 3; ++t) {
+                    uint32_t i0 = indices[meshPrim.firstIndex + t * 3 + 0];
+                    uint32_t i1 = indices[meshPrim.firstIndex + t * 3 + 1];
+                    uint32_t i2 = indices[meshPrim.firstIndex + t * 3 + 2];
+
+                    auto &v0 = vertices[meshPrim.vertexOffset + i0];
+                    auto &v1 = vertices[meshPrim.vertexOffset + i1];
+                    auto &v2 = vertices[meshPrim.vertexOffset + i2];
+
+                    glm::vec3 edge1 = v1.pos - v0.pos;
+                    glm::vec3 edge2 = v2.pos - v0.pos;
+                    glm::vec2 duv1  = v1.texCoord - v0.texCoord;
+                    glm::vec2 duv2  = v2.texCoord - v0.texCoord;
+
+                    float denom = duv1.x * duv2.y - duv2.x * duv1.y;
+                    if (std::abs(denom) < 1e-6f) continue;
+                    float f = 1.0f / denom;
+
+                    glm::vec3 T(f * (duv2.y * edge1 - duv1.y * edge2));
+                    v0.tangent += glm::vec4(T, 0.0f);
+                    v1.tangent += glm::vec4(T, 0.0f);
+                    v2.tangent += glm::vec4(T, 0.0f);
+                }
+
+                // Normalise and Gram-Schmidt orthogonalise against the vertex normal.
+                // Handedness is set to +1; the shader re-orthogonalises so this is sufficient
+                // for all models that use a consistent (non-mirrored) UV layout.
+                for (size_t i = 0; i < primVertexCount; ++i) {
+                    auto     &v  = vertices[meshPrim.vertexOffset + i];
+                    glm::vec3 N  = glm::normalize(v.normal);
+                    glm::vec3 T  = glm::vec3(v.tangent);
+                    float     len = glm::length(T);
+                    if (len < 1e-6f) {
+                        // Degenerate UVs: construct an arbitrary tangent orthogonal to N.
+                        glm::vec3 up = std::abs(N.y) < 0.99f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
+                        T = glm::normalize(glm::cross(up, N));
+                    } else {
+                        T = glm::normalize(T - N * glm::dot(N, T));
+                    }
+                    v.tangent = glm::vec4(T, 1.0f);
+                }
+            }
+
             loadedMesh.primitives.push_back(meshPrim);
         }
 
