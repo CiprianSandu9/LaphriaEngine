@@ -103,7 +103,7 @@ void main() {
             shadowRay.TMin      = 0.001;
             shadowRay.TMax      = 10000.0;
             TraceRay(tlas,
-                RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+                RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
                 0xFF, 0, 0, 0, shadowRay, shadowPayload);
 
             // hitT < 0 means Miss fired → surface is unoccluded.

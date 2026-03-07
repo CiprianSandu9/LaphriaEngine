@@ -9,6 +9,7 @@ struct RayPayload {
     float  roughness;
     float  metallic;
     float3 F0;
+    float  ao;
     float  hitT;
     uint   instanceID;
 };
@@ -29,5 +30,6 @@ void main(inout RayPayload payload) {
     payload.roughness   = 1.0;
     payload.metallic    = 0.0;
     payload.F0          = float3(0.0, 0.0, 0.0);
+    payload.ao          = 1.0;
     payload.instanceID  = 0;
 }
