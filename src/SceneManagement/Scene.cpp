@@ -3,10 +3,104 @@
 #include "SceneNode.h"
 #include <algorithm>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <random>
+#include <cmath>
+#include <unordered_set>
+
+using namespace Laphria;
+
+namespace
+{
+float normalizeAnimationTime(float timeSeconds, float durationSeconds, bool loop)
+{
+	if (durationSeconds <= 0.0f)
+	{
+		return 0.0f;
+	}
+	if (loop)
+	{
+		float wrapped = std::fmod(timeSeconds, durationSeconds);
+		if (wrapped < 0.0f)
+		{
+			wrapped += durationSeconds;
+		}
+		return wrapped;
+	}
+	return std::clamp(timeSeconds, 0.0f, durationSeconds);
+}
+
+glm::vec3 sampleVec3Track(const ModelResource::AnimationTrackVec3 &track, float timeSeconds)
+{
+	if (track.keyTimes.empty() || track.keyValues.empty())
+	{
+		return glm::vec3(0.0f);
+	}
+	const size_t keyCount = std::min(track.keyTimes.size(), track.keyValues.size());
+	if (keyCount == 1 || timeSeconds <= track.keyTimes.front())
+	{
+		return track.keyValues.front();
+	}
+	if (timeSeconds >= track.keyTimes[keyCount - 1])
+	{
+		return track.keyValues[keyCount - 1];
+	}
+
+	const auto upperIt = std::upper_bound(track.keyTimes.begin(), track.keyTimes.begin() + static_cast<std::ptrdiff_t>(keyCount), timeSeconds);
+	size_t idx1 = static_cast<size_t>(std::distance(track.keyTimes.begin(), upperIt)) - 1;
+	size_t idx2 = idx1 + 1;
+	if (track.interpolation == ModelResource::AnimationInterpolationMode::Step)
+	{
+		return track.keyValues[idx1];
+	}
+
+	const float t0 = track.keyTimes[idx1];
+	const float t1 = track.keyTimes[idx2];
+	if (std::abs(t1 - t0) <= 1e-6f)
+	{
+		return track.keyValues[idx1];
+	}
+	const float alpha = std::clamp((timeSeconds - t0) / (t1 - t0), 0.0f, 1.0f);
+	return glm::mix(track.keyValues[idx1], track.keyValues[idx2], alpha);
+}
+
+glm::quat sampleQuatTrack(const ModelResource::AnimationTrackQuat &track, float timeSeconds)
+{
+	if (track.keyTimes.empty() || track.keyValues.empty())
+	{
+		return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+	}
+	const size_t keyCount = std::min(track.keyTimes.size(), track.keyValues.size());
+	if (keyCount == 1 || timeSeconds <= track.keyTimes.front())
+	{
+		return glm::normalize(track.keyValues.front());
+	}
+	if (timeSeconds >= track.keyTimes[keyCount - 1])
+	{
+		return glm::normalize(track.keyValues[keyCount - 1]);
+	}
+
+	const auto upperIt = std::upper_bound(track.keyTimes.begin(), track.keyTimes.begin() + static_cast<std::ptrdiff_t>(keyCount), timeSeconds);
+	size_t idx1 = static_cast<size_t>(std::distance(track.keyTimes.begin(), upperIt)) - 1;
+	size_t idx2 = idx1 + 1;
+	if (track.interpolation == ModelResource::AnimationInterpolationMode::Step)
+	{
+		return glm::normalize(track.keyValues[idx1]);
+	}
+
+	const float t0 = track.keyTimes[idx1];
+	const float t1 = track.keyTimes[idx2];
+	if (std::abs(t1 - t0) <= 1e-6f)
+	{
+		return glm::normalize(track.keyValues[idx1]);
+	}
+	const float alpha = std::clamp((timeSeconds - t0) / (t1 - t0), 0.0f, 1.0f);
+	return glm::normalize(glm::slerp(glm::normalize(track.keyValues[idx1]), glm::normalize(track.keyValues[idx2]), alpha));
+}
+}
 
 
 Scene::Scene()
@@ -14,9 +108,9 @@ Scene::Scene()
 	root = std::make_shared<SceneNode>("Root");
 }
 
-void Scene::init(AABB worldBounds)
+void Scene::init(Laphria::AABB worldBounds)
 {
-	octree = std::make_unique<Octree>(worldBounds);
+	octree = std::make_unique<Laphria::Octree>(worldBounds);
 }
 
 void Scene::addNode(const SceneNode::Ptr &node, const SceneNode::Ptr &parent)
@@ -80,11 +174,15 @@ void Scene::deleteNode(const SceneNode::Ptr &node)
 	}
 
 	// Remove all collected nodes from allNodes
-	allNodes.erase(
-	    std::remove_if(allNodes.begin(), allNodes.end(), [&](const SceneNode::Ptr &n) {
-		    return std::find(toRemove.begin(), toRemove.end(), n) != toRemove.end();
-	    }),
-	    allNodes.end());
+	std::unordered_set<const SceneNode *> toRemoveSet;
+	toRemoveSet.reserve(toRemove.size());
+	for (const auto &n : toRemove)
+	{
+		toRemoveSet.insert(n.get());
+	}
+	std::erase_if(allNodes, [&](const SceneNode::Ptr &n) {
+		return toRemoveSet.contains(n.get());
+	});
 
 	if (node->getParent())
 	{
@@ -120,11 +218,27 @@ void Scene::loadModel(const std::string &path, ResourceManager &resourceManager,
                       const SceneNode::Ptr &parent)
 {
 	auto node = resourceManager.loadGltfModel(path, layout);
+	if (node)
+	{
+		std::vector<SceneNode::Ptr> stack{node};
+		while (!stack.empty())
+		{
+			const auto current = stack.back();
+			stack.pop_back();
+			current->assetRef.path = path;
+			current->assetRef.variant = "default";
+			for (const auto &child : current->getChildren())
+			{
+				stack.push_back(child);
+			}
+		}
+	}
 	addNode(node, parent);
 }
 
 void serializeNode(const SceneNode::Ptr &node, nlohmann::json &j, ResourceManager &resourceManager)
 {
+	j["id"] = node->stableId;
 	j["name"] = node->name;
 
 	// Transform
@@ -144,9 +258,29 @@ void serializeNode(const SceneNode::Ptr &node, nlohmann::json &j, ResourceManage
 			j["modelPath"] = res->path;
 		}
 	}
+	if (!node->assetRef.path.empty())
+	{
+		j["asset_ref"] = {
+		    {"path", node->assetRef.path},
+		    {"variant", node->assetRef.variant}};
+	}
 
 	// Mesh Indices
 	j["meshIndices"] = node->getMeshIndices();
+	if (node->sourceNodeIndex >= 0)
+	{
+		j["asset_node_index"] = node->sourceNodeIndex;
+	}
+	if (node->animation.enabled)
+	{
+		j["animation_component"] = {
+		    {"clip_id", node->animation.clipId},
+		    {"time_seconds", node->animation.timeSeconds},
+		    {"speed", node->animation.speed},
+		    {"loop", node->animation.loop},
+		    {"autoplay", node->animation.autoplay},
+		    {"playing", node->animation.playing}};
+	}
 
 	// Children
 	j["children"] = nlohmann::json::array();
@@ -177,6 +311,7 @@ SceneNode::Ptr deserializeNode(const nlohmann::json &j, ResourceManager &resourc
                                vk::DescriptorSetLayout     layout)
 {
 	auto node = std::make_shared<SceneNode>(j.value("name", "Node"));
+	node->stableId = j.value("id", node->stableId);
 
 	// Transform
 	if (j.contains("position"))
@@ -228,7 +363,18 @@ SceneNode::Ptr deserializeNode(const nlohmann::json &j, ResourceManager &resourc
 		if (modelId != -1)
 		{
 			node->modelId = modelId;
+			if (node->assetRef.path.empty())
+			{
+				node->assetRef.path = modelPath;
+				node->assetRef.variant = "default";
+			}
 		}
+	}
+	if (j.contains("asset_ref") && j["asset_ref"].is_object())
+	{
+		const auto &assetRef = j["asset_ref"];
+		node->assetRef.path = assetRef.value("path", node->assetRef.path);
+		node->assetRef.variant = assetRef.value("variant", std::string("default"));
 	}
 
 	// Mesh Indices
@@ -236,6 +382,22 @@ SceneNode::Ptr deserializeNode(const nlohmann::json &j, ResourceManager &resourc
 	{
 		node->meshIndices = j["meshIndices"].get<std::vector<int>>();
 	}
+	if (j.contains("asset_node_index"))
+	{
+		node->sourceNodeIndex = j["asset_node_index"].get<int>();
+	}
+	if (j.contains("animation_component") && j["animation_component"].is_object())
+	{
+		const auto &anim = j["animation_component"];
+		node->animation.enabled = true;
+		node->animation.clipId = anim.value("clip_id", std::string());
+		node->animation.timeSeconds = anim.value("time_seconds", 0.0f);
+		node->animation.speed = anim.value("speed", 1.0f);
+		node->animation.loop = anim.value("loop", true);
+		node->animation.autoplay = anim.value("autoplay", true);
+		node->animation.playing = anim.value("playing", true);
+	}
+	// Legacy gameplay components are intentionally ignored on load.
 
 	// Children
 	if (j.contains("children"))
@@ -263,6 +425,7 @@ void Scene::loadScene(const std::string &path, ResourceManager &resourceManager,
 
 	// Clear current scene
 	root = nullptr;
+	allNodes.clear();
 	if (octree)
 		octree->clear();
 
@@ -273,12 +436,115 @@ void Scene::loadScene(const std::string &path, ResourceManager &resourceManager,
 
 	root = deserializeNode(j, resourceManager, pathCache, layout);
 
+	// Rebuild the flat node cache used by systems that iterate scene nodes directly
+	// (e.g. TLAS construction for RT/PT paths).
+	if (root)
+	{
+		std::vector<SceneNode::Ptr> stack;
+		stack.push_back(root);
+		while (!stack.empty())
+		{
+			auto n = stack.back();
+			stack.pop_back();
+			allNodes.push_back(n);
+			for (const auto &c : n->getChildren())
+			{
+				stack.push_back(c);
+			}
+		}
+	}
+
 	rebuildOctree();
 }
 
-void Scene::update(float deltaTime)
-{
-	// Traverse and update logic if needed (animations etc)
+void Scene::update(float deltaTime, const ResourceManager &resourceManager) const {
+	for (const auto &node : allNodes)
+	{
+		if (!node || !node->animation.enabled)
+		{
+			continue;
+		}
+		auto *modelResource = resourceManager.getModelResource(node->modelId);
+		if (!modelResource || modelResource->animationClips.empty())
+		{
+			continue;
+		}
+
+		const auto *clip = resourceManager.findAnimationClip(node->modelId, node->animation.clipId);
+		if (!clip)
+		{
+			clip = &modelResource->animationClips.front();
+			if (node->animation.clipId.empty())
+			{
+				node->animation.clipId = clip->id;
+			}
+		}
+
+		if (node->animation.autoplay && !node->animation.playing && node->animation.timeSeconds == 0.0f)
+		{
+			node->animation.playing = true;
+		}
+
+		const float clipDuration = (clip->durationSeconds > 0.0f) ? clip->durationSeconds : 10.0f;
+		if (node->animation.playing)
+		{
+			node->animation.timeSeconds += deltaTime * node->animation.speed;
+			if (node->animation.loop)
+			{
+				node->animation.timeSeconds = normalizeAnimationTime(node->animation.timeSeconds, clipDuration, true);
+			}
+			else
+			{
+				const float clampedTime = normalizeAnimationTime(node->animation.timeSeconds, clipDuration, false);
+				if ((node->animation.speed >= 0.0f && clampedTime >= clipDuration) ||
+				    (node->animation.speed < 0.0f && clampedTime <= 0.0f))
+				{
+					node->animation.playing = false;
+				}
+				node->animation.timeSeconds = clampedTime;
+			}
+		}
+
+		if (node->sourceNodeIndex < 0)
+		{
+			continue;
+		}
+
+		const auto trackIt = clip->nodeTracks.find(node->sourceNodeIndex);
+		if (trackIt == clip->nodeTracks.end())
+		{
+			continue;
+		}
+		const auto &tracks = trackIt->second;
+		const float sampleTime = normalizeAnimationTime(node->animation.timeSeconds, clipDuration, node->animation.loop);
+
+		if (tracks.translation.has_value())
+		{
+			node->setPosition(sampleVec3Track(*tracks.translation, sampleTime));
+		}
+		if (tracks.rotation.has_value())
+		{
+			node->setRotation(sampleQuatTrack(*tracks.rotation, sampleTime));
+		}
+		if (tracks.scale.has_value())
+		{
+			node->setScale(sampleVec3Track(*tracks.scale, sampleTime));
+		}
+	}
+}
+
+void Scene::updateWorldTransforms() const {
+	if (!root)
+	{
+		return;
+	}
+
+	root->updateWorldTransformRecursive(glm::mat4(1.0f), false);
+}
+
+void Scene::syncSpatialIndex() const {
+	updateWorldTransforms();
+	rebuildOctree();
 }
 
 void Scene::setFreezeCulling(bool freeze)
@@ -287,7 +553,7 @@ void Scene::setFreezeCulling(bool freeze)
 }
 
 void Scene::draw(const vk::raii::CommandBuffer &cmd, const vk::raii::PipelineLayout &pipelineLayout,
-                 ResourceManager &resourceManager, const AABB &cullBounds) const
+                 const ResourceManager &resourceManager, const Laphria::AABB &cullBounds, const Laphria::Frustum &frustum) const
 {
 	if (!root || !octree)
 		return;
@@ -307,6 +573,10 @@ void Scene::draw(const vk::raii::CommandBuffer &cmd, const vk::raii::PipelineLay
 
 	for (const auto &node : visibleNodes)
 	{
+		if (!frustum.containsPoint(node->getWorldPosition()))
+		{
+			continue;
+		}
 		drawNode(node, cmd, pipelineLayout, resourceManager);
 	}
 }
@@ -323,7 +593,7 @@ void Scene::drawNode(const SceneNode::Ptr &node, const vk::raii::CommandBuffer &
 		if (auto *modelRes = resourceManager.getModelResource(node->modelId))
 		{
 			// Bind Mesh Buffers
-			resourceManager.bindResources(cmd, node->modelId);
+			resourceManager.bindResources(cmd, node->modelId, modelRes->hasRuntimeSkinning);
 
 			// Bind Material/Texture Descriptor Set (Set 1)
 			if (*modelRes->descriptorSet)
@@ -373,7 +643,7 @@ void Scene::clearScene()
 
 		// Re-init octree
 		if (octree)
-			octree = std::make_unique<Octree>(octree->getBounds());
+			octree = std::make_unique<Laphria::Octree>(octree->getBounds());
 	}
 }
 

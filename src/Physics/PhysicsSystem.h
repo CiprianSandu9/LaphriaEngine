@@ -2,6 +2,7 @@
 #define LAPHRIAENGINE_PHYSICSSYSTEM_H
 
 #include "../SceneManagement/SceneNode.h"
+#include "../Core/EngineConfig.h"
 #include <vector>
 #include <vulkan/vulkan_raii.hpp>
 
@@ -14,7 +15,7 @@ public:
     ~PhysicsSystem() = default;
 
     // CPU Logic
-    void updateCPU(std::vector<SceneNode::Ptr> &nodes, float deltaTime);
+    void updateCPU(const std::vector<SceneNode::Ptr> &nodes, float deltaTime);
 
     // GPU Logic
     void updateGPU(std::vector<SceneNode::Ptr> &nodes, float deltaTime,
@@ -23,7 +24,7 @@ public:
                    const vk::raii::Pipeline &pipeline,
                    const vk::raii::DescriptorSet &descriptorSet);
 
-    void syncFromGPU(std::vector<SceneNode::Ptr> &nodes);
+    void syncFromGPU(std::vector<SceneNode::Ptr> &nodes) const;
 
     // Configuration
     void setGravity(const glm::vec3 &g) { gravity = g; }
@@ -34,6 +35,7 @@ public:
     }
 
     void setGlobalFriction(float f) { globalFriction = f; }
+    void setBroadphaseCellSize(float size) { broadphaseCellSize = size; }
 
     void createSSBO(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physDevice, size_t size);
 
@@ -44,6 +46,7 @@ private:
     glm::vec3 worldMin{-50.0f};
     glm::vec3 worldMax{50.0f};
     float globalFriction{0.5f};
+    float broadphaseCellSize{Laphria::EngineConfig::kPhysicsBroadphaseCellSize};
 
     // CPU Helpers
     void integrate(const SceneNode::Ptr &node, float dt) const;
@@ -53,13 +56,13 @@ private:
     void resolveCollisions(const std::vector<SceneNode::Ptr> &nodes);
 
     // Collision Detection Primitives
-    bool checkSphereSphere(SceneNode::Ptr &a, SceneNode::Ptr &b);
+    bool checkSphereSphere(const SceneNode::Ptr &a, const SceneNode::Ptr &b);
 
     bool checkAABBAABB(SceneNode::Ptr &a, SceneNode::Ptr &b);
 
     bool checkSphereAABB(SceneNode::Ptr &sphere, SceneNode::Ptr &box);
 
-    static void solveContact(SceneNode::Ptr &a, SceneNode::Ptr &b, const glm::vec3 &normal, float penetration);
+    static void solveContact(const SceneNode::Ptr &a, const SceneNode::Ptr &b, const glm::vec3 &normal, float penetration);
 
     // GPU Members
     std::vector<PhysicsObject> hostPhysicsObjects;
@@ -68,7 +71,7 @@ private:
     void *physicsSSBOMapped{nullptr};
     size_t currentSSBOSize = 0;
 
-    void updateSSBO(std::vector<SceneNode::Ptr> &nodes);
+    void updateSSBO(const std::vector<SceneNode::Ptr> &nodes);
 };
 
 #endif // LAPHRIAENGINE_PHYSICSSYSTEM_H

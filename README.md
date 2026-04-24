@@ -1,169 +1,124 @@
 # LaphriaEngine
 
-A Vulkan 1.4 real-time 3D game engine written in C++20, developed as a dissertation project.
+A Vulkan 1.4 real-time 3D engine in C++20, built as a dissertation project.
 
-It supports three selectable rendering backends — rasterizer, classic ray tracer, and path tracer — all switchable at runtime. It also includes cascaded shadow maps, a GPU-accelerated starfield compute pass, GPU-accelerated physics simulation, a hierarchical scene graph with spatial culling, and an integrated ImGui editor.
+The current codebase includes an editor and validation refactor with expanded build targets, project-file workflows, runtime animation and skinning support, and automated tests.
 
 ---
 
 ## Features
 
 ### Rendering
-
-**Rasterization pipeline**
-- PBR shading — GGX distribution, Smith geometry, Schlick–Fresnel, ACES tonemapping
-- Cascaded Shadow Maps (CSM) — 4 cascades, 2048×2048 per cascade, PSSM splits, bounding-sphere stabilization, sub-pixel snapping, normal-offset bias
-- Starfield background via a Vulkan compute pass (16×16 workgroups, blit to swapchain)
-- Bindless material textures (VK_EXT_descriptor_indexing, variable descriptor count)
-- Dynamic rendering (no VkRenderPass / VkFramebuffer objects)
-- Vulkan synchronization2 barriers throughout
-
-**Classic ray tracing pipeline** — direct illumination only (VK_KHR_ray_tracing_pipeline + VK_KHR_acceleration_structure)
-
-Traces one primary ray per pixel. On a surface hit, shading is evaluated analytically using PBR (GGX/Smith/Schlick), and a single shadow ray is fired toward the light source to determine occlusion. No indirect bounces are traced — the result is comparable to rasterization with perfect per-pixel shadows, but no global illumination.
-
-- Hardware TLAS/BLAS acceleration structures, rebuilt each frame
-- Alpha-cutout transparency in AnyHit
-- Hard RT shadows via a secondary shadow ray from ClosestHit
-- Bindless per-model vertex, index, material, and texture arrays (bindings 5–8)
-
-**Path tracing pipeline** — full global illumination (same Vulkan RT extension set)
-
-Traces one primary ray per pixel (1 SPP). At each surface hit, a new ray direction is sampled from the BRDF lobe instead of evaluating a light analytically — the process repeats for multiple bounces until a light source is hit or Russian roulette terminates the path. This captures indirect illumination (colour bleeding, inter-reflections) that the classic RT pipeline cannot produce, but at the cost of significant noise at 1 SPP.
-
-- 1 SPP unbiased path tracer with cosine-weighted hemisphere sampling and Russian roulette
-- G-Buffer outputs written by Raygen: world normals (R16G16B16A16), linear depth (R32), motion vectors (R16G16)
-- Temporal reprojection: accumulates history across frames using motion vectors; history is discarded on camera movement to prevent ghosting
-- SVGF-style A-Trous spatial denoiser: 5 wavelet iterations with luminance and normal edge-stopping weights, applied after reprojection
-- Final tonemapped result written back to the RT output image and blitted to the swapchain
-
-**Common to all hardware RT modes**
-- Hardware TLAS/BLAS acceleration structures, rebuilt each frame
-- Raygen → ClosestHit / AnyHit / Miss shader pipeline stages
-- Three-way runtime backend selection via `RenderMode` enum (`Rasterizer`, `RayTracer`, `PathTracer`)
-
-**Common to all modes**
-- Multi-frame buffering (2 frames in flight)
-- Dynamic swapchain resize handling
-- Slang shaders compiled to SPIR-V at build time
+- Runtime backend switching: `Rasterizer`, `RayTracer`, `PathTracer`
+- PBR shading (GGX/Smith/Schlick), cascaded shadow maps, bindless resources, dynamic rendering
+- Classic RT backend (direct lighting plus shadow rays)
+- Path tracing backend with:
+  - 1 SPP multi-bounce sampling
+  - Temporal reprojection plus A-Trous denoising
+  - Per-stage GPU timing (TLAS, ray trace, reprojection, denoiser)
+  - Adaptive quality controls (manual, auto balanced, auto aggressive)
+- Runtime glTF animation playback
+- GPU skinning compute pass (currently used for rasterization path)
+- Gameplay-oriented visual calibration controls (sun, fill, ambient, exposure)
 
 ### Physics
-- Dual CPU/GPU simulation via a Vulkan compute pipeline
-- Rigid body dynamics: gravity, friction, restitution
-- Collision detection: sphere–sphere, AABB–AABB, sphere–AABB
-- Static and dynamic bodies with configurable mass
-- World-bounds enforcement
+- CPU and GPU simulation modes
+- Broadphase candidate generation via uniform-grid spatial hash
+- Narrowphase support for sphere-sphere, AABB-AABB, sphere-AABB
+- Static and dynamic bodies, gravity, friction, restitution
 
-### Scene Management
-- Hierarchical scene graph with node transforms (position, rotation via quaternions, scale)
-- Octree-based spatial culling
-- Scene serialization / deserialization (JSON)
+### Scene And Editor
+- Scene graph with cached world transforms and octree plus frustum culling
+- Scene JSON persistence with stable node IDs
+- Asset references and animation playback components serialized in scene files
+- Editor panels for:
+  - Hierarchy plus inspector
+  - Asset browser (project roots, import, import report)
+  - Validation panel (project, scene, full validation)
+  - Path tracer controls and performance stats
 
 ### Asset Pipeline
-- glTF 2.0 (`.glb` / `.gltf`) loading via fastgltf, including embedded textures
-- KTX 2.0 compressed texture loading
+- glTF 2.0 (`.glb` and `.gltf`) import via `fastgltf`
+- Embedded and external image handling with KTX2 and stb fallback
+- Animation clip extraction (TRS channels) and runtime clip selection
 
-### Editor UI
-- Integrated ImGui editor
-- Object selection and transform manipulation
-- Light direction control
-- Physics simulation play / pause
-- Toggle between rasterizer, classic ray tracer, and path tracer at runtime
+### Host API
+- New `EngineHost` entrypoint around `EngineCore`
+- Configurable host options (window title, editor visibility, default input, physics simulation)
+- Host callbacks (`initialize`, `updateFrame`, `drawUi`, `shutdown`) through `EngineServices`
+
+---
+
+## Build Targets
+
+The CMake refactor now builds multiple targets:
+
+- `LaphriaEngine` (static library): core engine and runtime systems
+- `LaphriaEditor` (executable): default editor application
+- `LaphriaEditorValidation` (static library): JSON project and scene validation logic
+- `LaphriaValidationRunner` (executable): CLI validator for CI and local checks
+- `LaphriaEngineUnitTests` (executable): unit tests for transform, frustum, and broadphase behavior
 
 ---
 
 ## Architecture
 
-Source is organized under `src/` into three areas:
-
 | Directory | Contents |
 |-----------|----------|
-| `src/Core/` | Vulkan subsystems: `VulkanDevice`, `SwapchainManager`, `PipelineCollection`, `FrameContext`, `UISystem`, `InputSystem`, `Camera`, `ResourceManager`, `EngineCore` |
-| `src/Physics/` | `PhysicsSystem` (CPU+GPU), `PhysicsDefines` (shared C++/Slang structs) |
-| `src/SceneManagement/` | `Scene`, `SceneNode`, `Octree` |
-| `src/Shaders/` | See table below |
+| `src/Core/` | Engine host and core, Vulkan device/frame/swapchain/pipeline systems, UI/editor, import and validation, VMA context |
+| `src/Physics/` | Physics runtime plus broadphase grid hashing |
+| `src/SceneManagement/` | Scene, scene nodes, octree, frustum helpers |
+| `src/shaders/` | Raster, RT/PT, denoiser/reprojection, physics, and skinning shaders |
+| `tests/` | Validation fixtures and unit test entrypoint |
 
-`EngineCore` acts as a thin coordinator that owns all subsystems. Each subsystem is responsible for its own Vulkan objects.
+### Shader Set
 
-### Shaders
+| File | Entry Point(s) | Purpose |
+|------|----------------|---------|
+| `LaphriaEngine.slang` | `vertMain`, `fragMain` | Raster PBR pipeline |
+| `Shadow.slang` | `shadowVert`, `shadowFrag` | Cascaded shadow map pass |
+| `Compute.slang` | `computeMain` | Compute pass (legacy starfield path) |
+| `Skinning.slang` | `skinningMain` | GPU skinning compute stage |
+| `Physics.slang` | `physicsMain` | GPU rigid-body integration |
+| `RT_Raygen.slang` | `main` | Classic RT ray generation |
+| `RT_ClosestHit.slang` | `main` | Classic RT closest hit |
+| `RT_AnyHit.slang` | `main` | Classic RT alpha cutout |
+| `RT_Miss.slang` | `main` | Classic RT miss |
+| `Raygen.slang` | `main` | Path tracer ray generation plus GBuffer writes |
+| `ClosestHit.slang` | `main` | Path tracer closest hit and bounce logic |
+| `AnyHit.slang` | `main` | Path tracer alpha cutout |
+| `Miss.slang` | `main` | Path tracer miss |
+| `Reprojection.slang` | `reprojectionMain` | Temporal reprojection |
+| `Denoiser.slang` | `atrousMain` | A-Trous denoiser |
+| `ShaderCommon.slang` | - | Shared material, math, and helper utilities |
 
-| File | Entry points | Purpose |
-|------|-------------|---------|
-| `LaphriaEngine.slang` | `vertMain`, `fragMain` | PBR vertex + fragment (CSM lookup, normal mapping, PBR lighting) |
-| `Compute.slang` | `computeMain` | Starfield background — writes to a storage image, blitted to the swapchain |
-| `Shadow.slang` | `shadowVert`, `shadowFrag` | Depth-only CSM pass (4 cascades); alpha-cutout discard in fragment |
-| `Raygen.slang` | `main` | **Path tracer** — 1 SPP ray generation; writes noisy colour and G-Buffer (normals, depth, motion vectors) |
-| `ClosestHit.slang` | `main` | **Path tracer** — BRDF-sampled bounce; continues the path or returns emissive radiance |
-| `AnyHit.slang` | `main` | **Path tracer** — alpha-cutout transparency test |
-| `Miss.slang` | `main` | **Path tracer** — background sky radiance; shadow ray miss returns unoccluded |
-| `RT_Raygen.slang` | `main` | **Classic RT** — primary ray generation; evaluates direct illumination at the first hit |
-| `RT_ClosestHit.slang` | `main` | **Classic RT** — PBR shading + shadow ray + normal mapping; no indirect bounce |
-| `RT_AnyHit.slang` | `main` | **Classic RT** — alpha-cutout transparency test |
-| `RT_Miss.slang` | `main` | **Classic RT** — background sky gradient; shadow ray miss → not occluded |
-| `Reprojection.slang` | `reprojectionMain` | Temporal reprojection — blends noisy 1 SPP output with history using motion vectors |
-| `Denoiser.slang` | `atrousMain` | A-Trous spatial filter — 5 wavelet iterations; edge-stopping by luminance and surface normals |
-| `Physics.slang` | `physicsMain` | GPU rigid-body integration compute shader |
-| `ShaderCommon.slang` | — | Shared structs (`UniformBuffer`, `ScenePushConstants`, `MaterialData`), PBR functions, `mat3Inverse` |
-
-All shaders are compiled from source with `slangc` as part of the CMake build.
+All shaders are compiled via `slangc` during the CMake build.
 
 ---
 
-## Build & Run
+## Build And Run
 
 ### Prerequisites
 
-**Windows (recommended)**
-- Visual Studio 2022/2026 with the "Desktop development with C++" workload
+Windows (recommended):
+- Visual Studio 2022/2026 with Desktop C++ workload
 - CMake 3.29+
-- Vulkan SDK 1.4.335+ (sets `VULKAN_SDK` and provides `slangc`)
+- Vulkan SDK 1.4.335+ (`slangc` required)
 - vcpkg
-
-**Other platforms**
-- CMake 3.29+
-- A C++20 compiler
-- Vulkan SDK 1.4.335+ (or equivalent headers + loader)
-- `slangc` available in PATH
-- vcpkg
-
-### Clone
-
-```bash
-git clone <repo-url>
-cd LaphriaEngine
-```
-
-### vcpkg Setup (Windows)
-
-1. Clone and bootstrap vcpkg:
-
-```powershell
-git clone https://github.com/microsoft/vcpkg.git C:\path\to\vcpkg
-C:\path\to\vcpkg\bootstrap-vcpkg.bat
-```
-
-2. Set environment variables (per-session or via system settings):
-
-```powershell
-$env:VCPKG_ROOT = "C:\path\to\vcpkg"
-$env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
-```
 
 ### Configure
-
-The repository includes presets that wire vcpkg automatically:
 
 ```powershell
 cmake --preset vcpkg-vs26
 ```
 
-OR
+or:
 
 ```powershell
 cmake --preset vcpkg-vs22
 ```
 
-OR
+or:
 
 ```powershell
 cmake --preset vcpkg-ninja
@@ -175,13 +130,51 @@ cmake --preset vcpkg-ninja
 cmake --build build --config Release
 ```
 
-### Run
+### Run Editor
 
 ```powershell
-.\build\LaphriaEngine\Release\LaphriaEngine.exe
+.\build\LaphriaEngine\Release\LaphriaEditor.exe
 ```
 
-A test asset (`testassets/paladin.glb`) is included for quick verification.
+### Run Validation CLI
+
+```powershell
+.\build\LaphriaTools\Release\LaphriaValidationRunner.exe --validate-project --project .\project.laphria_project.json
+.\build\LaphriaTools\Release\LaphriaValidationRunner.exe --validate-scene --scene .\scene.json
+```
+
+### Run Tests
+
+```powershell
+ctest --test-dir build -C Release --output-on-failure
+```
+
+---
+
+## Project File Format
+
+Editor project files are JSON (`*.laphria_project.json`) and include:
+
+- `name`
+- `asset_roots`
+- `scene_output_path`
+- `import_settings` (`import_animations`, `import_materials`, `import_skins`, `strict_validation`)
+
+Minimal example:
+
+```json
+{
+  "name": "Laphria Project",
+  "asset_roots": ["Assets"],
+  "scene_output_path": "scene.json",
+  "import_settings": {
+    "import_animations": true,
+    "import_materials": true,
+    "import_skins": true,
+    "strict_validation": false
+  }
+}
+```
 
 ---
 
@@ -189,25 +182,28 @@ A test asset (`testassets/paladin.glb`) is included for quick verification.
 
 | Library | Purpose |
 |---------|---------|
-| [Vulkan SDK](https://vulkan.lunarg.com/) | Graphics, compute, and ray tracing API |
-| [GLFW](https://www.glfw.org/) | Window and input management |
-| [GLM](https://github.com/g-truc/glm) | Math (vectors, matrices, quaternions) |
-| [fastgltf](https://github.com/spnda/fastgltf) | glTF 2.0 model loading |
-| [ImGui](https://github.com/ocornut/imgui) | Immediate-mode UI |
-| [KTX](https://github.com/KhronosGroup/KTX-Software) | KTX 2.0 texture loading |
-| [nlohmann/json](https://github.com/nlohmann/json) | Scene serialization |
-| [stb](https://github.com/nothings/stb) | Embedded image decoding |
+| [Vulkan SDK](https://vulkan.lunarg.com/) | Vulkan API plus `slangc` |
+| [GLFW](https://www.glfw.org/) | Windowing and input |
+| [GLM](https://github.com/g-truc/glm) | Math |
+| [fastgltf](https://github.com/spnda/fastgltf) | glTF import |
+| [ImGui](https://github.com/ocornut/imgui) | Editor UI |
+| [KTX](https://github.com/KhronosGroup/KTX-Software) | KTX2 textures |
+| [stb](https://github.com/nothings/stb) | Image decoding fallback |
+| [nlohmann/json](https://github.com/nlohmann/json) | Scene, project, and validation JSON |
+| [VMA](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | Vulkan memory allocation |
 
-All dependencies are managed via vcpkg.
+All dependencies are managed through vcpkg.
 
 ---
 
 ## Troubleshooting
 
-**vcpkg packages not found**
-- Ensure `VCPKG_ROOT` is set correctly.
-- Delete `build/` and re-run `cmake --preset vcpkg` if you previously configured without vcpkg.
+`slangc` not found:
+- Install Vulkan SDK and ensure `%VULKAN_SDK%\\bin` is in `PATH`.
 
-**`slangc` not found**
-- Install the Vulkan SDK and verify `%VULKAN_SDK%\bin` is in your PATH.
-- `slangc` ships with the Vulkan SDK 1.4.335+; ensure that version or newer is installed.
+vcpkg packages not found:
+- Ensure `VCPKG_ROOT` is configured.
+- Reconfigure with one of the bundled presets.
+
+Validation CLI exits with failure:
+- Check printed `error` entries first (warnings do not fail by default).

@@ -1,17 +1,5 @@
 #ifndef LAPHRIAENGINE_CAMERA_H
 #define LAPHRIAENGINE_CAMERA_H
-#ifndef GLM_FORCE_RADIANS
-#	define GLM_FORCE_RADIANS
-#endif
-#ifndef GLM_FORCE_DEPTH_ZERO_TO_ONE
-#	define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#endif
-#ifndef GLM_ENABLE_EXPERIMENTAL
-#	define GLM_ENABLE_EXPERIMENTAL
-#endif
-#ifndef GLM_FORCE_CXX11
-#	define GLM_FORCE_CXX11
-#endif
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec4.hpp>

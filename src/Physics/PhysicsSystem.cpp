@@ -1,4 +1,5 @@
 #include "PhysicsSystem.h"
+#include "Broadphase.h"
 #include "PhysicsDefines.h"
 #include "../Core/VulkanUtils.h"
 #include "../Core/EngineAuxiliary.h"
@@ -7,10 +8,30 @@
 using namespace Laphria;
 #include <glm/gtx/norm.hpp>
 
+namespace
+{
+Laphria::Physics::AABBProxy buildProxyForNode(const SceneNode::Ptr &node, size_t id)
+{
+    const glm::vec3 position = node->getPosition();
+    glm::vec3 extent(0.0f);
+    if (node->physics.colliderType == SceneNode::ColliderType::Sphere) {
+        extent = glm::vec3(node->physics.radius);
+    } else {
+        extent = node->physics.halfExtents;
+    }
+
+    Laphria::Physics::AABBProxy proxy{};
+    proxy.id = id;
+    proxy.min = position - extent;
+    proxy.max = position + extent;
+    return proxy;
+}
+}
+
 PhysicsSystem::PhysicsSystem() {
 }
 
-void PhysicsSystem::updateCPU(std::vector<SceneNode::Ptr> &nodes, float deltaTime) {
+void PhysicsSystem::updateCPU(const std::vector<SceneNode::Ptr> &nodes, float deltaTime) {
     // 1. Integration (Move objects)
     for (auto &node: nodes) {
         if (!node->physics.enabled || node->physics.isStatic) continue;
@@ -77,32 +98,51 @@ void PhysicsSystem::checkBoundaries(const SceneNode::Ptr &node) {
 }
 
 void PhysicsSystem::resolveCollisions(const std::vector<SceneNode::Ptr> &nodes) {
-    // Naive O(N^2)
-    for (size_t i = 0; i < nodes.size(); i++) {
-        for (size_t j = i + 1; j < nodes.size(); j++) {
-            SceneNode::Ptr a = nodes[i];
-            SceneNode::Ptr b = nodes[j];
+    std::vector<Laphria::Physics::AABBProxy> proxies;
+    proxies.reserve(nodes.size());
 
-            if (!a->physics.enabled || !b->physics.enabled) continue;
-            if (a->physics.isStatic && b->physics.isStatic) continue;
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        const SceneNode::Ptr &node = nodes[i];
+        if (!node || !node->physics.enabled) {
+            continue;
+        }
+        proxies.push_back(buildProxyForNode(node, i));
+    }
 
-            auto typeA = a->physics.colliderType;
-            auto typeB = b->physics.colliderType;
+    if (proxies.size() < 2) {
+        return;
+    }
 
-            // Treat Cylinder as Box
-            if (typeA == SceneNode::ColliderType::Cylinder) typeA = SceneNode::ColliderType::Box;
-            if (typeB == SceneNode::ColliderType::Cylinder) typeB = SceneNode::ColliderType::Box;
+    const auto candidatePairs = Laphria::Physics::buildBroadphasePairs(proxies, broadphaseCellSize);
+    for (const auto &[i, j] : candidatePairs) {
+        if (i >= nodes.size() || j >= nodes.size()) {
+            continue;
+        }
 
-            // Dispatch based on types
-            if (typeA == SceneNode::ColliderType::Sphere && typeB == SceneNode::ColliderType::Sphere) {
-                checkSphereSphere(a, b);
-            } else if (typeA == SceneNode::ColliderType::Box && typeB == SceneNode::ColliderType::Box) {
-                checkAABBAABB(a, b);
-            } else if (typeA == SceneNode::ColliderType::Sphere && typeB == SceneNode::ColliderType::Box) {
-                checkSphereAABB(a, b);
-            } else if (typeA == SceneNode::ColliderType::Box && typeB == SceneNode::ColliderType::Sphere) {
-                checkSphereAABB(b, a); // Swap
-            }
+        SceneNode::Ptr a = nodes[i];
+        SceneNode::Ptr b = nodes[j];
+        if (!a || !b) {
+            continue;
+        }
+        if (!a->physics.enabled || !b->physics.enabled) continue;
+        if (a->physics.isStatic && b->physics.isStatic) continue;
+
+        auto typeA = a->physics.colliderType;
+        auto typeB = b->physics.colliderType;
+
+        // Treat Cylinder as Box
+        if (typeA == SceneNode::ColliderType::Cylinder) typeA = SceneNode::ColliderType::Box;
+        if (typeB == SceneNode::ColliderType::Cylinder) typeB = SceneNode::ColliderType::Box;
+
+        // Dispatch based on types
+        if (typeA == SceneNode::ColliderType::Sphere && typeB == SceneNode::ColliderType::Sphere) {
+            checkSphereSphere(a, b);
+        } else if (typeA == SceneNode::ColliderType::Box && typeB == SceneNode::ColliderType::Box) {
+            checkAABBAABB(a, b);
+        } else if (typeA == SceneNode::ColliderType::Sphere && typeB == SceneNode::ColliderType::Box) {
+            checkSphereAABB(a, b);
+        } else if (typeA == SceneNode::ColliderType::Box && typeB == SceneNode::ColliderType::Sphere) {
+            checkSphereAABB(b, a); // Swap
         }
     }
 }
@@ -111,7 +151,7 @@ void PhysicsSystem::resolveCollisions(const std::vector<SceneNode::Ptr> &nodes) 
 // Collision Primitives
 // ----------------------------------------------------------------------------
 
-bool PhysicsSystem::checkSphereSphere(SceneNode::Ptr &a, SceneNode::Ptr &b) {
+bool PhysicsSystem::checkSphereSphere(const SceneNode::Ptr &a, const SceneNode::Ptr &b) {
     glm::vec3 delta = a->getPosition() - b->getPosition();
     float distSq = glm::length2(delta);
     float radiusSum = a->physics.radius + b->physics.radius;
@@ -204,7 +244,7 @@ bool PhysicsSystem::checkSphereAABB(SceneNode::Ptr &sphere, SceneNode::Ptr &box)
 // Resolves a contact between two colliders using impulse-based dynamics.
 // normal: collision normal pointing from B to A (A's separating direction).
 // penetration: overlap depth along the normal.
-void PhysicsSystem::solveContact(SceneNode::Ptr &a, SceneNode::Ptr &b, const glm::vec3 &normal, float penetration) {
+void PhysicsSystem::solveContact(const SceneNode::Ptr &a, const SceneNode::Ptr &b, const glm::vec3 &normal, float penetration) {
     auto &physA = a->physics;
     auto &physB = b->physics;
 
@@ -271,7 +311,7 @@ void PhysicsSystem::createSSBO(const vk::raii::Device &device, const vk::raii::P
     currentSSBOSize = size;
 }
 
-void PhysicsSystem::updateSSBO(std::vector<SceneNode::Ptr> &nodes) {
+void PhysicsSystem::updateSSBO(const std::vector<SceneNode::Ptr> &nodes) {
     hostPhysicsObjects.clear();
 
     for (auto &node: nodes) {
@@ -391,7 +431,7 @@ void PhysicsSystem::updateGPU(std::vector<SceneNode::Ptr> &nodes, float deltaTim
 // Reads physics results back from the host-coherent SSBO (after the queue has drained)
 // and updates SceneNode positions/velocities to match.
 // The SSBO memory is host-coherent, so no explicit cache invalidation is needed.
-void PhysicsSystem::syncFromGPU(std::vector<SceneNode::Ptr> &nodes) {
+void PhysicsSystem::syncFromGPU(std::vector<SceneNode::Ptr> &nodes) const {
     if (!physicsSSBOMapped || nodes.empty()) return;
 
     PhysicsObject *gpuObjs = static_cast<PhysicsObject *>(physicsSSBOMapped);

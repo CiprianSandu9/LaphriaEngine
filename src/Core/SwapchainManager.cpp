@@ -1,4 +1,5 @@
 #include "SwapchainManager.h"
+#include "VulkanDevice.h"
 
 #include <algorithm>
 #include <cassert>
@@ -15,7 +16,7 @@ void SwapchainManager::cleanup() {
     swapChain = nullptr;
 }
 
-void SwapchainManager::createSwapChain(VulkanDevice &dev, GLFWwindow *window) {
+void SwapchainManager::createSwapChain(const VulkanDevice &dev, GLFWwindow *window) {
     auto surfaceCapabilities = dev.physicalDevice.getSurfaceCapabilitiesKHR(*dev.surface);
     extent = chooseSwapExtent(surfaceCapabilities, window);
     surfaceFormat = chooseSwapSurfaceFormat(dev.physicalDevice.getSurfaceFormatsKHR(*dev.surface));

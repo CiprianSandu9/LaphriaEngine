@@ -2,7 +2,9 @@
 #define LAPHRIAENGINE_SWAPCHAINMANAGER_H
 
 #include "EngineAuxiliary.h"
-#include "VulkanDevice.h"
+
+class VulkanDevice;
+struct GLFWwindow;
 
 // Owns swapchain, per-swapchain image views, and format/extent helpers.
 // init() creates both swapchain and image views.
@@ -25,7 +27,7 @@ public:
     std::vector<vk::raii::ImageView> imageViews;
 
 private:
-    void createSwapChain(VulkanDevice &dev, GLFWwindow *window);
+    void createSwapChain(const VulkanDevice &dev, GLFWwindow *window);
     void createImageViews(VulkanDevice &dev);
 
     [[nodiscard]] vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR &capabilities,

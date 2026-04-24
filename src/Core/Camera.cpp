@@ -1,7 +1,4 @@
 #include "Camera.h"
-#ifndef GLM_ENABLE_EXPERIMENTAL
-#	define GLM_ENABLE_EXPERIMENTAL
-#endif
 #include "glm/gtx/quaternion.hpp"
 #include "glm/gtx/transform.hpp"
 

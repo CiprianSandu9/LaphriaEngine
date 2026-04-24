@@ -1,0 +1,13 @@
+{
+    "name": "Validation Fixture",
+    "asset_roots": [
+        "Assets"
+    ],
+    "scene_output_path": "valid_scene.json",
+    "import_settings": {
+        "import_animations": true,
+        "import_materials": true,
+        "import_skins": true,
+        "strict_validation": false
+    }
+}

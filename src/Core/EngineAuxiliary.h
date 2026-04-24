@@ -1,19 +1,7 @@
 #ifndef LAPHRIAENGINE_ENGINEAUXILIARY_H
 #define LAPHRIAENGINE_ENGINEAUXILIARY_H
 
-#ifndef GLM_FORCE_RADIANS
-#	define GLM_FORCE_RADIANS
-#endif
-#ifndef GLM_FORCE_DEPTH_ZERO_TO_ONE
-#	define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#endif
-#ifndef GLM_ENABLE_EXPERIMENTAL
-#	define GLM_ENABLE_EXPERIMENTAL
-#endif
-#ifndef GLM_FORCE_CXX11
-#	define GLM_FORCE_CXX11
-#endif
-
+#include <cstdio>
 #include <glm/glm.hpp>
 #include <glm/gtx/hash.hpp>
 
@@ -37,15 +25,27 @@ typedef void AssetManagerType;
 #include <GLFW/glfw3.h>
 
 // Define logging macros for Desktop
-#define LOGI(...)        \
-	printf(__VA_ARGS__); \
-	printf("\n")
-#define LOGW(...)        \
-	printf(__VA_ARGS__); \
-	printf("\n")
-#define LOGE(...)                 \
-	fprintf(stderr, __VA_ARGS__); \
-	fprintf(stderr, "\n")
+#define LOGI(...)                                                                 \
+	do                                                                            \
+	{                                                                             \
+		std::fprintf(stdout, "[INFO] ");                                          \
+		std::fprintf(stdout, __VA_ARGS__);                                        \
+		std::fprintf(stdout, "\n");                                               \
+	} while (0)
+#define LOGW(...)                                                                 \
+	do                                                                            \
+	{                                                                             \
+		std::fprintf(stdout, "[WARN] ");                                          \
+		std::fprintf(stdout, __VA_ARGS__);                                        \
+		std::fprintf(stdout, "\n");                                               \
+	} while (0)
+#define LOGE(...)                                                                 \
+	do                                                                            \
+	{                                                                             \
+		std::fprintf(stderr, "[ERROR] ");                                         \
+		std::fprintf(stderr, __VA_ARGS__);                                        \
+		std::fprintf(stderr, "\n");                                               \
+	} while (0)
 
 constexpr uint32_t WIDTH                = 1920;
 constexpr uint32_t HEIGHT               = 1080;
@@ -121,6 +121,7 @@ struct UniformBufferObject
 	alignas(4)  float     jitter_x;       // sub-pixel x jitter in NDC (Halton sequence, zero when TAA disabled)
 	alignas(4)  float     jitter_y;       // sub-pixel y jitter in NDC
 	alignas(4)  uint32_t  _pad0;          // padding for 16-byte struct alignment
+	alignas(16) glm::vec4 gameplayVisuals = glm::vec4(1.0f); // x=sun, y=fill, z=ambient, w=exposure multipliers
 };
 
 struct DenoisePushConstants
@@ -129,6 +130,15 @@ struct DenoisePushConstants
 	int32_t isLastPass;  // 1 on the final A-Trous iteration: triggers tone mapping + history copy
 	float   phiColor;    // luminance edge-stopping weight (typical: 10.0)
 	float   phiNormal;   // normal edge-stopping exponent (typical: 128.0)
+	float   exposureScale; // gameplay exposure multiplier applied on final denoise pass
+};
+
+struct SkinningPushConstants
+{
+	alignas(4) uint32_t vertexCount = 0;
+	alignas(4) uint32_t jointMatrixOffset = 0;
+	alignas(4) uint32_t jointCount = 0;
+	alignas(4) uint32_t _pad = 0;
 };
 
 struct ScenePushConstants

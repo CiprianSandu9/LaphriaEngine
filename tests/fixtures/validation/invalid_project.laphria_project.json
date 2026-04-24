@@ -1,0 +1,15 @@
+{
+    "name": 42,
+    "asset_roots": [
+        "Assets",
+        99
+    ],
+    "scene_output_path": false,
+    "import_settings": {
+        "import_animations": "yes",
+        "import_materials": true,
+        "import_skins": true,
+        "strict_validation": "no"
+    },
+    "unexpected_field": "x"
+}

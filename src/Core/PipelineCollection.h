@@ -6,28 +6,33 @@
 
 #include "EngineAuxiliary.h"
 #include "VulkanDevice.h"
+#include "VulkanUtils.h"
 
 // Owns all descriptor set layouts, pipelines, and pipeline layouts.
 // Call createDescriptorSetLayouts() first, then each createXxxPipeline() in order.
 class PipelineCollection
 {
   public:
-	void createDescriptorSetLayouts(VulkanDevice &dev);
+	~PipelineCollection() = default;
+
+	void createDescriptorSetLayouts(const VulkanDevice &dev);
 	void createGraphicsPipeline(VulkanDevice &dev, vk::Format colorFormat, vk::Format depthFormat);
 	void createShadowPipeline(VulkanDevice &dev);
 
-	void createComputePipeline(VulkanDevice &dev);
-	void createPhysicsPipeline(VulkanDevice &dev);
-	void createRayTracingPipeline(VulkanDevice &dev);
-	void createShaderBindingTable(VulkanDevice &dev);
-	void createDenoiserPipelines(VulkanDevice &dev);
-	void createClassicRTPipeline(VulkanDevice &dev);
-	void createClassicRTShaderBindingTable(VulkanDevice &dev);
+	void createComputePipeline(const VulkanDevice &dev);
+	void createSkinningPipeline(const VulkanDevice &dev);
+	void createPhysicsPipeline(const VulkanDevice &dev);
+	void createRayTracingPipeline(const VulkanDevice &dev);
+	void createShaderBindingTable(const VulkanDevice &dev);
+	void createDenoiserPipelines(const VulkanDevice &dev);
+	void createClassicRTPipeline(const VulkanDevice &dev);
+	void createClassicRTShaderBindingTable(const VulkanDevice &dev);
 
 	// ── Descriptor Set Layouts ────────────────────────────────────────────
 	vk::raii::DescriptorSetLayout descriptorSetLayoutGlobal{nullptr};
 	vk::raii::DescriptorSetLayout descriptorSetLayoutMaterial{nullptr};
 	vk::raii::DescriptorSetLayout computeDescriptorSetLayout{nullptr};
+	vk::raii::DescriptorSetLayout skinningDescriptorSetLayout{nullptr};
 	vk::raii::DescriptorSetLayout physicsDescriptorSetLayout{nullptr};
 	vk::raii::DescriptorSetLayout rayTracingDescriptorSetLayout{nullptr};
 	vk::raii::DescriptorSetLayout denoiserDescriptorSetLayout{nullptr};
@@ -36,6 +41,7 @@ class PipelineCollection
 	vk::raii::Pipeline graphicsPipeline{nullptr};
 	vk::raii::Pipeline shadowPipeline{nullptr};
 	vk::raii::Pipeline computePipeline{nullptr};
+	vk::raii::Pipeline skinningPipeline{nullptr};
 	vk::raii::Pipeline physicsPipeline{nullptr};
 
 	vk::raii::Pipeline rayTracingPipeline{nullptr};   // path tracer
@@ -49,52 +55,49 @@ class PipelineCollection
 	vk::raii::PipelineLayout graphicsPipelineLayout{nullptr};
 	vk::raii::PipelineLayout shadowPipelineLayout{nullptr};
 	vk::raii::PipelineLayout computePipelineLayout{nullptr};
+	vk::raii::PipelineLayout skinningPipelineLayout{nullptr};
 	vk::raii::PipelineLayout physicsPipelineLayout{nullptr};
 
 	vk::raii::PipelineLayout rayTracingPipelineLayout{nullptr};
 	vk::raii::PipelineLayout denoiserPipelineLayout{nullptr};
 
 	// ── Shader Binding Table (SBT) — Path Tracer ─────────────────────────
-	vk::raii::Buffer                  raygenSBTBuffer{nullptr};
-	vk::raii::DeviceMemory            raygenSBTMemory{nullptr};
+	Laphria::VulkanUtils::VmaBuffer   raygenSBTBuffer{};
 	vk::StridedDeviceAddressRegionKHR raygenRegion{};
 
-	vk::raii::Buffer                  missSBTBuffer{nullptr};
-	vk::raii::DeviceMemory            missSBTMemory{nullptr};
+	Laphria::VulkanUtils::VmaBuffer   missSBTBuffer{};
 	vk::StridedDeviceAddressRegionKHR missRegion{};
 
-	vk::raii::Buffer                  hitSBTBuffer{nullptr};
-	vk::raii::DeviceMemory            hitSBTMemory{nullptr};
+	Laphria::VulkanUtils::VmaBuffer   hitSBTBuffer{};
 	vk::StridedDeviceAddressRegionKHR hitRegion{};
 
 	// ── Shader Binding Table (SBT) — Classic Ray Tracer ──────────────────
-	vk::raii::Buffer                  classicRTRaygenSBTBuffer{nullptr};
-	vk::raii::DeviceMemory            classicRTRaygenSBTMemory{nullptr};
+	Laphria::VulkanUtils::VmaBuffer   classicRTRaygenSBTBuffer{};
 	vk::StridedDeviceAddressRegionKHR classicRTRaygenRegion{};
 
-	vk::raii::Buffer                  classicRTMissSBTBuffer{nullptr};
-	vk::raii::DeviceMemory            classicRTMissSBTMemory{nullptr};
+	Laphria::VulkanUtils::VmaBuffer   classicRTMissSBTBuffer{};
 	vk::StridedDeviceAddressRegionKHR classicRTMissRegion{};
 
-	vk::raii::Buffer                  classicRTHitSBTBuffer{nullptr};
-	vk::raii::DeviceMemory            classicRTHitSBTMemory{nullptr};
+	Laphria::VulkanUtils::VmaBuffer   classicRTHitSBTBuffer{};
 	vk::StridedDeviceAddressRegionKHR classicRTHitRegion{};
 
   private:
-	void createGlobalDescriptorSetLayout(VulkanDevice &dev);
-	void createMaterialDescriptorSetLayout(VulkanDevice &dev);
-	void createComputeDescriptorSetLayout(VulkanDevice &dev);
-	void createPhysicsDescriptorSetLayout(VulkanDevice &dev);
-	void createRayTracingDescriptorSetLayout(VulkanDevice &dev);
-	void createDenoiserDescriptorSetLayout(VulkanDevice &dev);
-	void createDenoiserPipelineLayout(VulkanDevice &dev);
-	void createGraphicsPipelineLayout(VulkanDevice &dev);
-	void createShadowPipelineLayout(VulkanDevice &dev);
-	void createComputePipelineLayout(VulkanDevice &dev);
-	void createPhysicsPipelineLayout(VulkanDevice &dev);
-	void createRayTracingPipelineLayout(VulkanDevice &dev);
+	void createGlobalDescriptorSetLayout(const VulkanDevice &dev);
+	void createMaterialDescriptorSetLayout(const VulkanDevice &dev);
+	void createComputeDescriptorSetLayout(const VulkanDevice &dev);
+	void createSkinningDescriptorSetLayout(const VulkanDevice &dev);
+	void createPhysicsDescriptorSetLayout(const VulkanDevice &dev);
+	void createRayTracingDescriptorSetLayout(const VulkanDevice &dev);
+	void createDenoiserDescriptorSetLayout(const VulkanDevice &dev);
+	void createDenoiserPipelineLayout(const VulkanDevice &dev);
+	void createGraphicsPipelineLayout(const VulkanDevice &dev);
+	void createShadowPipelineLayout(const VulkanDevice &dev);
+	void createComputePipelineLayout(const VulkanDevice &dev);
+	void createSkinningPipelineLayout(const VulkanDevice &dev);
+	void createPhysicsPipelineLayout(const VulkanDevice &dev);
+	void createRayTracingPipelineLayout(const VulkanDevice &dev);
 
-	[[nodiscard]] vk::raii::ShaderModule createShaderModule(VulkanDevice            &dev,
+	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const VulkanDevice            &dev,
 	                                                        const std::vector<char> &code) const;
 	static std::vector<char>             readFile(const std::string &filename);
 };

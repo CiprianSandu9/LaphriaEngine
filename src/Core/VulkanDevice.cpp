@@ -1,4 +1,6 @@
 #include "VulkanDevice.h"
+#include "VulkanUtils.h"
+#include "VmaContext.h"
 
 #include <algorithm>
 #include <iostream>
@@ -7,12 +9,26 @@
 
 using namespace Laphria;
 
+VulkanDevice::~VulkanDevice()
+{
+	try
+	{
+		VulkanUtils::logTrackedVmaAllocationLeaks();
+		VmaContext::shutdown();
+	}
+	catch (...)
+	{
+		// Best-effort shutdown during teardown.
+	}
+}
+
 void VulkanDevice::init(GLFWwindow *window)
 {
 	createInstance();
 	createSurface(window);
 	pickPhysicalDevice();
 	createLogicalDevice();
+	VmaContext::initialize(*instance, *physicalDevice, *logicalDevice);
 }
 
 void VulkanDevice::createInstance()

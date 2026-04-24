@@ -2,6 +2,7 @@
 #define LAPHRIAENGINE_ENGINECORE_H
 
 #include <chrono>
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -13,23 +14,21 @@
 #include "PipelineCollection.h"
 #include "ResourceManager.h"
 #include "SwapchainManager.h"
+#include "EngineHost.h"
 #include "UISystem.h"
 #include "VulkanDevice.h"
 
 class EngineCore
 {
   public:
-	void run()
-	{
-		initWindow();
-		initInput();
-		initVulkan();
-		initImgui();
-		mainLoop();
-		cleanup();
-	}
+	EngineCore() = default;
+	EngineCore(EngineHostOptions options, EngineHostCallbacks callbacks);
+
+	void run();
 
   private:
+	EngineHostOptions   options;
+	EngineHostCallbacks callbacks;
 	GLFWwindow *window{nullptr};
 	Camera      camera;
 	InputSystem input;
@@ -58,6 +57,11 @@ class EngineCore
 	// Denoiser Resources (one set per frame in flight)
 	vk::raii::DescriptorPool             denoiserDescriptorPool{nullptr};
 	std::vector<vk::raii::DescriptorSet> denoiserDescriptorSets;
+	vk::raii::QueryPool                  ptTimestampQueryPool{nullptr};
+	float                                timestampPeriodNs = 1.0f;
+	std::array<bool, MAX_FRAMES_IN_FLIGHT>       ptTimestampsValid{};
+	std::array<RenderMode, MAX_FRAMES_IN_FLIGHT> submittedRenderModes{};
+	std::vector<vk::Fence>                       imagesInFlight;
 
 	// Scene System
 	std::unique_ptr<Scene>           scene;
@@ -69,6 +73,18 @@ class EngineCore
 	float     ptPrevPitch{0.f};
 	float     ptPrevYaw{0.f};
 	bool      ptCameraMoved{false};
+	RenderMode lastSubmittedRenderMode{RenderMode::Rasterizer};
+	bool       renderModeInitialized{false};
+	std::chrono::high_resolution_clock::time_point lastFrameTime{};
+	double    titleStatsAccumSeconds{0.0};
+	uint32_t  titleStatsFrameCount{0};
+	bool      windowInitialized{false};
+	bool      imguiInitialized{false};
+	bool      vulkanInitialized{false};
+
+	EngineServices buildServices();
+	void           invokeInitializeCallback();
+	void           invokeShutdownCallback();
 
 	void initWindow();
 
@@ -79,6 +95,7 @@ class EngineCore
 	void initImgui();
 
 	void mainLoop();
+	void updatePerformanceWindowTitle(float deltaTimeSeconds);
 
 	void cleanup();
 
@@ -94,12 +111,18 @@ class EngineCore
 	void createDenoiserDescriptorSets();
 
 	void recordComputeCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
+	void recordSkinningPass(const vk::raii::CommandBuffer &commandBuffer) const;
 	void recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 
 	void createDescriptorPool();
 
 	void createDescriptorSets();
+	void createTimestampQueryPool();
+	void collectPathTracerTimings(uint32_t frameSlot);
+	void updateAdaptivePathTracerSettings();
+
+	[[nodiscard]] uint32_t getPathTracerQueryBase(uint32_t frameSlot) const;
 
 	void recordCommandBuffer(uint32_t imageIndex) const;
 
@@ -110,3 +133,4 @@ class EngineCore
 };
 
 #endif        // LAPHRIAENGINE_ENGINECORE_H
+

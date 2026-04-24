@@ -20,6 +20,7 @@ struct DenoisePushConstants {
     int   isLastPass;
     float phiColor;
     float phiNormal;
+    float exposureScale;
 };
 [[vk::push_constant]] DenoisePushConstants push;
 

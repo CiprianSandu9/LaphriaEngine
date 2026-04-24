@@ -1,12 +1,9 @@
-// TODO: Move STB_IMAGE_IMPLEMENTATION to a dedicated stb_image.cpp translation unit
-// to decouple the application entry point from image-loading compilation.
-#define STB_IMAGE_IMPLEMENTATION
 #include "Core/EngineAuxiliary.h"
-#include "Core/EngineCore.h"
+#include "Core/EngineHost.h"
 
 int main() {
     try {
-        EngineCore app;
+        EngineHost app;
         app.run();
     } catch (const std::exception &e) {
         LOGE("%s", e.what());

@@ -1,6 +1,6 @@
 #include "ShaderCommon.slang"
 
-// Path tracer RayPayload — surface properties returned by ClosestHit to Raygen.
+// Path tracer RayPayload - surface properties returned by ClosestHit to Raygen.
 struct RayPayload {
     float3 albedo;
     float3 emission;
@@ -14,7 +14,7 @@ struct RayPayload {
     uint   instanceID;
 };
 
-// Set 1 — global UBO (needed for lightDir → sun direction).
+// Set 1 - global UBO (needed for lightDir -> sun direction).
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 
 [shader("miss")]

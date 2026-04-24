@@ -1,29 +1,47 @@
 #include "ResourceManager.h"
+#include "GltfImporter.h"
+#include "GpuResourceRegistry.h"
 #include "VulkanUtils.h"
 
-#include <fastgltf/core.hpp>
-#include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
-#include <iostream>
 #include <ktx.h>
 
-// We only need ktx.h for loading data, vulkan creation is done manually.
-#include <glm/gtx/matrix_decompose.hpp>
+using namespace Laphria;
+using Laphria::LoadedMesh;
+using Laphria::MaterialData;
+using Laphria::PBRMaterial;
+using Laphria::Vertex;
+
+namespace
+{
+static_assert(sizeof(Vertex) == 60, "Skinning shader expects Vertex stride of 60 bytes.");
+static_assert(sizeof(ModelResource::SkinningInfluence) == 48, "Skinning shader expects SkinningInfluence stride of 48 bytes.");
+}
 
 ResourceManager::ResourceManager(vk::raii::Device &device, vk::raii::PhysicalDevice &physicalDevice, vk::raii::CommandPool &commandPool, vk::raii::Queue &queue,
                                  vk::raii::DescriptorPool &descriptorPool) : device(device),
                                                                              physicalDevice(physicalDevice),
                                                                              commandPool(commandPool),
                                                                              queue(queue),
-                                                                             descriptorPool(descriptorPool) {
+                                                                             descriptorPool(descriptorPool),
+                                                                             gltfImporter(std::make_unique<GltfImporter>()),
+                                                                             gpuResourceRegistry(std::make_unique<GpuResourceRegistry>(device, physicalDevice, commandPool, queue, descriptorPool)) {
+}
+
+ResourceManager::~ResourceManager() = default;
+
+void ResourceManager::setSkinningDescriptorSetLayout(vk::DescriptorSetLayout layout) const {
+    gpuResourceRegistry->setSkinningDescriptorSetLayout(layout);
 }
 
 // Internal helper struct for texture batching
 
 // Texture Helpers
 
-bool ResourceManager::prepareKTXFromMemory(const unsigned char *data, size_t length, vk::raii::Image &outImage, vk::raii::DeviceMemory &outMem, uint32_t &width, uint32_t &height,
+bool ResourceManager::prepareKTXFromMemory(const unsigned char *data, size_t length, VulkanUtils::VmaImage &outImage, uint32_t &width, uint32_t &height,
                                            vk::Format &format) const {
     static const unsigned char ktx2Magic[12] = {
         0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A
@@ -51,12 +69,9 @@ bool ResourceManager::prepareKTXFromMemory(const unsigned char *data, size_t len
     width = ktx2->baseWidth;
     height = ktx2->baseHeight;
 
-    vk::raii::Image tempImage{nullptr};
-    vk::raii::DeviceMemory tempMem{nullptr};
-
     VulkanUtils::createTextureImageFromData(device, physicalDevice, commandPool, queue,
                                             textureData, textureSize, width, height, vkFormat,
-                                            outImage, outMem);
+                                            outImage);
 
     // width/height are already set above
     format = vkFormat;
@@ -65,97 +80,67 @@ bool ResourceManager::prepareKTXFromMemory(const unsigned char *data, size_t len
     return true;
 }
 
-void ResourceManager::prepareTextureFromPixels(const unsigned char *pixels, int width, int height, vk::raii::Image &outImage, vk::raii::DeviceMemory &outMem, vk::Format &format) const {
+void ResourceManager::prepareTextureFromPixels(const unsigned char *pixels, int width, int height, VulkanUtils::VmaImage &outImage, vk::Format &format) const {
     vk::DeviceSize size = width * height * 4;
     format = vk::Format::eR8G8B8A8Unorm;
 
     VulkanUtils::createTextureImageFromData(device, physicalDevice, commandPool, queue,
                                             pixels, size, width, height, format,
-                                            outImage, outMem);
+                                            outImage);
 }
 
-void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::filesystem::path &modelDir, ModelResource *modelRes) {
-    modelRes->textureImages.reserve(gltf.images.size());
-    modelRes->textureImageMemories.reserve(gltf.images.size());
-    modelRes->textureImageViews.reserve(gltf.images.size());
-    modelRes->textureSamplers.reserve(gltf.images.size());
+void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::filesystem::path &modelDir, ModelResource *modelRes) const {
+    const auto textureSources = gltfImporter->buildTextureImportSources(gltf, modelDir);
 
-    for (size_t i = 0; i < gltf.images.size(); ++i) {
-        const auto &image = gltf.images[i];
+    modelRes->textureImages.reserve(textureSources.size());
+    modelRes->textureImageViews.reserve(textureSources.size());
+    modelRes->textureSamplers.reserve(textureSources.size());
 
-        vk::raii::Image img{nullptr};
-        vk::raii::DeviceMemory mem{nullptr};
+    for (size_t i = 0; i < textureSources.size(); ++i) {
+        const auto &source = textureSources[i];
+
+        VulkanUtils::VmaImage img{};
         uint32_t width = 0, height = 0;
         vk::Format format = vk::Format::eUndefined;
         bool success = false;
 
-        std::visit(fastgltf::visitor{
-                       [&](const fastgltf::sources::URI &uri) {
-                           std::filesystem::path imgPath = modelDir / uri.uri.fspath();
-                           LOGI("Loading texture from URI: %s", imgPath.string().c_str());
-                           int w, h, c;
-                           if (unsigned char *px = stbi_load(imgPath.string().c_str(), &w, &h, &c, STBI_rgb_alpha)) {
-                               prepareTextureFromPixels(px, w, h, img, mem, format);
-                               success = true;
-                               stbi_image_free(px);
-                           } else {
-                               LOGE("Failed to load texture from file: %s", imgPath.string().c_str());
-                           }
-                       },
-                       [&](const fastgltf::sources::Array &array) {
-                           LOGI("Loading embedded texture (size: %zu)", array.bytes.size());
-                           if (!prepareKTXFromMemory(reinterpret_cast<const unsigned char *>(array.bytes.data()), array.bytes.size(), img, mem, width, height, format)) {
-                               // Fallback to STBI
-                               int w, h, c;
-                               if (unsigned char *px = stbi_load_from_memory(reinterpret_cast<const unsigned char *>(array.bytes.data()), array.bytes.size(), &w, &h, &c, STBI_rgb_alpha)) {
-                                   prepareTextureFromPixels(px, w, h, img, mem, format);
-                                   success = true;
-                                   stbi_image_free(px);
-                               } else {
-                                   LOGE("Failed to load embedded texture (Index: %zu)", i);
-                               }
-                           } else {
-                               success = true;
-                           }
-                       },
-                       [&](const fastgltf::sources::BufferView &view) {
-                           auto &bufferView = gltf.bufferViews[view.bufferViewIndex];
-                           auto &buffer = gltf.buffers[bufferView.bufferIndex];
+        if (source.kind == GltfImporter::TextureImportSource::Kind::Uri) {
+            LOGI("Loading texture from URI: %s", source.uriPath.string().c_str());
+            int w, h, c;
+            if (unsigned char *px = stbi_load(source.uriPath.string().c_str(), &w, &h, &c, STBI_rgb_alpha)) {
+                prepareTextureFromPixels(px, w, h, img, format);
+                success = true;
+                stbi_image_free(px);
+            } else {
+                LOGE("Failed to load texture from file: %s", source.uriPath.string().c_str());
+            }
+        } else if (source.kind == GltfImporter::TextureImportSource::Kind::Bytes) {
+            LOGI("Loading embedded texture (size: %zu)", source.bytes.size());
+            const auto *data = source.bytes.data();
+            const size_t len = source.bytes.size();
 
-                           std::visit(fastgltf::visitor{
-                                          [&](const fastgltf::sources::Array &array) {
-                                              const unsigned char *data = reinterpret_cast<const unsigned char *>(array.bytes.data()) + bufferView.byteOffset;
-                                              size_t len = bufferView.byteLength;
-
-                                              if (!prepareKTXFromMemory(data, len, img, mem, width, height, format)) {
-                                                  int w, h, c;
-                                                  if (unsigned char *px = stbi_load_from_memory(data, len, &w, &h, &c, STBI_rgb_alpha)) {
-                                                      prepareTextureFromPixels(px, w, h, img, mem, format);
-                                                      success = true;
-                                                      stbi_image_free(px);
-                                                  } else {
-                                                      LOGE("Failed to load texture from BufferView index %zu", view.bufferViewIndex);
-                                                  }
-                                              } else {
-                                                  success = true;
-                                              }
-                                          },
-                                          [&](auto &) { LOGE("Unsupported buffer type for texture BufferView"); }
-                                      },
-                                      buffer.data);
-                       },
-                       [&](auto &) {
-                       } // Others ignored for brevity
-                   },
-                   image.data);
+            if (!prepareKTXFromMemory(data, len, img, width, height, format)) {
+                int w, h, c;
+                if (unsigned char *px = stbi_load_from_memory(data, static_cast<int>(len), &w, &h, &c, STBI_rgb_alpha)) {
+                    prepareTextureFromPixels(px, w, h, img, format);
+                    success = true;
+                    stbi_image_free(px);
+                } else {
+                    LOGE("Failed to decode embedded texture (Index: %zu)", i);
+                }
+            } else {
+                success = true;
+            }
+        } else {
+            LOGW("Unsupported texture source for image index %zu", i);
+        }
 
         if (!success) {
             LOGW("Texture invalid, using white placeholder.");
             unsigned char white[] = {255, 255, 255, 255};
-            prepareTextureFromPixels(white, 1, 1, img, mem, format);
+            prepareTextureFromPixels(white, 1, 1, img, format);
         }
 
-        // Create Views/Samplers
         vk::ImageViewCreateInfo viewInfo{};
         viewInfo.image = *img;
         viewInfo.viewType = vk::ImageViewType::e2D;
@@ -164,7 +149,6 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
         viewInfo.subresourceRange.levelCount = 1;
         viewInfo.subresourceRange.layerCount = 1;
         modelRes->textureImages.push_back(std::move(img));
-        modelRes->textureImageMemories.push_back(std::move(mem));
         modelRes->textureImageViews.emplace_back(device, viewInfo);
 
         vk::SamplerCreateInfo samplerInfo{};
@@ -180,315 +164,65 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
     }
 }
 
-void ResourceManager::loadMaterials(const fastgltf::Asset &gltf, ModelResource *modelRes) {
-    std::vector<MaterialData> materialDataList;
-    for (const auto &mat: gltf.materials) {
-        PBRMaterial pbrMat;
-        pbrMat.data.baseColorFactor = glm::vec4(mat.pbrData.baseColorFactor[0], mat.pbrData.baseColorFactor[1], mat.pbrData.baseColorFactor[2], mat.pbrData.baseColorFactor[3]);
-        pbrMat.data.metallicFactor = mat.pbrData.metallicFactor;
-        pbrMat.data.roughnessFactor = mat.pbrData.roughnessFactor;
-
-        if (mat.pbrData.baseColorTexture.has_value())
-            pbrMat.baseColorTextureIndex = gltf.textures[mat.pbrData.baseColorTexture.value().textureIndex].imageIndex.value();
-        if (mat.pbrData.metallicRoughnessTexture.has_value())
-            pbrMat.metallicRoughnessTextureIndex = gltf.textures[mat.pbrData.metallicRoughnessTexture.value().textureIndex].imageIndex.value();
-        if (mat.normalTexture.has_value()) {
-            pbrMat.normalTextureIndex = gltf.textures[mat.normalTexture.value().textureIndex].imageIndex.value();
-            pbrMat.data.normalScale = mat.normalTexture.value().scale;
-        }
-        if (mat.occlusionTexture.has_value()) {
-            pbrMat.occlusionTextureIndex = gltf.textures[mat.occlusionTexture.value().textureIndex].imageIndex.value();
-            pbrMat.data.occlusionStrength = mat.occlusionTexture.value().strength;
-        }
-        if (mat.emissiveTexture.has_value())
-            pbrMat.emissiveTextureIndex = gltf.textures[mat.emissiveTexture.value().textureIndex].imageIndex.value();
-
-        if (mat.specular != nullptr) {
-            pbrMat.data.specularFactor = mat.specular->specularFactor;
-            if (mat.specular->specularTexture.has_value()) {
-                pbrMat.specularTextureIndex = gltf.textures[mat.specular->specularTexture.value().textureIndex].imageIndex.value();
-            }
-        }
-
-        pbrMat.data.baseColorIndex = pbrMat.baseColorTextureIndex;
-        pbrMat.data.metallicRoughnessIndex = pbrMat.metallicRoughnessTextureIndex;
-        pbrMat.data.normalIndex = pbrMat.normalTextureIndex;
-        pbrMat.data.occlusionIndex = pbrMat.occlusionTextureIndex;
-        pbrMat.data.emissiveIndex = pbrMat.emissiveTextureIndex;
-        pbrMat.data.specularTextureIndex = pbrMat.specularTextureIndex;
-
-        modelRes->materials.push_back(pbrMat);
-    }
-}
-
-SceneNode::Ptr ResourceManager::processGltfNode(const fastgltf::Asset &gltf, const fastgltf::Node &node, ModelResource *modelRes, std::vector<Vertex> &vertices,
-                                                std::vector<uint32_t> &indices) {
-    auto newNode = std::make_shared<SceneNode>(std::string(node.name));
-
-    // Transform
-    if (auto *trs = std::get_if<fastgltf::TRS>(&node.transform)) {
-        newNode->setPosition(glm::vec3(trs->translation[0], trs->translation[1], trs->translation[2]));
-        newNode->setRotation(glm::quat(trs->rotation[3], trs->rotation[0], trs->rotation[1], trs->rotation[2]));
-        newNode->setScale(glm::vec3(trs->scale[0], trs->scale[1], trs->scale[2]));
-    } else if (auto *mat = std::get_if<fastgltf::math::fmat4x4>(&node.transform)) {
-        glm::mat4 m;
-        memcpy(&m, mat->data(), sizeof(glm::mat4));
-        glm::vec3 scale, translation, skew;
-        glm::vec4 perspective;
-        glm::quat rotation;
-        glm::decompose(m, scale, rotation, translation, skew, perspective);
-        newNode->setPosition(translation);
-        newNode->setRotation(rotation);
-        newNode->setScale(scale);
-    }
-
-    // Mesh
-    if (node.meshIndex.has_value()) {
-        const auto &mesh = gltf.meshes[node.meshIndex.value()];
-        LoadedMesh loadedMesh;
-        loadedMesh.name = mesh.name;
-
-        for (const auto &primitive: mesh.primitives) {
-            Laphria::MeshPrimitive meshPrim;
-            meshPrim.vertexOffset = vertices.size();
-            meshPrim.firstIndex = indices.size();
-            meshPrim.materialIndex = primitive.materialIndex.has_value() ? primitive.materialIndex.value() : -1;
-
-            auto posIt = primitive.findAttribute("POSITION");
-            if (posIt != primitive.attributes.end()) {
-                auto &posAcc = gltf.accessors[posIt->accessorIndex];
-                size_t vCount = vertices.size();
-                vertices.resize(vCount + posAcc.count);
-
-                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(gltf, posAcc, [&](fastgltf::math::fvec3 p, size_t i) {
-                    vertices[vCount + i].pos = glm::vec3(p.x(), p.y(), p.z());
-                    vertices[vCount + i].color = glm::vec3(1.0f);
-                    vertices[vCount + i].normal = glm::vec3(0, 1, 0); // Default
-                    vertices[vCount + i].texCoord = glm::vec2(0.0f); // Default; overwritten below if TEXCOORD_0 present
-                });
-            }
-
-            // Normal
-            auto normIt = primitive.findAttribute("NORMAL");
-            if (normIt != primitive.attributes.end()) {
-                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(gltf, gltf.accessors[normIt->accessorIndex], [&](fastgltf::math::fvec3 n, size_t i) {
-                    vertices[meshPrim.vertexOffset + i].normal = glm::vec3(n.x(), n.y(), n.z());
-                });
-            }
-            // TexCoord
-            auto texIt = primitive.findAttribute("TEXCOORD_0");
-            if (texIt != primitive.attributes.end()) {
-                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec2>(gltf, gltf.accessors[texIt->accessorIndex], [&](fastgltf::math::fvec2 uv, size_t i) {
-                    vertices[meshPrim.vertexOffset + i].texCoord = glm::vec2(uv.x(), uv.y());
-                });
-            }
-
-            // Tangent
-            auto tanIt = primitive.findAttribute("TANGENT");
-            if (tanIt != primitive.attributes.end()) {
-                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(gltf, gltf.accessors[tanIt->accessorIndex], [&](fastgltf::math::fvec4 t, size_t i) {
-                    vertices[meshPrim.vertexOffset + i].tangent = glm::vec4(t.x(), t.y(), t.z(), t.w());
-                });
-            }
-
-            // Indices
-            if (primitive.indicesAccessor.has_value()) {
-                auto &idxAcc = gltf.accessors[primitive.indicesAccessor.value()];
-                meshPrim.indexCount = idxAcc.count;
-                fastgltf::iterateAccessor<uint32_t>(gltf, idxAcc, [&](uint32_t idx) {
-                    indices.push_back(idx); // Relative to buffer!
-                });
-            } else {
-                // Generate indices
-                meshPrim.indexCount = vertices.size() - meshPrim.vertexOffset;
-                for (uint32_t i = 0; i < meshPrim.indexCount; ++i)
-                    indices.push_back(i);
-            }
-
-            // Generate tangents when the glTF primitive does not supply a TANGENT attribute.
-            // Uses per-triangle UV/position derivatives to build a tangent space compatible
-            // with the Gram-Schmidt re-orthogonalization already performed in the shaders.
-            if (tanIt == primitive.attributes.end()) {
-                const size_t primVertexCount = vertices.size() - meshPrim.vertexOffset;
-
-                // Accumulate un-normalised tangent vectors from each triangle.
-                for (size_t t = 0; t < meshPrim.indexCount / 3; ++t) {
-                    uint32_t i0 = indices[meshPrim.firstIndex + t * 3 + 0];
-                    uint32_t i1 = indices[meshPrim.firstIndex + t * 3 + 1];
-                    uint32_t i2 = indices[meshPrim.firstIndex + t * 3 + 2];
-
-                    auto &v0 = vertices[meshPrim.vertexOffset + i0];
-                    auto &v1 = vertices[meshPrim.vertexOffset + i1];
-                    auto &v2 = vertices[meshPrim.vertexOffset + i2];
-
-                    glm::vec3 edge1 = v1.pos - v0.pos;
-                    glm::vec3 edge2 = v2.pos - v0.pos;
-                    glm::vec2 duv1  = v1.texCoord - v0.texCoord;
-                    glm::vec2 duv2  = v2.texCoord - v0.texCoord;
-
-                    float denom = duv1.x * duv2.y - duv2.x * duv1.y;
-                    if (std::abs(denom) < 1e-6f) continue;
-                    float f = 1.0f / denom;
-
-                    glm::vec3 T(f * (duv2.y * edge1 - duv1.y * edge2));
-                    v0.tangent += glm::vec4(T, 0.0f);
-                    v1.tangent += glm::vec4(T, 0.0f);
-                    v2.tangent += glm::vec4(T, 0.0f);
-                }
-
-                // Normalise and Gram-Schmidt orthogonalise against the vertex normal.
-                // Handedness is set to +1; the shader re-orthogonalises so this is sufficient
-                // for all models that use a consistent (non-mirrored) UV layout.
-                for (size_t i = 0; i < primVertexCount; ++i) {
-                    auto     &v  = vertices[meshPrim.vertexOffset + i];
-                    glm::vec3 N  = glm::normalize(v.normal);
-                    glm::vec3 T  = glm::vec3(v.tangent);
-                    float     len = glm::length(T);
-                    if (len < 1e-6f) {
-                        // Degenerate UVs: construct an arbitrary tangent orthogonal to N.
-                        glm::vec3 up = std::abs(N.y) < 0.99f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
-                        T = glm::normalize(glm::cross(up, N));
-                    } else {
-                        T = glm::normalize(T - N * glm::dot(N, T));
-                    }
-                    v.tangent = glm::vec4(T, 1.0f);
-                }
-            }
-
-            loadedMesh.primitives.push_back(meshPrim);
-        }
-
-        // Register mesh in ModelResource and get index
-        modelRes->meshes.push_back(loadedMesh);
-        newNode->addMeshIndex(modelRes->meshes.size() - 1);
-    }
-
-    for (auto childIdx: node.children) {
-        newNode->addChild(processGltfNode(gltf, gltf.nodes[childIdx], modelRes, vertices, indices));
-    }
-
-    return newNode;
-}
-
-SceneNode::Ptr ResourceManager::processSceneNodes(const fastgltf::Asset &gltf, ModelResource *modelRes, std::vector<Vertex> &vertices, std::vector<uint32_t> &indices) {
-    SceneNode::Ptr rootNode = std::make_shared<SceneNode>(modelRes->name);
-
-    if (gltf.scenes.empty()) {
-        if (!gltf.nodes.empty())
-            rootNode->addChild(processGltfNode(gltf, gltf.nodes[0], modelRes, vertices, indices));
-    } else {
-        const auto &scene = gltf.scenes[gltf.defaultScene.value_or(0)];
-        for (auto nodeIdx: scene.nodeIndices) {
-            rootNode->addChild(processGltfNode(gltf, gltf.nodes[nodeIdx], modelRes, vertices, indices));
-        }
-    }
-    return rootNode;
-}
-
-void ResourceManager::uploadModelBuffers(ModelResource *modelRes, const std::vector<Vertex> &vertices, const std::vector<uint32_t> &indices) {
-    if (!vertices.empty()) {
-        vk::BufferUsageFlags vFlags = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress |
-                                      vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-        VulkanUtils::createDeviceLocalBufferFromData(device, physicalDevice, commandPool, queue,
-                                                     vertices.data(), sizeof(Vertex) * vertices.size(), vFlags,
-                                                     modelRes->vertexBuffer, modelRes->vertexBufferMemory);
-
-        vk::BufferUsageFlags iFlags = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress |
-                                      vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-        VulkanUtils::createDeviceLocalBufferFromData(device, physicalDevice, commandPool, queue,
-                                                     indices.data(), sizeof(uint32_t) * indices.size(), iFlags,
-                                                     modelRes->indexBuffer, modelRes->indexBufferMemory);
-    }
-}
-
-void ResourceManager::createModelDescriptorSet(ModelResource *modelRes, vk::DescriptorSetLayout layout) {
-    // Allocate Descriptor Set
-    uint32_t variableDescCounts[] = {1000};
-    vk::DescriptorSetVariableDescriptorCountAllocateInfo variableDescriptorCountAllocInfo;
-    variableDescriptorCountAllocInfo.descriptorSetCount = 1;
-    variableDescriptorCountAllocInfo.pDescriptorCounts = variableDescCounts;
-
-    vk::DescriptorSetAllocateInfo allocInfo{};
-    allocInfo.pNext = &variableDescriptorCountAllocInfo;
-    allocInfo.descriptorPool = *descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &layout;
-    modelRes->descriptorSet = std::move(vk::raii::DescriptorSets(device, allocInfo).front());
-
-    // Update Descriptor Set
-    std::vector<vk::WriteDescriptorSet> writes;
-
-    // Binding 0: Material Buffer
-    vk::DescriptorBufferInfo matBufferInfo{};
-    if (*modelRes->materialBuffer) {
-        matBufferInfo.buffer = *modelRes->materialBuffer;
-        matBufferInfo.offset = 0;
-        matBufferInfo.range = VK_WHOLE_SIZE;
-    }
-    vk::WriteDescriptorSet matWrite{};
-    matWrite.dstSet = *modelRes->descriptorSet;
-    matWrite.dstBinding = 0;
-    matWrite.dstArrayElement = 0;
-    matWrite.descriptorType = vk::DescriptorType::eStorageBuffer;
-    matWrite.descriptorCount = 1;
-    matWrite.pBufferInfo = &matBufferInfo; // Pointer must remain valid until update
-    if (*modelRes->materialBuffer)
-        writes.push_back(matWrite);
-
-    // Binding 1: Textures
-    std::vector<vk::DescriptorImageInfo> imageInfos;
-    if (!modelRes->textureImageViews.empty()) {
-        imageInfos.reserve(modelRes->textureImageViews.size());
-        for (size_t i = 0; i < modelRes->textureImageViews.size(); ++i) {
-            imageInfos.push_back({
-                *modelRes->textureSamplers[i],
-                *modelRes->textureImageViews[i],
-                vk::ImageLayout::eShaderReadOnlyOptimal
-            });
-        }
-        vk::WriteDescriptorSet texWrite{};
-        texWrite.dstSet = *modelRes->descriptorSet;
-        texWrite.dstBinding = 1;
-        texWrite.dstArrayElement = 0;
-        texWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        texWrite.descriptorCount = static_cast<uint32_t>(imageInfos.size());
-        texWrite.pImageInfo = imageInfos.data();
-        writes.push_back(texWrite);
-    }
-
-    device.updateDescriptorSets(writes, nullptr);
-}
-
 SceneNode::Ptr ResourceManager::loadGltfModel(const std::string &path, vk::DescriptorSetLayout layout) {
+    ModelImportReport report{};
+    report.modelPath = path;
+
     auto it = loadedModels.find(path);
     if (it != loadedModels.end()) {
-        LOGI("Loading GLTF from cache: %s", path.c_str());
-        return models[it->second]->prototype->clone();
+        if (const auto *cachedModel = getModelResource(it->second); cachedModel && cachedModel->hasRuntimeSkinning) {
+            // Skinned models keep per-model mutable GPU output buffers. Reusing them via cache would
+            // couple multiple scene instances to the same animated pose.
+            loadedModels.erase(it);
+        } else {
+            LOGI("Loading GLTF from cache: %s", path.c_str());
+            report.supportedFeatures.push_back("cached_model_instance");
+            if (const auto *cachedModel = getModelResource(it->second)) {
+                report.hasAnimations = cachedModel->hasAnimations;
+                report.hasSkins = cachedModel->hasSkins;
+                if (!cachedModel->animationClipNames.empty()) {
+                    report.supportedFeatures.push_back("animation_clips");
+                }
+                if (!cachedModel->animationClips.empty()) {
+                    report.supportedFeatures.push_back("runtime_animation_playback");
+                }
+                if (cachedModel->hasRuntimeSkinning) {
+                    report.supportedFeatures.push_back("gpu_skinning_raster");
+                }
+            }
+            lastImportReport = std::move(report);
+            return models[it->second]->prototype->clone();
+        }
     }
 
     LOGI("Loading GLTF: %s", path.c_str());
 
-    fastgltf::Parser parser;
-    auto data = fastgltf::GltfDataBuffer::FromPath(path);
-    if (data.error() != fastgltf::Error::None) {
-        throw std::runtime_error("Failed to load glTF file");
+    const GltfImporter::ParsedAsset parsedAsset = gltfImporter->parseAsset(path);
+    const auto &gltf = parsedAsset.asset;
+    const std::filesystem::path &modelDir = parsedAsset.modelDirectory;
+    report.hasAnimations = !gltf.animations.empty();
+    report.hasSkins = !gltf.skins.empty();
+    report.supportedFeatures.push_back("meshes");
+    report.supportedFeatures.push_back("materials");
+    if (report.hasAnimations) {
+        report.supportedFeatures.push_back("animations");
     }
-
-    constexpr auto gltfOptions = fastgltf::Options::LoadExternalBuffers | fastgltf::Options::LoadExternalImages | fastgltf::Options::GenerateMeshIndices |
-                                 fastgltf::Options::DecomposeNodeMatrices;
-
-    std::filesystem::path modelDir = std::filesystem::path(path).parent_path();
-    auto asset = parser.loadGltf(data.get(), modelDir, gltfOptions);
-    if (asset.error() != fastgltf::Error::None) {
-        throw std::runtime_error("Failed to parse glTF");
+    if (report.hasSkins) {
+        report.supportedFeatures.push_back("skins");
     }
-
-    const auto &gltf = asset.get();
+    const bool hasSkinningAttributes = parsedAsset.hasSkinningAttributes;
 
     // Create a new ModelResource
     auto modelRes = std::make_unique<ModelResource>();
     modelRes->name = std::filesystem::path(path).filename().string();
     modelRes->path = path;
+    modelRes->hasAnimations = report.hasAnimations;
+    modelRes->hasSkins = report.hasSkins;
+    modelRes->dynamicGeometry = report.hasSkins;
+    gltfImporter->populateAnimationClips(gltf, *modelRes, report);
+    if (!modelRes->animationClipNames.empty()) {
+        report.supportedFeatures.push_back("animation_clips");
+    }
 
     int totalTexturesLoaded = 0;
     for (const auto &m: models) {
@@ -500,44 +234,41 @@ SceneNode::Ptr ResourceManager::loadGltfModel(const std::string &path, vk::Descr
     loadTextures(gltf, modelDir, modelRes.get());
 
     // 2. Materials
-    loadMaterials(gltf, modelRes.get());
+    gltfImporter->populateMaterials(gltf, *modelRes);
 
     // 3. Meshes & Scene Graph
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
-    SceneNode::Ptr rootNode = processSceneNodes(gltf, modelRes.get(), vertices, indices);
-
-    uint32_t currentFlatPrimitiveIndex = 0;
-    // 4. Build flattened Material Buffer specifically sized per-primitive
-    std::vector<MaterialData> perPrimitiveMaterials;
-    for (auto &mesh: modelRes->meshes) {
-        for (auto &prim: mesh.primitives) {
-            MaterialData primMat{};
-            if (prim.materialIndex >= 0 && prim.materialIndex < modelRes->materials.size())
-                primMat = modelRes->materials[prim.materialIndex].data;
-
-            prim.flatPrimitiveIndex = currentFlatPrimitiveIndex++;
-
-            primMat.firstIndex = prim.firstIndex;
-            primMat.vertexOffset = prim.vertexOffset;
-            primMat.globalTextureOffset = modelRes->globalTextureOffset;
-
-            perPrimitiveMaterials.push_back(primMat);
-        }
+    std::vector<ModelResource::SkinningInfluence> skinningInfluences;
+    std::vector<int> nodeSkinIndices(gltf.nodes.size(), -1);
+    SceneNode::Ptr rootNode = gltfImporter->buildSceneNodes(gltf, *modelRes, vertices, indices, skinningInfluences, nodeSkinIndices);
+    if (report.hasAnimations && !modelRes->animationClips.empty()) {
+        report.supportedFeatures.push_back("runtime_animation_playback");
+    } else if (report.hasAnimations && modelRes->animationClips.empty()) {
+        report.warnings.push_back("Animation clips were found, but no runtime-supported TRS channels were imported.");
+    }
+    if (report.hasSkins && modelRes->hasRuntimeSkinning) {
+        report.supportedFeatures.push_back("gpu_skinning_raster");
+    } else if (report.hasSkins) {
+        report.warnings.push_back("Skinning data detected, but GPU skinning setup is incomplete. Mesh will render in bind pose.");
+    }
+    if (hasSkinningAttributes && !report.hasSkins) {
+        report.warnings.push_back("JOINTS_0/WEIGHTS_0 attributes were found without a skin block.");
     }
 
+    // 4. Build flattened Material Buffer specifically sized per-primitive
+    std::vector<MaterialData> perPrimitiveMaterials = gltfImporter->buildPerPrimitiveMaterials(*modelRes);
+
     if (!perPrimitiveMaterials.empty()) {
-        vk::DeviceSize bufferSize = sizeof(MaterialData) * perPrimitiveMaterials.size();
-        VulkanUtils::createDeviceLocalBufferFromData(device, physicalDevice, commandPool, queue,
-                                                     perPrimitiveMaterials.data(), bufferSize, vk::BufferUsageFlagBits::eStorageBuffer,
-                                                     modelRes->materialBuffer, modelRes->materialBufferMemory);
+        gpuResourceRegistry->uploadMaterialBuffer(*modelRes, perPrimitiveMaterials);
     }
 
     // 5. Upload Geometry
-    uploadModelBuffers(modelRes.get(), vertices, indices);
+    gpuResourceRegistry->uploadModelBuffers(*modelRes, vertices, indices);
+    gpuResourceRegistry->createSkinningResources(gltf, *modelRes, vertices, skinningInfluences, nodeSkinIndices);
 
     // 6. Build BLAS (requires vertex/index buffers to be on the GPU)
-    buildBLAS(modelRes.get(), vertices, indices);
+    gpuResourceRegistry->buildBLAS(*modelRes, vertices, indices);
 
     // Store model resource
     models.push_back(std::move(modelRes));
@@ -545,11 +276,19 @@ SceneNode::Ptr ResourceManager::loadGltfModel(const std::string &path, vk::Descr
     ModelResource *res = models.back().get();
 
     // 5. Descriptor Set
-    createModelDescriptorSet(res, layout);
+    gpuResourceRegistry->createModelDescriptorSet(*res, layout);
 
     // Fix up SceneNodes to point to this modelID
     std::function<void(SceneNode::Ptr)> fixNodes = [&](const SceneNode::Ptr &node) {
         node->modelId = modelId;
+        node->assetRef.path = path;
+        node->assetRef.variant = "default";
+        if (res->hasAnimations) {
+            node->animation.enabled = true;
+            if (!res->animationClipNames.empty()) {
+                node->animation.clipId = res->animationClipNames.front();
+            }
+        }
         for (auto &child: node->getChildren())
             fixNodes(child);
     };
@@ -558,7 +297,10 @@ SceneNode::Ptr ResourceManager::loadGltfModel(const std::string &path, vk::Descr
     LOGI("Loaded Model. Vertices: %zu, Indices: %zu", vertices.size(), indices.size());
 
     models.back()->prototype = rootNode;
-    loadedModels[path] = modelId;
+    if (!res->hasRuntimeSkinning) {
+        loadedModels[path] = modelId;
+    }
+    lastImportReport = std::move(report);
 
     return rootNode->clone();
 }
@@ -569,15 +311,142 @@ ModelResource *ResourceManager::getModelResource(int id) const {
     return nullptr;
 }
 
-void ResourceManager::bindResources(const vk::raii::CommandBuffer &cmd, int modelId) const {
+const ModelImportReport *ResourceManager::getLastImportReport() const {
+    return lastImportReport ? &*lastImportReport : nullptr;
+}
+
+const ModelResource::AnimationClip *ResourceManager::findAnimationClip(int modelId, const std::string &clipId) const {
+    const auto *resource = getModelResource(modelId);
+    if (!resource || resource->animationClips.empty()) {
+        return nullptr;
+    }
+
+    if (!clipId.empty()) {
+        for (const auto &clip: resource->animationClips) {
+            if (clip.id == clipId) {
+                return &clip;
+            }
+        }
+    }
+    return &resource->animationClips.front();
+}
+
+float ResourceManager::getAnimationClipDurationSeconds(int modelId, const std::string &clipId) const {
+    const auto *clip = findAnimationClip(modelId, clipId);
+    if (!clip) {
+        return 0.0f;
+    }
+    return clip->durationSeconds;
+}
+
+bool ResourceManager::hasRuntimeSkinnedModels() const {
+    for (const auto &model : models) {
+        if (model && model->hasRuntimeSkinning) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void ResourceManager::bindResources(const vk::raii::CommandBuffer &cmd, int modelId, bool useSkinnedVertices) const {
     if (modelId >= 0 && static_cast<size_t>(modelId) < models.size()) {
         auto &res = models[modelId];
-        if (*res->vertexBuffer) {
+        const bool bindSkinned = useSkinnedVertices && res->hasRuntimeSkinning && *res->skinnedVertexBuffer;
+        if (const vk::Buffer vertexBufferHandle = bindSkinned ? *res->skinnedVertexBuffer : *res->vertexBuffer) {
             vk::DeviceSize offsets[] = {0};
-            cmd.bindVertexBuffers(0, *res->vertexBuffer, offsets);
+            cmd.bindVertexBuffers(0, vertexBufferHandle, offsets);
             cmd.bindIndexBuffer(*res->indexBuffer, 0, vk::IndexType::eUint32);
         }
     }
+}
+
+void ResourceManager::recordSkinnedBLASRefit(const vk::raii::CommandBuffer &cmd) const {
+    for (auto &model : models) {
+        if (!model || !model->hasRuntimeSkinning) {
+            continue;
+        }
+        if (!*model->skinnedVertexBuffer || !*model->indexBuffer) {
+            continue;
+        }
+        if (model->blasElements.empty() || model->blasElements.size() != model->meshes.size()) {
+            continue;
+        }
+        if (model->blasScratchBuffers.size() != model->meshes.size()) {
+            continue;
+        }
+
+        const vk::DeviceAddress vertexAddress = VulkanUtils::getBufferDeviceAddress(device, model->skinnedVertexBuffer);
+        const vk::DeviceAddress indexAddress = VulkanUtils::getBufferDeviceAddress(device, model->indexBuffer);
+
+        for (size_t meshIndex = 0; meshIndex < model->meshes.size(); ++meshIndex) {
+            const auto &mesh = model->meshes[meshIndex];
+            if (mesh.primitives.empty()) {
+                continue;
+            }
+
+            std::vector<vk::AccelerationStructureGeometryKHR> geometries;
+            std::vector<vk::AccelerationStructureBuildRangeInfoKHR> buildRanges;
+            geometries.reserve(mesh.primitives.size());
+            buildRanges.reserve(mesh.primitives.size());
+
+            for (size_t primIdx = 0; primIdx < mesh.primitives.size(); ++primIdx) {
+                const auto &prim = mesh.primitives[primIdx];
+                if (prim.indexCount == 0) {
+                    continue;
+                }
+
+                vk::AccelerationStructureGeometryKHR geometry{};
+                geometry.geometryType = vk::GeometryTypeKHR::eTriangles;
+                auto &triangles = geometry.geometry.triangles;
+                triangles.vertexFormat = vk::Format::eR32G32B32Sfloat;
+                triangles.vertexData.deviceAddress = vertexAddress;
+                triangles.vertexStride = sizeof(Vertex);
+                uint32_t nextVertexOffset = (primIdx + 1 < mesh.primitives.size())
+                                                ? mesh.primitives[primIdx + 1].vertexOffset
+                                                : model->vertexCount;
+                triangles.maxVertex = nextVertexOffset - prim.vertexOffset - 1;
+                triangles.indexType = vk::IndexType::eUint32;
+                triangles.indexData.deviceAddress = indexAddress;
+                triangles.transformData.deviceAddress = 0;
+                geometries.push_back(geometry);
+
+                vk::AccelerationStructureBuildRangeInfoKHR range{};
+                range.primitiveCount = prim.indexCount / 3;
+                range.primitiveOffset = prim.firstIndex * sizeof(uint32_t);
+                range.firstVertex = prim.vertexOffset;
+                range.transformOffset = 0;
+                buildRanges.push_back(range);
+            }
+
+            if (geometries.empty()) {
+                continue;
+            }
+
+            vk::AccelerationStructureBuildGeometryInfoKHR buildInfo{};
+            buildInfo.type = vk::AccelerationStructureTypeKHR::eBottomLevel;
+            buildInfo.flags = vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace |
+                              vk::BuildAccelerationStructureFlagBitsKHR::eAllowUpdate;
+            buildInfo.mode = vk::BuildAccelerationStructureModeKHR::eUpdate;
+            buildInfo.srcAccelerationStructure = *model->blasElements[meshIndex];
+            buildInfo.dstAccelerationStructure = *model->blasElements[meshIndex];
+            buildInfo.geometryCount = static_cast<uint32_t>(geometries.size());
+            buildInfo.pGeometries = geometries.data();
+            buildInfo.scratchData.deviceAddress = VulkanUtils::getBufferDeviceAddress(device, model->blasScratchBuffers[meshIndex]);
+
+            const vk::AccelerationStructureBuildRangeInfoKHR *pBuildRanges = buildRanges.data();
+            cmd.buildAccelerationStructuresKHR(buildInfo, pBuildRanges);
+        }
+    }
+
+    vk::MemoryBarrier2 refitBarrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+        .srcAccessMask = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+        .dstStageMask = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+        .dstAccessMask = vk::AccessFlagBits2::eAccelerationStructureReadKHR};
+    vk::DependencyInfo dep{
+        .memoryBarrierCount = 1,
+        .pMemoryBarriers = &refitBarrier};
+    cmd.pipelineBarrier2(dep);
 }
 
 SceneNode::Ptr ResourceManager::createSphereModel(float radius, int slices, int stacks, vk::DescriptorSetLayout layout) {
@@ -648,6 +517,10 @@ SceneNode::Ptr ResourceManager::createSphereModel(float radius, int slices, int 
 }
 
 SceneNode::Ptr ResourceManager::createCubeModel(float size, vk::DescriptorSetLayout layout) {
+    return createCubeModel(size, layout, MaterialData{});
+}
+
+SceneNode::Ptr ResourceManager::createCubeModel(float size, vk::DescriptorSetLayout layout, const MaterialData &materialOverride) {
     float h = size * 0.5f;
     glm::vec3 positions[] = {
         {-h, -h, h}, {h, -h, h}, {h, h, h}, {-h, h, h}, {h, -h, -h}, {-h, -h, -h}, {-h, h, -h}, {h, h, -h}, {-h, h, h}, {h, h, h}, {h, h, -h}, {-h, h, -h}, {-h, -h, -h}, {h, -h, -h},
@@ -719,7 +592,7 @@ SceneNode::Ptr ResourceManager::createCubeModel(float size, vk::DescriptorSetLay
     modelRes->name = "ProceduralCube";
     modelRes->path = "";
 
-    finalizeProceduralModel(modelRes.get(), vertices, indices, layout, "CubeMesh");
+    finalizeProceduralModel(modelRes.get(), vertices, indices, layout, "CubeMesh", materialOverride);
 
     models.push_back(std::move(modelRes));
     int modelId = models.size() - 1;
@@ -864,7 +737,7 @@ SceneNode::Ptr ResourceManager::createCylinderModel(float radius, float height, 
 }
 
 void ResourceManager::finalizeProceduralModel(ModelResource *modelRes, const std::vector<Vertex> &vertices, const std::vector<uint32_t> &indices, vk::DescriptorSetLayout layout,
-                                              const std::string &meshName) {
+                                              const std::string &meshName, const std::optional<MaterialData> &materialOverride) const {
     vk::DeviceSize vSize = sizeof(Vertex) * vertices.size();
     vk::DeviceSize iSize = sizeof(uint32_t) * indices.size();
 
@@ -887,31 +760,30 @@ void ResourceManager::finalizeProceduralModel(ModelResource *modelRes, const std
     vk::BufferUsageFlags vFlags = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eStorageBuffer |
                                   vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
     VulkanUtils::createBuffer(device, physicalDevice, vSize, vFlags, vk::MemoryPropertyFlagBits::eDeviceLocal,
-                              modelRes->vertexBuffer,
-                              modelRes->vertexBufferMemory);
+                              modelRes->vertexBuffer);
 
     vk::BufferUsageFlags iFlags = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eStorageBuffer |
                                   vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
     VulkanUtils::createBuffer(device, physicalDevice, iSize, iFlags, vk::MemoryPropertyFlagBits::eDeviceLocal,
-                              modelRes->indexBuffer,
-                              modelRes->indexBufferMemory);
+                              modelRes->indexBuffer);
 
     VulkanUtils::copyBuffer(device, commandPool, queue, vStaging, modelRes->vertexBuffer, vSize);
     VulkanUtils::copyBuffer(device, commandPool, queue, iStaging, modelRes->indexBuffer, iSize);
 
     // Default Material
     PBRMaterial defaultMat;
+    if (materialOverride.has_value()) {
+        defaultMat.data = *materialOverride;
+    }
     modelRes->materials.push_back(defaultMat);
 
     // Material Buffer
     {
-        VulkanUtils::createDeviceLocalBufferFromData(device, physicalDevice, commandPool, queue,
-                                                     &defaultMat.data, sizeof(MaterialData), vk::BufferUsageFlagBits::eStorageBuffer,
-                                                     modelRes->materialBuffer, modelRes->materialBufferMemory);
+        gpuResourceRegistry->uploadMaterialBuffer(*modelRes, defaultMat.data);
     }
 
     // Create Descriptor
-    createModelDescriptorSet(modelRes, layout);
+    gpuResourceRegistry->createModelDescriptorSet(*modelRes, layout);
 
     // Add Mesh entry
     LoadedMesh mesh;
@@ -925,96 +797,5 @@ void ResourceManager::finalizeProceduralModel(ModelResource *modelRes, const std
     modelRes->meshes.push_back(mesh);
 
     // Build BLAS
-    buildBLAS(modelRes, vertices, indices);
-}
-
-void ResourceManager::buildBLAS(ModelResource *modelRes, const std::vector<Vertex> &vertices, const std::vector<uint32_t> &indices) {
-    if (modelRes->meshes.empty() || !*modelRes->vertexBuffer)
-        return;
-
-    vk::DeviceAddress vertexAddress = VulkanUtils::getBufferDeviceAddress(device, modelRes->vertexBuffer);
-    vk::DeviceAddress indexAddress = VulkanUtils::getBufferDeviceAddress(device, modelRes->indexBuffer);
-
-    for (const auto &mesh: modelRes->meshes) {
-        std::vector<vk::AccelerationStructureGeometryKHR> geometries;
-        std::vector<vk::AccelerationStructureBuildRangeInfoKHR> buildRanges;
-        std::vector<uint32_t> maxPrimitiveCounts;
-
-        for (size_t primIdx = 0; primIdx < mesh.primitives.size(); ++primIdx) {
-            const auto &prim = mesh.primitives[primIdx];
-
-            vk::AccelerationStructureGeometryKHR geometry{};
-            geometry.geometryType = vk::GeometryTypeKHR::eTriangles;
-
-            auto &triangles = geometry.geometry.triangles;
-            triangles.vertexFormat = vk::Format::eR32G32B32Sfloat;
-            triangles.vertexData.deviceAddress = vertexAddress;
-            triangles.vertexStride = sizeof(Vertex);
-
-            // maxVertex is the highest vertex index reachable within this geometry's vertex range.
-            // Primitives are packed contiguously, so the range ends at the next primitive's
-            // vertexOffset (or the end of the buffer for the last primitive).
-            uint32_t nextVertexOffset = (primIdx + 1 < mesh.primitives.size()) ? mesh.primitives[primIdx + 1].vertexOffset : static_cast<uint32_t>(vertices.size());
-            triangles.maxVertex = nextVertexOffset - prim.vertexOffset - 1;
-
-            triangles.indexType = vk::IndexType::eUint32;
-            triangles.indexData.deviceAddress = indexAddress;
-            triangles.transformData.deviceAddress = 0;
-
-            geometries.push_back(geometry);
-
-            vk::AccelerationStructureBuildRangeInfoKHR range{};
-            range.primitiveCount = prim.indexCount / 3;
-            range.primitiveOffset = prim.firstIndex * sizeof(uint32_t);
-            range.firstVertex = prim.vertexOffset;
-            range.transformOffset = 0;
-
-            buildRanges.push_back(range);
-            maxPrimitiveCounts.push_back(range.primitiveCount);
-        }
-
-        if (geometries.empty())
-            continue;
-
-        vk::AccelerationStructureBuildGeometryInfoKHR buildInfo{};
-        buildInfo.type = vk::AccelerationStructureTypeKHR::eBottomLevel;
-        buildInfo.flags = vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace;
-        buildInfo.mode = vk::BuildAccelerationStructureModeKHR::eBuild;
-        buildInfo.geometryCount = geometries.size();
-        buildInfo.pGeometries = geometries.data();
-
-        vk::AccelerationStructureBuildSizesInfoKHR sizeInfo = device.getAccelerationStructureBuildSizesKHR(vk::AccelerationStructureBuildTypeKHR::eDevice, buildInfo, maxPrimitiveCounts);
-
-        vk::raii::Buffer blasBuffer{nullptr};
-        vk::raii::DeviceMemory blasMemory{nullptr};
-        VulkanUtils::createBuffer(device, physicalDevice, sizeInfo.accelerationStructureSize,
-                                  vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
-                                  vk::MemoryPropertyFlagBits::eDeviceLocal, blasBuffer, blasMemory);
-
-        modelRes->blasBuffers.push_back(std::move(blasBuffer));
-        modelRes->blasMemories.push_back(std::move(blasMemory));
-
-        vk::AccelerationStructureCreateInfoKHR createInfo{};
-        createInfo.buffer = *modelRes->blasBuffers.back();
-        createInfo.size = sizeInfo.accelerationStructureSize;
-        createInfo.type = vk::AccelerationStructureTypeKHR::eBottomLevel;
-
-        vk::raii::AccelerationStructureKHR blas = vk::raii::AccelerationStructureKHR(device, createInfo);
-
-        vk::raii::Buffer scratchBuffer{nullptr};
-        vk::raii::DeviceMemory scratchMemory{nullptr};
-        VulkanUtils::createBuffer(device, physicalDevice, sizeInfo.buildScratchSize,
-                                  vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
-                                  vk::MemoryPropertyFlagBits::eDeviceLocal, scratchBuffer, scratchMemory);
-
-        buildInfo.dstAccelerationStructure = *blas;
-        buildInfo.scratchData.deviceAddress = VulkanUtils::getBufferDeviceAddress(device, scratchBuffer);
-
-        auto cmd = VulkanUtils::beginSingleTimeCommands(device, commandPool);
-        const vk::AccelerationStructureBuildRangeInfoKHR *pBuildRanges = buildRanges.data();
-        cmd.buildAccelerationStructuresKHR(buildInfo, pBuildRanges);
-        VulkanUtils::endSingleTimeCommands(device, queue, commandPool, cmd);
-
-        modelRes->blasElements.push_back(std::move(blas));
-    }
+    gpuResourceRegistry->buildBLAS(*modelRes, vertices, indices);
 }

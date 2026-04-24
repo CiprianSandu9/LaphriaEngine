@@ -13,6 +13,7 @@ struct DenoisePushConstants {
     int   isLastPass;  // 1 on iteration 4: write to finalOutput with tone mapping
     float phiColor;    // luminance edge-stopping weight (typical: 10.0)
     float phiNormal;   // normal edge-stopping exponent  (typical: 128.0)
+    float exposureScale;
 };
 [[vk::push_constant]] DenoisePushConstants push;
 
@@ -97,7 +98,7 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
         // The swapchain is B8G8R8A8_SRGB, so the blit automatically applies the
         // sRGB transfer function. Do NOT call linearToSRGB here — that would apply
         // gamma twice and wash out all dark values to mid-grey.
-        float3 tonemapped = acesTonemap(filtered);
+        float3 tonemapped = applyReadabilityTonemap(filtered, push.exposureScale);
         finalOutput[pixel] = float4(tonemapped, 1.0);
     } else {
         // Intermediate iteration: write to the OTHER ping-pong buffer.

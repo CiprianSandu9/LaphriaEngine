@@ -100,7 +100,7 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
         roughness *= mrSample.g;
         metallic  *= mrSample.b;
     }
-    roughness = clamp(roughness, MIN_ROUGHNESS, 1.0);
+    roughness = clamp(roughness, MIN_ROUGHNESS, GAMEPLAY_MAX_ROUGHNESS);
 
     // Normal Mapping
     float3 N = normalize(worldNormal);
@@ -134,6 +134,7 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
         float aoSample = globalTextures[NonUniformResourceIndex(mat.occlusionIndex + mat.globalTextureOffset)].SampleLevel(uv, 0.0).r;
         ao = 1.0 + mat.occlusionStrength * (aoSample - 1.0);
     }
+    calibrateGameplayMaterial(baseColor.rgb, roughness, ao);
 
     // Emissive
     float3 emissive = mat.emissiveFactor;
@@ -173,7 +174,7 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
     // Sun light
     {
         float3 H       = normalize(V + L);
-        float3 radiance = float3(1.0, 0.98, 0.95) * 3.0;
+        float3 radiance = gameplaySunRadiance(ubo.gameplayVisuals);
         float  NdotL   = max(dot(N, L), 0.0);
         float  NdotV   = max(dot(N, V), 0.0);
         float  D       = distributionGGX(N, H, roughness);
@@ -182,14 +183,15 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
         float3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.0001);
         float3 kD      = (1.0 - F) * (1.0 - metallic);
         float3 diffuse = kD * baseColor.rgb / PI;
-        Lo += (diffuse + specular) * radiance * NdotL * (1.0 - shadow);
+        float sunVisibility = lerp(GAMEPLAY_SHADOW_FLOOR, 1.0, 1.0 - shadow);
+        Lo += (diffuse + specular) * radiance * NdotL * sunVisibility;
     }
 
     // Fill light
     {
-        float3 fillL   = normalize(float3(-0.3, 0.5, -0.5));
+        float3 fillL   = normalize(GAMEPLAY_FILL_DIR);
         float3 H       = normalize(V + fillL);
-        float3 radiance = float3(0.6, 0.7, 0.9) * 0.5;
+        float3 radiance = gameplayFillRadiance(ubo.gameplayVisuals);
         float  NdotL   = max(dot(N, fillL), 0.0);
         float  NdotV   = max(dot(N, V), 0.0);
         float  D       = distributionGGX(N, H, roughness);
@@ -205,13 +207,14 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
     float3 sunDir3     = normalize(-ubo.lightDir.xyz);
     float3 skyColor    = evalSkyColor(float3(0.0, 1.0, 0.0), sunDir3); // zenith sky sample
     float3 groundColor = evalGroundColor(sunDir3);                      // earth-toned lower lobe
-    float3 ambientL    = lerp(groundColor, skyColor, N.y * 0.5 + 0.5);
+    float3 ambientL    = lerp(groundColor, skyColor, N.y * 0.5 + 0.5) * gameplayAmbientBoost(ubo.gameplayVisuals);
     float3 kS          = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
     float3 kD_amb      = (1.0 - kS) * (1.0 - metallic);
     float3 ambientContribution = (kD_amb * baseColor.rgb * ambientL + kS * ambientL * (1.0 - roughness * 0.5)) * ao;
 
     float3 finalColor = ambientContribution + Lo + emissive;
-    finalColor = acesTonemap(finalColor);
+    finalColor = applyReadabilityTonemap(finalColor, gameplayExposure(ubo.gameplayVisuals));
 
     payload.color = finalColor;
 }
+

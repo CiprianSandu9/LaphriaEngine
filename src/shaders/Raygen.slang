@@ -78,10 +78,13 @@ void main() {
         // Accumulate emissive contribution from the surface.
         radiance += throughput * payload.emission;
 
+        float3 N2 = payload.worldNormal;
+        float3 V2 = -ray.Direction;
+
         // ── NEE: direct lighting from directional sun light ────────────────
         // ubo.lightDir points FROM the light TOWARD the scene, so negate for surface-to-light.
         float3 Ldir  = normalize(-ubo.lightDir.xyz);
-        float  NdotL = max(dot(payload.worldNormal, Ldir), 0.0);
+        float  NdotL = max(dot(N2, Ldir), 0.0);
         if (NdotL > 0.0)
         {
             // Cheap occlusion ray: skip ClosestHit, terminate on first accepted hit.
@@ -98,7 +101,7 @@ void main() {
             shadowPayload.instanceID  = 0;
 
             RayDesc shadowRay;
-            shadowRay.Origin    = payload.hitPos + payload.worldNormal * 0.002;
+            shadowRay.Origin    = payload.hitPos + N2 * 0.002;
             shadowRay.Direction = Ldir;
             shadowRay.TMin      = 0.001;
             shadowRay.TMax      = 10000.0;
@@ -106,29 +109,54 @@ void main() {
                 RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
                 0xFF, 0, 0, 0, shadowRay, shadowPayload);
 
-            // hitT < 0 means Miss fired → surface is unoccluded.
-            if (shadowPayload.hitT < 0.0)
-            {
-                float3 V2    = -ray.Direction;
-                float3 N2    = payload.worldNormal;
-                float3 H     = normalize(Ldir + V2);
-                float  NdotV = max(dot(N2, V2),   0.0001);
-                float  VdotH = max(dot(V2, H),    0.0001);
+            // Use a shadow floor instead of fully blacked-out direct sun for readability.
+            float3 H     = normalize(Ldir + V2);
+            float  NdotV = max(dot(N2, V2),   0.0001);
+            float  VdotH = max(dot(V2, H),    0.0001);
 
-                float3 Fs   = fresnelSchlick(VdotH, payload.F0);
-                float  D    = distributionGGX(N2, H, payload.roughness);
-                float  G    = geometrySmith(N2, V2, Ldir, payload.roughness);
-                float3 kD   = (float3(1.0, 1.0, 1.0) - Fs) * (1.0 - payload.metallic);
+            float3 Fs   = fresnelSchlick(VdotH, payload.F0);
+            float  D    = distributionGGX(N2, H, payload.roughness);
+            float  G    = geometrySmith(N2, V2, Ldir, payload.roughness);
+            float3 kD   = (float3(1.0, 1.0, 1.0) - Fs) * (1.0 - payload.metallic);
 
-                float3 diffuse  = kD * payload.albedo / PI;
-                float3 specular = (D * Fs * G) / max(4.0 * NdotV * NdotL, 0.0001);
+            float3 diffuse  = kD * payload.albedo / PI;
+            float3 specular = (D * Fs * G) / max(4.0 * NdotV * NdotL, 0.0001);
 
-                float3 sunRadiance = float3(3.0, 2.8, 2.5);  // warm white directional light
-                radiance += throughput * (diffuse + specular) * NdotL * sunRadiance;
-            }
+            float3 sunRadiance = gameplaySunRadiance(ubo.gameplayVisuals);  // keep direct light aligned with raster/RT readability profile
+            radiance += throughput * (diffuse + specular) * NdotL * sunRadiance * ((shadowPayload.hitT < 0.0) ? 1.0 : GAMEPLAY_SHADOW_FLOOR);
         }
 
         // ── Primary-ray G-Buffer write (bounce 0 only) ─────────────────────
+        // Keep readability fill + ambient on the primary hit only; applying these helper
+        // lights on every bounce over-amplifies color cast and drifts toward blue.
+        if (bounce == 0) {
+            float3 fillL = normalize(GAMEPLAY_FILL_DIR);
+            float  NdotFill = max(dot(N2, fillL), 0.0);
+            if (NdotFill > 0.0) {
+                float3 Hfill  = normalize(fillL + V2);
+                float  NdotVFill = max(dot(N2, V2), 0.0001);
+                float  VdotHFill = max(dot(V2, Hfill), 0.0001);
+                float3 FsFill = fresnelSchlick(VdotHFill, payload.F0);
+                float  Dfill  = distributionGGX(N2, Hfill, payload.roughness);
+                float  Gfill  = geometrySmith(N2, V2, fillL, payload.roughness);
+                float3 kDFill = (float3(1.0, 1.0, 1.0) - FsFill) * (1.0 - payload.metallic);
+                float3 diffuseFill  = kDFill * payload.albedo / PI;
+                float3 specularFill = (Dfill * FsFill * Gfill) / max(4.0 * NdotVFill * NdotFill, 0.0001);
+                radiance += throughput * (diffuseFill + specularFill) * NdotFill * gameplayFillRadiance(ubo.gameplayVisuals);
+            }
+
+            // Hemispherical ambient term for low-SPP readability stability.
+            float3 sunDir3     = normalize(-ubo.lightDir.xyz);
+            float3 skyColor    = evalSkyColor(float3(0.0, 1.0, 0.0), sunDir3);
+            float3 groundColor = evalGroundColor(sunDir3);
+            float3 ambientL    = lerp(groundColor, skyColor, N2.y * 0.5 + 0.5) * gameplayAmbientBoost(ubo.gameplayVisuals);
+            float3 kS_amb      = fresnelSchlickRoughness(max(dot(N2, V2), 0.0), payload.F0, payload.roughness);
+            float3 kD_amb      = (1.0 - kS_amb) * (1.0 - payload.metallic);
+            float3 ambientContribution = (kD_amb * payload.albedo * ambientL + kS_amb * ambientL * (1.0 - payload.roughness * 0.5)) * payload.ao;
+            radiance += throughput * ambientContribution;
+        }
+
+        // Primary-ray G-Buffer write (bounce 0 only).
         if (bounce == 0) {
             gBufferNormals[launchID] = float4(payload.worldNormal, 0.0);
             gBufferDepth[launchID]   = payload.hitT;

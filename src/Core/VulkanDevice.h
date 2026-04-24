@@ -8,6 +8,8 @@
 // All downstream subsystems receive a reference to this object.
 class VulkanDevice {
 public:
+    ~VulkanDevice();
+
     void init(GLFWwindow *window);
 
     [[nodiscard]] vk::Format findDepthFormat() const;

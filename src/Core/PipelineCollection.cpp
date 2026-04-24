@@ -1,6 +1,7 @@
 #include "PipelineCollection.h"
 
 #include <array>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <vector>
@@ -8,15 +9,46 @@
 #include "EngineAuxiliary.h"
 #include "VulkanUtils.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 using namespace Laphria;
+
+namespace
+{
+std::filesystem::path getExecutableDirectory()
+{
+#ifdef _WIN32
+	std::array<char, MAX_PATH> buffer{};
+	const DWORD length = GetModuleFileNameA(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+	if (length > 0 && length < buffer.size())
+	{
+		return std::filesystem::path(std::string(buffer.data(), length)).parent_path();
+	}
+#endif
+	return std::filesystem::current_path();
+}
+
+std::vector<std::filesystem::path> buildShaderSearchCandidates(const std::string &filename)
+{
+	const std::filesystem::path relativePath(filename);
+	const std::filesystem::path executableDir = getExecutableDirectory();
+
+	return {
+	    executableDir / relativePath,
+	    std::filesystem::current_path() / relativePath};
+}
+}        // namespace
 
 // ── Top-level init ─────────────────────────────────────────────────────────
 
-void PipelineCollection::createDescriptorSetLayouts(VulkanDevice &dev)
+void PipelineCollection::createDescriptorSetLayouts(const VulkanDevice &dev)
 {
 	createGlobalDescriptorSetLayout(dev);
 	createMaterialDescriptorSetLayout(dev);
 	createComputeDescriptorSetLayout(dev);
+	createSkinningDescriptorSetLayout(dev);
 	createRayTracingDescriptorSetLayout(dev);
 	createPhysicsDescriptorSetLayout(dev);
 	createDenoiserDescriptorSetLayout(dev);
@@ -24,7 +56,7 @@ void PipelineCollection::createDescriptorSetLayouts(VulkanDevice &dev)
 
 // ── Descriptor Set Layout Implementations ──────────────────────────────────
 
-void PipelineCollection::createGlobalDescriptorSetLayout(VulkanDevice &dev)
+void PipelineCollection::createGlobalDescriptorSetLayout(const VulkanDevice &dev)
 {
 	// Binding 0 — UBO (view/proj/light/cascade matrices), used by all pipeline stages.
 	// Binding 1 — CSM shadow depth array (sampled image). ePartiallyBound so RT/compute
@@ -65,7 +97,7 @@ void PipelineCollection::createGlobalDescriptorSetLayout(VulkanDevice &dev)
 	descriptorSetLayoutGlobal = vk::raii::DescriptorSetLayout(dev.logicalDevice, layoutInfoGlobal);
 }
 
-void PipelineCollection::createMaterialDescriptorSetLayout(VulkanDevice &dev)
+void PipelineCollection::createMaterialDescriptorSetLayout(const VulkanDevice &dev)
 {
 	std::array<vk::DescriptorSetLayoutBinding, 2> matBindings = {
 	    vk::DescriptorSetLayoutBinding{
@@ -93,7 +125,7 @@ void PipelineCollection::createMaterialDescriptorSetLayout(VulkanDevice &dev)
 	descriptorSetLayoutMaterial = vk::raii::DescriptorSetLayout(dev.logicalDevice, layoutInfoMat);
 }
 
-void PipelineCollection::createComputeDescriptorSetLayout(VulkanDevice &dev)
+void PipelineCollection::createComputeDescriptorSetLayout(const VulkanDevice &dev)
 {
 	vk::DescriptorSetLayoutBinding storageImageBinding{
 	    .binding         = 0,
@@ -106,7 +138,37 @@ void PipelineCollection::createComputeDescriptorSetLayout(VulkanDevice &dev)
 	computeDescriptorSetLayout = vk::raii::DescriptorSetLayout(dev.logicalDevice, layoutInfoCompute);
 }
 
-void PipelineCollection::createPhysicsDescriptorSetLayout(VulkanDevice &dev)
+void PipelineCollection::createSkinningDescriptorSetLayout(const VulkanDevice &dev)
+{
+	std::array<vk::DescriptorSetLayoutBinding, 4> bindings = {
+	    vk::DescriptorSetLayoutBinding{
+	        .binding         = 0,
+	        .descriptorType  = vk::DescriptorType::eStorageBuffer,
+	        .descriptorCount = 1,
+	        .stageFlags      = vk::ShaderStageFlagBits::eCompute},
+	    vk::DescriptorSetLayoutBinding{
+	        .binding         = 1,
+	        .descriptorType  = vk::DescriptorType::eStorageBuffer,
+	        .descriptorCount = 1,
+	        .stageFlags      = vk::ShaderStageFlagBits::eCompute},
+	    vk::DescriptorSetLayoutBinding{
+	        .binding         = 2,
+	        .descriptorType  = vk::DescriptorType::eStorageBuffer,
+	        .descriptorCount = 1,
+	        .stageFlags      = vk::ShaderStageFlagBits::eCompute},
+	    vk::DescriptorSetLayoutBinding{
+	        .binding         = 3,
+	        .descriptorType  = vk::DescriptorType::eStorageBuffer,
+	        .descriptorCount = 1,
+	        .stageFlags      = vk::ShaderStageFlagBits::eCompute}};
+
+	vk::DescriptorSetLayoutCreateInfo layoutInfo{
+	    .bindingCount = static_cast<uint32_t>(bindings.size()),
+	    .pBindings    = bindings.data()};
+	skinningDescriptorSetLayout = vk::raii::DescriptorSetLayout(dev.logicalDevice, layoutInfo);
+}
+
+void PipelineCollection::createPhysicsDescriptorSetLayout(const VulkanDevice &dev)
 {
 	vk::DescriptorSetLayoutBinding ssboBinding{
 	    .binding         = 0,
@@ -119,7 +181,7 @@ void PipelineCollection::createPhysicsDescriptorSetLayout(VulkanDevice &dev)
 	physicsDescriptorSetLayout = vk::raii::DescriptorSetLayout(dev.logicalDevice, layoutInfo);
 }
 
-void PipelineCollection::createRayTracingDescriptorSetLayout(VulkanDevice &dev)
+void PipelineCollection::createRayTracingDescriptorSetLayout(const VulkanDevice &dev)
 {
 	// Set 0 — RT pipeline bindings.
 	// Bindings 0-4: acceleration structure + storage images written by Raygen.
@@ -191,7 +253,7 @@ void PipelineCollection::createRayTracingDescriptorSetLayout(VulkanDevice &dev)
 	rayTracingDescriptorSetLayout = vk::raii::DescriptorSetLayout(dev.logicalDevice, layoutInfo);
 }
 
-void PipelineCollection::createDenoiserDescriptorSetLayout(VulkanDevice &dev)
+void PipelineCollection::createDenoiserDescriptorSetLayout(const VulkanDevice &dev)
 {
 	// 13 storage image bindings covering all denoiser pass inputs and outputs.
 	// Both reprojection and A-Trous shaders share this single layout, selecting
@@ -218,7 +280,7 @@ void PipelineCollection::createDenoiserDescriptorSetLayout(VulkanDevice &dev)
 
 // ── Pipeline Layout Implementations ────────────────────────────────────────
 
-void PipelineCollection::createShadowPipelineLayout(VulkanDevice &dev)
+void PipelineCollection::createShadowPipelineLayout(const VulkanDevice &dev)
 {
 	// The shadow pass only needs the global UBO (set 0) for cascade view-proj matrices.
 	// Push constants carry modelMatrix (offset 0) and cascadeIndex (offset 68).
@@ -235,7 +297,7 @@ void PipelineCollection::createShadowPipelineLayout(VulkanDevice &dev)
 	shadowPipelineLayout = vk::raii::PipelineLayout(dev.logicalDevice, pipelineLayoutInfo);
 }
 
-void PipelineCollection::createGraphicsPipelineLayout(VulkanDevice &dev)
+void PipelineCollection::createGraphicsPipelineLayout(const VulkanDevice &dev)
 {
 	vk::PushConstantRange pushConstantRange{
 	    .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
@@ -250,7 +312,7 @@ void PipelineCollection::createGraphicsPipelineLayout(VulkanDevice &dev)
 	graphicsPipelineLayout = vk::raii::PipelineLayout(dev.logicalDevice, pipelineLayoutInfo);
 }
 
-void PipelineCollection::createComputePipelineLayout(VulkanDevice &dev)
+void PipelineCollection::createComputePipelineLayout(const VulkanDevice &dev)
 {
 	// The starfield compute shader only uses Set 0 (storage image) and push constants.
 	// Keeping the layout minimal avoids requiring the global UBO and material sets to be
@@ -267,7 +329,21 @@ void PipelineCollection::createComputePipelineLayout(VulkanDevice &dev)
 	computePipelineLayout = vk::raii::PipelineLayout(dev.logicalDevice, pipelineLayoutInfo);
 }
 
-void PipelineCollection::createPhysicsPipelineLayout(VulkanDevice &dev)
+void PipelineCollection::createSkinningPipelineLayout(const VulkanDevice &dev)
+{
+	vk::PushConstantRange pushConstantRange{
+	    .stageFlags = vk::ShaderStageFlagBits::eCompute,
+	    .offset     = 0,
+	    .size       = sizeof(SkinningPushConstants)};
+	vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
+	    .setLayoutCount         = 1,
+	    .pSetLayouts            = &*skinningDescriptorSetLayout,
+	    .pushConstantRangeCount = 1,
+	    .pPushConstantRanges    = &pushConstantRange};
+	skinningPipelineLayout = vk::raii::PipelineLayout(dev.logicalDevice, pipelineLayoutInfo);
+}
+
+void PipelineCollection::createPhysicsPipelineLayout(const VulkanDevice &dev)
 {
 	vk::PushConstantRange pushConstantRange{
 	    .stageFlags = vk::ShaderStageFlagBits::eCompute,
@@ -281,7 +357,7 @@ void PipelineCollection::createPhysicsPipelineLayout(VulkanDevice &dev)
 	physicsPipelineLayout = vk::raii::PipelineLayout(dev.logicalDevice, pipelineLayoutInfo);
 }
 
-void PipelineCollection::createRayTracingPipelineLayout(VulkanDevice &dev)
+void PipelineCollection::createRayTracingPipelineLayout(const VulkanDevice &dev)
 {
 	std::array            layouts = {*rayTracingDescriptorSetLayout, *descriptorSetLayoutGlobal};
 	vk::PushConstantRange pushConstantRange{
@@ -462,7 +538,7 @@ void PipelineCollection::createShadowPipeline(VulkanDevice &dev)
 	shadowPipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
 }
 
-void PipelineCollection::createComputePipeline(VulkanDevice &dev)
+void PipelineCollection::createComputePipeline(const VulkanDevice &dev)
 {
 	vk::raii::ShaderModule shaderModule = createShaderModule(dev, readFile("Shaders/Compute.slang.spv"));
 
@@ -479,7 +555,22 @@ void PipelineCollection::createComputePipeline(VulkanDevice &dev)
 	computePipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
 }
 
-void PipelineCollection::createPhysicsPipeline(VulkanDevice &dev)
+void PipelineCollection::createSkinningPipeline(const VulkanDevice &dev)
+{
+	createSkinningPipelineLayout(dev);
+
+	vk::raii::ShaderModule shaderModule = createShaderModule(dev, readFile("Shaders/Skinning.slang.spv"));
+	vk::PipelineShaderStageCreateInfo computeShaderStageInfo{
+	    .stage  = vk::ShaderStageFlagBits::eCompute,
+	    .module = *shaderModule,
+	    .pName  = "skinningMain"};
+	vk::ComputePipelineCreateInfo pipelineInfo{
+	    .stage  = computeShaderStageInfo,
+	    .layout = *skinningPipelineLayout};
+	skinningPipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
+}
+
+void PipelineCollection::createPhysicsPipeline(const VulkanDevice &dev)
 {
 	createPhysicsPipelineLayout(dev);
 
@@ -494,7 +585,7 @@ void PipelineCollection::createPhysicsPipeline(VulkanDevice &dev)
 	physicsPipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
 }
 
-void PipelineCollection::createRayTracingPipeline(VulkanDevice &dev)
+void PipelineCollection::createRayTracingPipeline(const VulkanDevice &dev)
 {
 	vk::raii::ShaderModule rgenModule  = createShaderModule(dev, readFile("Shaders/Raygen.slang.spv"));
 	vk::raii::ShaderModule rmissModule = createShaderModule(dev, readFile("Shaders/Miss.slang.spv"));
@@ -552,7 +643,7 @@ void PipelineCollection::createRayTracingPipeline(VulkanDevice &dev)
 	rayTracingPipeline = dev.logicalDevice.createRayTracingPipelineKHR(nullptr, nullptr, pipelineInfo);
 }
 
-void PipelineCollection::createShaderBindingTable(VulkanDevice &dev)
+void PipelineCollection::createShaderBindingTable(const VulkanDevice &dev)
 {
 	const uint32_t handleSize      = dev.rayTracingProperties.shaderGroupHandleSize;
 	const uint32_t handleAlignment = dev.rayTracingProperties.shaderGroupHandleAlignment;
@@ -564,25 +655,25 @@ void PipelineCollection::createShaderBindingTable(VulkanDevice &dev)
 	const uint32_t missSBTSize   = VulkanUtils::alignUp(handleSizeAligned, baseAlignment);
 	const uint32_t hitSBTSize    = VulkanUtils::alignUp(handleSizeAligned, baseAlignment);
 
-	const uint32_t       groupCount = 3;
+	constexpr uint32_t   groupCount = 3;
 	const uint32_t       sbtSize    = groupCount * handleSize;
 	std::vector<uint8_t> handles    = rayTracingPipeline.getRayTracingShaderGroupHandlesKHR<uint8_t>(0, groupCount, sbtSize);
 
-	auto createSBTBuffer = [&](vk::raii::Buffer &buffer, vk::raii::DeviceMemory &memory, uint32_t size, void *data, uint32_t handleOffset) {
+	auto createSBTBuffer = [&](VulkanUtils::VmaBuffer &buffer, uint32_t size, void *data, uint32_t handleOffset) {
 		VulkanUtils::createBuffer(
 		    dev.logicalDevice, dev.physicalDevice, size,
 		    vk::BufferUsageFlagBits::eShaderBindingTableKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
 		    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-		    buffer, memory);
+		    buffer);
 
-		void *mapped = memory.mapMemory(0, size);
-		memcpy(mapped, (uint8_t *) data + handleOffset, handleSize);
-		memory.unmapMemory();
+		void *mapped = buffer.memory.mapMemory(0, size);
+		memcpy(mapped, static_cast<uint8_t *>(data) + handleOffset, handleSize);
+		buffer.memory.unmapMemory();
 	};
 
-	createSBTBuffer(raygenSBTBuffer, raygenSBTMemory, raygenSBTSize, handles.data(), 0);
-	createSBTBuffer(missSBTBuffer, missSBTMemory, missSBTSize, handles.data(), handleSize);
-	createSBTBuffer(hitSBTBuffer, hitSBTMemory, hitSBTSize, handles.data(), handleSize * 2);
+	createSBTBuffer(raygenSBTBuffer, raygenSBTSize, handles.data(), 0);
+	createSBTBuffer(missSBTBuffer, missSBTSize, handles.data(), handleSize);
+	createSBTBuffer(hitSBTBuffer, hitSBTSize, handles.data(), handleSize * 2);
 
 	vk::BufferDeviceAddressInfo raygenInfo{.buffer = *raygenSBTBuffer};
 	raygenRegion.deviceAddress = dev.logicalDevice.getBufferAddress(raygenInfo);
@@ -600,7 +691,7 @@ void PipelineCollection::createShaderBindingTable(VulkanDevice &dev)
 	hitRegion.size          = hitSBTSize;
 }
 
-void PipelineCollection::createClassicRTPipeline(VulkanDevice &dev)
+void PipelineCollection::createClassicRTPipeline(const VulkanDevice &dev)
 {
 	// The classic RT pipeline reuses rayTracingPipelineLayout (same descriptor sets and push constants).
 	// Only the shader stages differ: RT_ prefixed shaders with the simple RayPayload.
@@ -658,7 +749,7 @@ void PipelineCollection::createClassicRTPipeline(VulkanDevice &dev)
 	classicRTPipeline = dev.logicalDevice.createRayTracingPipelineKHR(nullptr, nullptr, pipelineInfo);
 }
 
-void PipelineCollection::createClassicRTShaderBindingTable(VulkanDevice &dev)
+void PipelineCollection::createClassicRTShaderBindingTable(const VulkanDevice &dev)
 {
 	const uint32_t handleSize      = dev.rayTracingProperties.shaderGroupHandleSize;
 	const uint32_t handleAlignment = dev.rayTracingProperties.shaderGroupHandleAlignment;
@@ -669,25 +760,25 @@ void PipelineCollection::createClassicRTShaderBindingTable(VulkanDevice &dev)
 	const uint32_t missSBTSize       = VulkanUtils::alignUp(handleSizeAligned, baseAlignment);
 	const uint32_t hitSBTSize        = VulkanUtils::alignUp(handleSizeAligned, baseAlignment);
 
-	const uint32_t       groupCount = 3;
+	constexpr uint32_t   groupCount = 3;
 	const uint32_t       sbtSize    = groupCount * handleSize;
 	std::vector<uint8_t> handles    = classicRTPipeline.getRayTracingShaderGroupHandlesKHR<uint8_t>(0, groupCount, sbtSize);
 
-	auto createSBTBuffer = [&](vk::raii::Buffer &buffer, vk::raii::DeviceMemory &memory, uint32_t size, void *data, uint32_t handleOffset) {
+	auto createSBTBuffer = [&](VulkanUtils::VmaBuffer &buffer, uint32_t size, void *data, uint32_t handleOffset) {
 		VulkanUtils::createBuffer(
 		    dev.logicalDevice, dev.physicalDevice, size,
 		    vk::BufferUsageFlagBits::eShaderBindingTableKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
 		    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-		    buffer, memory);
+		    buffer);
 
-		void *mapped = memory.mapMemory(0, size);
-		memcpy(mapped, (uint8_t *) data + handleOffset, handleSize);
-		memory.unmapMemory();
+		void *mapped = buffer.memory.mapMemory(0, size);
+		memcpy(mapped, static_cast<uint8_t *>(data) + handleOffset, handleSize);
+		buffer.memory.unmapMemory();
 	};
 
-	createSBTBuffer(classicRTRaygenSBTBuffer, classicRTRaygenSBTMemory, raygenSBTSize, handles.data(), 0);
-	createSBTBuffer(classicRTMissSBTBuffer,   classicRTMissSBTMemory,   missSBTSize,   handles.data(), handleSize);
-	createSBTBuffer(classicRTHitSBTBuffer,    classicRTHitSBTMemory,    hitSBTSize,    handles.data(), handleSize * 2);
+	createSBTBuffer(classicRTRaygenSBTBuffer, raygenSBTSize, handles.data(), 0);
+	createSBTBuffer(classicRTMissSBTBuffer,   missSBTSize,   handles.data(), handleSize);
+	createSBTBuffer(classicRTHitSBTBuffer,    hitSBTSize,    handles.data(), handleSize * 2);
 
 	vk::BufferDeviceAddressInfo raygenInfo{.buffer = *classicRTRaygenSBTBuffer};
 	classicRTRaygenRegion.deviceAddress = dev.logicalDevice.getBufferAddress(raygenInfo);
@@ -705,7 +796,7 @@ void PipelineCollection::createClassicRTShaderBindingTable(VulkanDevice &dev)
 	classicRTHitRegion.size          = hitSBTSize;
 }
 
-void PipelineCollection::createDenoiserPipelineLayout(VulkanDevice &dev)
+void PipelineCollection::createDenoiserPipelineLayout(const VulkanDevice &dev)
 {
 	vk::PushConstantRange pushRange{
 	    .stageFlags = vk::ShaderStageFlagBits::eCompute,
@@ -719,7 +810,7 @@ void PipelineCollection::createDenoiserPipelineLayout(VulkanDevice &dev)
 	denoiserPipelineLayout = vk::raii::PipelineLayout(dev.logicalDevice, info);
 }
 
-void PipelineCollection::createDenoiserPipelines(VulkanDevice &dev)
+void PipelineCollection::createDenoiserPipelines(const VulkanDevice &dev)
 {
 	createDenoiserPipelineLayout(dev);
 
@@ -748,7 +839,7 @@ void PipelineCollection::createDenoiserPipelines(VulkanDevice &dev)
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-vk::raii::ShaderModule PipelineCollection::createShaderModule(VulkanDevice            &dev,
+vk::raii::ShaderModule PipelineCollection::createShaderModule(const VulkanDevice            &dev,
                                                               const std::vector<char> &code) const
 {
 	if (code.empty() || code.size() % 4 != 0)
@@ -762,7 +853,18 @@ vk::raii::ShaderModule PipelineCollection::createShaderModule(VulkanDevice      
 
 std::vector<char> PipelineCollection::readFile(const std::string &filename)
 {
-	std::ifstream file(filename, std::ios::ate | std::ios::binary);
+	std::ifstream         file;
+	std::filesystem::path resolvedPath;
+	for (const auto &candidate : buildShaderSearchCandidates(filename))
+	{
+		file.open(candidate, std::ios::ate | std::ios::binary);
+		if (file.is_open())
+		{
+			resolvedPath = candidate;
+			break;
+		}
+		file.clear();
+	}
 	if (!file.is_open())
 	{
 		throw std::runtime_error("failed to open file: " + filename);
@@ -773,7 +875,7 @@ std::vector<char> PipelineCollection::readFile(const std::string &filename)
 	file.read(buffer.data(), fileSize);
 	if (file.fail())
 	{
-		throw std::runtime_error("failed to read file: " + filename);
+		throw std::runtime_error("failed to read file: " + resolvedPath.string());
 	}
 	file.close();
 	return buffer;

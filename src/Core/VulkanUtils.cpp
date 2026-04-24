@@ -1,9 +1,245 @@
 #include "VulkanUtils.h"
+#include "VmaContext.h"
+
+#include <atomic>
+#include <cassert>
+#include <mutex>
+#include <unordered_map>
+#include <utility>
 
 namespace Laphria
 {
 namespace VulkanUtils
 {
+namespace
+{
+std::atomic<uint64_t> gAllocationCounter{0};
+std::mutex gVmaAllocationMutex;
+std::unordered_map<VkBuffer, VmaAllocation> gBufferAllocations;
+std::unordered_map<VkImage, VmaAllocation> gImageAllocations;
+
+bool shouldUseVma(vk::MemoryPropertyFlags properties)
+{
+	if (!VmaContext::isInitialized())
+	{
+		return false;
+	}
+
+	const bool hasDeviceLocal = static_cast<bool>(properties & vk::MemoryPropertyFlagBits::eDeviceLocal);
+	const bool hasHostVisible = static_cast<bool>(properties & vk::MemoryPropertyFlagBits::eHostVisible);
+	return hasDeviceLocal && !hasHostVisible;
+}
+
+void releaseBufferAllocation(vk::Buffer buffer)
+{
+	if (static_cast<VkBuffer>(buffer) == VK_NULL_HANDLE || !VmaContext::isInitialized())
+	{
+		return;
+	}
+	VmaAllocator allocator = VmaContext::get();
+
+	const auto it = gBufferAllocations.find(static_cast<VkBuffer>(buffer));
+	if (it != gBufferAllocations.end())
+	{
+		vmaFreeMemory(allocator, it->second);
+		gBufferAllocations.erase(it);
+	}
+}
+
+void releaseImageAllocation(vk::Image image)
+{
+	if (static_cast<VkImage>(image) == VK_NULL_HANDLE || !VmaContext::isInitialized())
+	{
+		return;
+	}
+	VmaAllocator allocator = VmaContext::get();
+
+	const auto it = gImageAllocations.find(static_cast<VkImage>(image));
+	if (it != gImageAllocations.end())
+	{
+		vmaFreeMemory(allocator, it->second);
+		gImageAllocations.erase(it);
+	}
+}
+}
+
+VmaBuffer::~VmaBuffer()
+{
+	reset();
+}
+
+VmaBuffer::VmaBuffer(VmaBuffer &&other) noexcept
+    : buffer(std::move(other.buffer)),
+      memory(std::move(other.memory)),
+      allocator(other.allocator),
+      allocation(other.allocation)
+{
+	other.allocator = VK_NULL_HANDLE;
+	other.allocation = VK_NULL_HANDLE;
+}
+
+VmaBuffer &VmaBuffer::operator=(VmaBuffer &&other) noexcept
+{
+	if (this != &other)
+	{
+		reset();
+		buffer = std::move(other.buffer);
+		memory = std::move(other.memory);
+		allocator = other.allocator;
+		allocation = other.allocation;
+		other.allocator = VK_NULL_HANDLE;
+		other.allocation = VK_NULL_HANDLE;
+	}
+	return *this;
+}
+
+void VmaBuffer::reset()
+{
+	if (*buffer)
+	{
+		buffer = nullptr;
+	}
+	if (allocation != VK_NULL_HANDLE && allocator != VK_NULL_HANDLE)
+	{
+		vmaFreeMemory(allocator, allocation);
+		allocation = VK_NULL_HANDLE;
+		allocator = VK_NULL_HANDLE;
+	}
+	if (*memory)
+	{
+		memory = nullptr;
+	}
+}
+
+bool VmaBuffer::valid() const
+{
+	return static_cast<bool>(*buffer);
+}
+
+vk::Buffer VmaBuffer::operator*() const
+{
+	return *buffer;
+}
+
+VmaImage::~VmaImage()
+{
+	reset();
+}
+
+VmaImage::VmaImage(VmaImage &&other) noexcept
+    : image(std::move(other.image)),
+      memory(std::move(other.memory)),
+      allocator(other.allocator),
+      allocation(other.allocation)
+{
+	other.allocator = VK_NULL_HANDLE;
+	other.allocation = VK_NULL_HANDLE;
+}
+
+VmaImage &VmaImage::operator=(VmaImage &&other) noexcept
+{
+	if (this != &other)
+	{
+		reset();
+		image = std::move(other.image);
+		memory = std::move(other.memory);
+		allocator = other.allocator;
+		allocation = other.allocation;
+		other.allocator = VK_NULL_HANDLE;
+		other.allocation = VK_NULL_HANDLE;
+	}
+	return *this;
+}
+
+void VmaImage::reset()
+{
+	if (*image)
+	{
+		image = nullptr;
+	}
+	if (allocation != VK_NULL_HANDLE && allocator != VK_NULL_HANDLE)
+	{
+		vmaFreeMemory(allocator, allocation);
+		allocation = VK_NULL_HANDLE;
+		allocator = VK_NULL_HANDLE;
+	}
+	if (*memory)
+	{
+		memory = nullptr;
+	}
+}
+
+bool VmaImage::valid() const
+{
+	return static_cast<bool>(*image);
+}
+
+vk::Image VmaImage::operator*() const
+{
+	return *image;
+}
+
+void resetAllocationCounter()
+{
+	gAllocationCounter.store(0, std::memory_order_relaxed);
+}
+
+uint64_t getAllocationCounter()
+{
+	return gAllocationCounter.load(std::memory_order_relaxed);
+}
+
+void destroyBuffer(vk::raii::Buffer &buffer)
+{
+	if (!*buffer)
+	{
+		return;
+	}
+
+	std::scoped_lock lock(gVmaAllocationMutex);
+	const VkBuffer raw = *buffer;
+	buffer = nullptr;
+	releaseBufferAllocation(raw);
+}
+
+void destroyImage(vk::raii::Image &image)
+{
+	if (!*image)
+	{
+		return;
+	}
+
+	std::scoped_lock lock(gVmaAllocationMutex);
+	const VkImage raw = *image;
+	image = nullptr;
+	releaseImageAllocation(raw);
+}
+
+TrackedVmaAllocations getTrackedVmaAllocations()
+{
+	std::scoped_lock lock(gVmaAllocationMutex);
+	return {
+	    .trackedBuffers = static_cast<uint32_t>(gBufferAllocations.size()),
+	    .trackedImages  = static_cast<uint32_t>(gImageAllocations.size())};
+}
+
+void logTrackedVmaAllocationLeaks()
+{
+	const TrackedVmaAllocations tracked = getTrackedVmaAllocations();
+	if (tracked.trackedBuffers == 0 && tracked.trackedImages == 0)
+	{
+		return;
+	}
+
+	LOGW("Potential VMA allocation leak detected: buffers=%u images=%u",
+	     tracked.trackedBuffers,
+	     tracked.trackedImages);
+#ifndef NDEBUG
+	assert((tracked.trackedBuffers == 0 && tracked.trackedImages == 0) &&
+	       "Potential VMA allocation leak detected; destroy VMA-backed resources with VulkanUtils::destroyBuffer/destroyImage.");
+#endif
+}
+
 uint32_t findMemoryType(const vk::raii::PhysicalDevice &physicalDevice, uint32_t typeFilter, vk::MemoryPropertyFlags properties)
 {
 	vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
@@ -33,6 +269,37 @@ void createBuffer(const vk::raii::Device &device, const vk::raii::PhysicalDevice
 
 	buffer = vk::raii::Buffer(device, bufferInfo);
 
+	if (shouldUseVma(properties))
+	{
+		VmaAllocator allocator = VmaContext::get();
+		VmaAllocationCreateInfo allocCreateInfo{};
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_UNKNOWN;
+		allocCreateInfo.requiredFlags = static_cast<VkMemoryPropertyFlags>(properties);
+		allocCreateInfo.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+
+		VmaAllocation allocation = VK_NULL_HANDLE;
+		VkResult result = vmaAllocateMemoryForBuffer(allocator, *buffer, &allocCreateInfo, &allocation, nullptr);
+		if (result != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to allocate VMA memory for buffer");
+		}
+
+		result = vmaBindBufferMemory(allocator, allocation, *buffer);
+		if (result != VK_SUCCESS)
+		{
+			vmaFreeMemory(allocator, allocation);
+			throw std::runtime_error("failed to bind VMA memory for buffer");
+		}
+
+		{
+			std::scoped_lock lock(gVmaAllocationMutex);
+			gBufferAllocations[*buffer] = allocation;
+		}
+
+		bufferMemory = nullptr;
+		return;
+	}
+
 	vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
 	vk::MemoryAllocateInfo allocInfo{};
 	allocInfo.allocationSize  = memRequirements.size;
@@ -46,7 +313,66 @@ void createBuffer(const vk::raii::Device &device, const vk::raii::PhysicalDevice
 	}
 
 	bufferMemory = vk::raii::DeviceMemory(device, allocInfo);
+	gAllocationCounter.fetch_add(1, std::memory_order_relaxed);
 	buffer.bindMemory(*bufferMemory, 0);
+}
+
+void createBuffer(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
+                  vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties,
+                  VmaBuffer &buffer)
+{
+	buffer.reset();
+
+	vk::BufferCreateInfo bufferInfo{};
+	bufferInfo.size        = size;
+	bufferInfo.usage       = usage;
+	bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+	buffer.buffer = vk::raii::Buffer(device, bufferInfo);
+
+	if (shouldUseVma(properties))
+	{
+		VmaAllocator allocator = VmaContext::get();
+		VmaAllocationCreateInfo allocCreateInfo{};
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_UNKNOWN;
+		allocCreateInfo.requiredFlags = static_cast<VkMemoryPropertyFlags>(properties);
+		allocCreateInfo.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+
+		VmaAllocation allocation = VK_NULL_HANDLE;
+		VkResult result = vmaAllocateMemoryForBuffer(allocator, *buffer.buffer, &allocCreateInfo, &allocation, nullptr);
+		if (result != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to allocate VMA memory for buffer");
+		}
+
+		result = vmaBindBufferMemory(allocator, allocation, *buffer.buffer);
+		if (result != VK_SUCCESS)
+		{
+			vmaFreeMemory(allocator, allocation);
+			throw std::runtime_error("failed to bind VMA memory for buffer");
+		}
+
+		buffer.memory = nullptr;
+		buffer.allocator = allocator;
+		buffer.allocation = allocation;
+		return;
+	}
+
+	vk::MemoryRequirements memRequirements = buffer.buffer.getMemoryRequirements();
+	vk::MemoryAllocateInfo allocInfo{};
+	allocInfo.allocationSize  = memRequirements.size;
+	allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
+
+	vk::MemoryAllocateFlagsInfo allocFlagsInfo{};
+	if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress)
+	{
+		allocFlagsInfo.flags = vk::MemoryAllocateFlagBits::eDeviceAddress;
+		allocInfo.pNext      = &allocFlagsInfo;
+	}
+
+	buffer.memory = vk::raii::DeviceMemory(device, allocInfo);
+	gAllocationCounter.fetch_add(1, std::memory_order_relaxed);
+	buffer.buffer.bindMemory(*buffer.memory, 0);
 }
 
 // Allocates a one-shot command buffer and begins recording.
@@ -89,6 +415,18 @@ void copyBuffer(const vk::raii::Device &device, const vk::raii::CommandPool &com
 	endSingleTimeCommands(device, queue, commandPool, commandBuffer);
 }
 
+void copyBuffer(const vk::raii::Device &device, const vk::raii::CommandPool &commandPool, const vk::raii::Queue &queue,
+                const vk::raii::Buffer &srcBuffer, const VmaBuffer &dstBuffer, vk::DeviceSize size)
+{
+	copyBuffer(device, commandPool, queue, srcBuffer, dstBuffer.buffer, size);
+}
+
+void copyBuffer(const vk::raii::Device &device, const vk::raii::CommandPool &commandPool, const vk::raii::Queue &queue,
+                const VmaBuffer &srcBuffer, const VmaBuffer &dstBuffer, vk::DeviceSize size)
+{
+	copyBuffer(device, commandPool, queue, srcBuffer.buffer, dstBuffer.buffer, size);
+}
+
 void createImage(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
                  uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling,
                  vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties,
@@ -115,13 +453,106 @@ void createImage(const vk::raii::Device &device, const vk::raii::PhysicalDevice 
 
 	image = vk::raii::Image(device, imageInfo);
 
+	if (shouldUseVma(properties))
+	{
+		VmaAllocator allocator = VmaContext::get();
+		VmaAllocationCreateInfo allocCreateInfo{};
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_UNKNOWN;
+		allocCreateInfo.requiredFlags = static_cast<VkMemoryPropertyFlags>(properties);
+		allocCreateInfo.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+
+		VmaAllocation allocation = VK_NULL_HANDLE;
+		VkResult result = vmaAllocateMemoryForImage(allocator, *image, &allocCreateInfo, &allocation, nullptr);
+		if (result != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to allocate VMA memory for image");
+		}
+
+		result = vmaBindImageMemory(allocator, allocation, *image);
+		if (result != VK_SUCCESS)
+		{
+			vmaFreeMemory(allocator, allocation);
+			throw std::runtime_error("failed to bind VMA memory for image");
+		}
+
+		{
+			std::scoped_lock lock(gVmaAllocationMutex);
+			gImageAllocations[*image] = allocation;
+		}
+
+		imageMemory = nullptr;
+		return;
+	}
+
 	vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
 	vk::MemoryAllocateInfo allocInfo{};
 	allocInfo.allocationSize  = memRequirements.size;
 	allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
 
 	imageMemory = vk::raii::DeviceMemory(device, allocInfo);
+	gAllocationCounter.fetch_add(1, std::memory_order_relaxed);
 	image.bindMemory(*imageMemory, 0);
+}
+
+void createImage(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
+                 uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling,
+                 vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties,
+                 VmaImage &image, uint32_t arrayLayers)
+{
+	image.reset();
+
+	vk::ImageCreateInfo imageInfo{};
+	imageInfo.imageType     = vk::ImageType::e2D;
+	imageInfo.extent.width  = width;
+	imageInfo.extent.height = height;
+	imageInfo.extent.depth  = 1;
+	imageInfo.mipLevels     = 1;
+	imageInfo.arrayLayers   = arrayLayers;
+	imageInfo.format        = format;
+	imageInfo.tiling        = tiling;
+	imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+	imageInfo.usage         = usage;
+	imageInfo.samples       = vk::SampleCountFlagBits::e1;
+	imageInfo.sharingMode   = vk::SharingMode::eExclusive;
+
+	image.image = vk::raii::Image(device, imageInfo);
+
+	if (shouldUseVma(properties))
+	{
+		VmaAllocator allocator = VmaContext::get();
+		VmaAllocationCreateInfo allocCreateInfo{};
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_UNKNOWN;
+		allocCreateInfo.requiredFlags = static_cast<VkMemoryPropertyFlags>(properties);
+		allocCreateInfo.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+
+		VmaAllocation allocation = VK_NULL_HANDLE;
+		VkResult result = vmaAllocateMemoryForImage(allocator, *image.image, &allocCreateInfo, &allocation, nullptr);
+		if (result != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to allocate VMA memory for image");
+		}
+
+		result = vmaBindImageMemory(allocator, allocation, *image.image);
+		if (result != VK_SUCCESS)
+		{
+			vmaFreeMemory(allocator, allocation);
+			throw std::runtime_error("failed to bind VMA memory for image");
+		}
+
+		image.memory = nullptr;
+		image.allocator = allocator;
+		image.allocation = allocation;
+		return;
+	}
+
+	vk::MemoryRequirements memRequirements = image.image.getMemoryRequirements();
+	vk::MemoryAllocateInfo allocInfo{};
+	allocInfo.allocationSize  = memRequirements.size;
+	allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
+
+	image.memory = vk::raii::DeviceMemory(device, allocInfo);
+	gAllocationCounter.fetch_add(1, std::memory_order_relaxed);
+	image.image.bindMemory(*image.memory, 0);
 }
 
 vk::raii::ImageView createImageView(const vk::raii::Device &device, vk::Image image, vk::Format format, vk::ImageAspectFlags aspectFlags)
@@ -278,6 +709,28 @@ void createDeviceLocalBufferFromData(const vk::raii::Device &device, const vk::r
 	copyBuffer(device, commandPool, queue, stagingBuffer, buffer, size);
 }
 
+void createDeviceLocalBufferFromData(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
+                                     const vk::raii::CommandPool &commandPool, const vk::raii::Queue &queue,
+                                     const void *data, vk::DeviceSize size, vk::BufferUsageFlags usage,
+                                     VmaBuffer &buffer)
+{
+	vk::raii::Buffer       stagingBuffer{nullptr};
+	vk::raii::DeviceMemory stagingMemory{nullptr};
+
+	createBuffer(device, physicalDevice, size, vk::BufferUsageFlagBits::eTransferSrc,
+	             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+	             stagingBuffer, stagingMemory);
+
+	void *mapped = stagingMemory.mapMemory(0, size);
+	memcpy(mapped, data, size);
+	stagingMemory.unmapMemory();
+
+	createBuffer(device, physicalDevice, size, vk::BufferUsageFlagBits::eTransferDst | usage,
+	             vk::MemoryPropertyFlagBits::eDeviceLocal, buffer);
+
+	copyBuffer(device, commandPool, queue, stagingBuffer, buffer, size);
+}
+
 // Uploads raw pixel data to a device-local sampled image via a staging buffer.
 // Transitions: Undefined → TransferDst → ShaderReadOnly.
 void createTextureImageFromData(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
@@ -299,6 +752,31 @@ void createTextureImageFromData(const vk::raii::Device &device, const vk::raii::
 	createImage(device, physicalDevice, width, height, format, vk::ImageTiling::eOptimal,
 	            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
 	            vk::MemoryPropertyFlagBits::eDeviceLocal, image, imageMemory);
+
+	transitionImageLayout(device, commandPool, queue, *image, format, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+	copyBufferToImage(device, commandPool, queue, *stagingBuffer, *image, width, height);
+	transitionImageLayout(device, commandPool, queue, *image, format, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
+void createTextureImageFromData(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
+                                const vk::raii::CommandPool &commandPool, const vk::raii::Queue &queue,
+                                const void *data, vk::DeviceSize size, uint32_t width, uint32_t height, vk::Format format,
+                                VmaImage &image)
+{
+	vk::raii::Buffer       stagingBuffer{nullptr};
+	vk::raii::DeviceMemory stagingMemory{nullptr};
+
+	createBuffer(device, physicalDevice, size, vk::BufferUsageFlagBits::eTransferSrc,
+	             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+	             stagingBuffer, stagingMemory);
+
+	void *mapped = stagingMemory.mapMemory(0, size);
+	memcpy(mapped, data, size);
+	stagingMemory.unmapMemory();
+
+	createImage(device, physicalDevice, width, height, format, vk::ImageTiling::eOptimal,
+	            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+	            vk::MemoryPropertyFlagBits::eDeviceLocal, image);
 
 	transitionImageLayout(device, commandPool, queue, *image, format, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 	copyBufferToImage(device, commandPool, queue, *stagingBuffer, *image, width, height);
@@ -329,6 +807,11 @@ vk::DeviceAddress getBufferDeviceAddress(const vk::raii::Device &device, const v
 	vk::BufferDeviceAddressInfo info{};
 	info.buffer = *buffer;
 	return device.getBufferAddress(info);
+}
+
+vk::DeviceAddress getBufferDeviceAddress(const vk::raii::Device &device, const VmaBuffer &buffer)
+{
+	return getBufferDeviceAddress(device, buffer.buffer);
 }
 }        // namespace VulkanUtils
 }        // namespace Laphria

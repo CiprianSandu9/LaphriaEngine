@@ -6,13 +6,13 @@ struct RayPayload {
     uint   isShadowed;
 };
 
-// Set 1 — global UBO (needed for lightDir → sun direction).
+// Set 1 - global UBO (needed for lightDir -> sun direction).
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 
 [shader("miss")]
 void main(inout RayPayload payload) {
     if (payload.isShadowed == 1) {
-        payload.isShadowed = 0;  // Not occluded — ray reached sky without hitting anything.
+        payload.isShadowed = 0;  // Not occluded - ray reached sky without hitting anything.
         return;
     }
 

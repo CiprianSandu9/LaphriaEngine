@@ -1,10 +1,9 @@
 #include "InputSystem.h"
 
-#include <glm/gtc/constants.hpp>
-
-void InputSystem::init(GLFWwindow *window, Camera &cam, bool &resized) {
+void InputSystem::init(GLFWwindow *window, Camera &cam, bool &resized, bool enableCameraInput) {
     camera              = &cam;
     framebufferResizedPtr = &resized;
+    cameraInputEnabled = enableCameraInput;
 
     // Initialise camera to a sensible default position
     cam.velocity = glm::vec3(0.f);
@@ -22,6 +21,8 @@ void InputSystem::init(GLFWwindow *window, Camera &cam, bool &resized) {
 
 void InputSystem::mouseButtonCallback(GLFWwindow *window, int button, int action, int /*mods*/) {
     auto *input = static_cast<InputSystem *>(glfwGetWindowUserPointer(window));
+    if (!input->cameraInputEnabled)
+        return;
 
     if (button == GLFW_MOUSE_BUTTON_RIGHT) {
         if (action == GLFW_PRESS) {
@@ -37,6 +38,8 @@ void InputSystem::mouseButtonCallback(GLFWwindow *window, int button, int action
 
 void InputSystem::mousePositionCallback(GLFWwindow *window, double xpos, double ypos) {
     auto *input = static_cast<InputSystem *>(glfwGetWindowUserPointer(window));
+    if (!input->cameraInputEnabled)
+        return;
 
     if (input->rightMouseDown) {
         double deltaX = xpos - input->lastMouseX;
@@ -57,6 +60,8 @@ void InputSystem::mousePositionCallback(GLFWwindow *window, double xpos, double 
 void InputSystem::keyCallback(GLFWwindow *window, int key, int /*scancode*/, int action, int /*mods*/) {
     auto *input = static_cast<InputSystem *>(glfwGetWindowUserPointer(window));
     if (!input) return;
+    if (!input->cameraInputEnabled)
+        return;
 
     if (action == GLFW_PRESS) {
         if (key == GLFW_KEY_W || key == GLFW_KEY_UP)         input->camera->velocity.z = -.1f;

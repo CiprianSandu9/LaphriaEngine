@@ -10,7 +10,7 @@ class InputSystem {
 public:
     // Call after the GLFW window has been created.
     // Sets the window user pointer to this instance and registers all callbacks.
-    void init(GLFWwindow *window, Camera &camera, bool &framebufferResized);
+    void init(GLFWwindow *window, Camera &camera, bool &framebufferResized, bool enableCameraInput = true);
 
     double lastMouseX{0.0};
     double lastMouseY{0.0};
@@ -19,6 +19,7 @@ public:
 private:
     Camera *camera{nullptr};             // non-owning
     bool   *framebufferResizedPtr{nullptr}; // non-owning
+    bool cameraInputEnabled{true};
 
     static void mouseButtonCallback(GLFWwindow *window, int button, int action, int mods);
     static void mousePositionCallback(GLFWwindow *window, double xpos, double ypos);

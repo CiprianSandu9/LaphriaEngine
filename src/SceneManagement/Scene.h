@@ -1,12 +1,11 @@
 #ifndef LAPHRIAENGINE_SCENE_H
 #define LAPHRIAENGINE_SCENE_H
 
+#include "Frustum.h"
 #include "SceneNode.h"
 #include "Octree.h"
 #include <vulkan/vulkan_raii.hpp>
 #include <string>
-
-using namespace Laphria;
 
 // Forward declaration
 class ResourceManager;
@@ -21,7 +20,7 @@ public:
     ~Scene() = default;
 
     // Must be called before any nodes are added. worldBounds defines the octree's spatial extent.
-    void init(AABB worldBounds);
+    void init(Laphria::AABB worldBounds);
 
     // Node Management
     SceneNode::Ptr getRoot() { return root; }
@@ -39,6 +38,8 @@ public:
     void clearScene();
 
     void rebuildOctree() const;
+    void updateWorldTransforms() const;
+    void syncSpatialIndex() const;
 
     // Resource Loading
     void loadModel(const std::string &path, ResourceManager &resourceManager, vk::DescriptorSetLayout layout, const SceneNode::Ptr &parent = nullptr);
@@ -49,10 +50,11 @@ public:
     void loadScene(const std::string &path, ResourceManager &resourceManager, vk::DescriptorSetLayout layout);
 
     // Runtime
-    static void update(float deltaTime);
+    void update(float deltaTime, const ResourceManager &resourceManager) const;
 
     // Draws all nodes whose world position falls within cullBounds (octree-accelerated query).
-    void draw(const vk::raii::CommandBuffer &cmd, const vk::raii::PipelineLayout &pipelineLayout, ResourceManager &resourceManager, const AABB &cullBounds) const;
+    void draw(const vk::raii::CommandBuffer &cmd, const vk::raii::PipelineLayout &pipelineLayout, const ResourceManager &resourceManager,
+              const Laphria::AABB &cullBounds, const Laphria::Frustum &frustum) const;
 
     // When freeze is true, the culling AABB is locked to its current value for debugging.
     void setFreezeCulling(bool freeze);
@@ -60,9 +62,9 @@ public:
 private:
     SceneNode::Ptr root;
     std::vector<SceneNode::Ptr> allNodes;
-    std::unique_ptr<Octree> octree;
+    std::unique_ptr<Laphria::Octree> octree;
     bool freezeCulling = false;
-    mutable AABB frozenCullBounds{{0,0,0},{0,0,0}};
+    mutable Laphria::AABB frozenCullBounds{{0,0,0},{0,0,0}};
 
     // Cached Model IDs for physics primitives
     int sphereModelId = -1;

@@ -1,8 +1,5 @@
 #ifndef LAPHRIAENGINE_SCENENODE_H
 #define LAPHRIAENGINE_SCENENODE_H
-#ifndef GLM_ENABLE_EXPERIMENTAL
-#	define GLM_ENABLE_EXPERIMENTAL
-#endif
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
@@ -87,12 +84,15 @@ class SceneNode : public std::enable_shared_from_this<SceneNode>
 		return localTransform;
 	}
 
-	glm::mat4 getWorldTransform() const;
+	const glm::mat4 &getWorldTransform() const;
 
 	glm::vec3 getWorldPosition() const
 	{
 		return glm::vec3(getWorldTransform()[3]);
 	}
+
+	// Recomputes cached world transforms in one top-down pass.
+	void updateWorldTransformRecursive(const glm::mat4 &parentWorld, bool parentDirty) const;
 
 	// Components (Simplified: just Mesh Indices for now)
 	void addMeshIndex(int meshIndex)
@@ -114,6 +114,8 @@ class SceneNode : public std::enable_shared_from_this<SceneNode>
 	std::vector<int> meshIndices;
 	// Index into ResourceManager::models
 	int modelId = -1;
+	// Original glTF node index, used to map imported animation channels back to this node.
+	int sourceNodeIndex = -1;
 
 	enum class ColliderType
 	{
@@ -142,8 +144,31 @@ class SceneNode : public std::enable_shared_from_this<SceneNode>
 
 	PhysicsProperties physics;
 
+	struct AssetReference
+	{
+		std::string path;
+		std::string variant;
+	};
+
+	struct AnimationPlayback
+	{
+		bool        enabled = false;
+		std::string clipId;
+		float       timeSeconds = 0.0f;
+		float       speed = 1.0f;
+		bool        loop = true;
+		bool        autoplay = true;
+		bool        playing = true;
+	};
+
+	// Stable ID persisted in scene files to support deterministic references.
+	std::string stableId;
+	AssetReference assetRef;
+	AnimationPlayback animation;
+
   protected:
 	void updateLocalTransform();
+	void markWorldTransformDirtyRecursive() const;
 
   public:
 	// State Management
@@ -175,6 +200,8 @@ class SceneNode : public std::enable_shared_from_this<SceneNode>
 	glm::quat initialRotation{1.0f, 0.0f, 0.0f, 0.0f};
 
 	glm::mat4 localTransform{1.0f};
+	mutable glm::mat4 worldTransform{1.0f};
+	mutable bool worldTransformDirty{true};
 };
 
 #endif        // LAPHRIAENGINE_SCENENODE_H

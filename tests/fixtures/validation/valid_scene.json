@@ -1,0 +1,17 @@
+{
+    "id": "root",
+    "name": "Root",
+    "position": [0.0, 0.0, 0.0],
+    "rotation": [1.0, 0.0, 0.0, 0.0],
+    "scale": [1.0, 1.0, 1.0],
+    "children": [
+        {
+            "id": "child_1",
+            "name": "Child",
+            "position": [1.0, 0.0, 0.0],
+            "rotation": [1.0, 0.0, 0.0, 0.0],
+            "scale": [1.0, 1.0, 1.0],
+            "children": []
+        }
+    ]
+}

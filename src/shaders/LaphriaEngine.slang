@@ -93,7 +93,7 @@ float4 fragMain(VSOutput input) : SV_TARGET {
         metallic *= mrSample.b;
     }
 
-    roughness = clamp(roughness, MIN_ROUGHNESS, 1.0);
+    roughness = clamp(roughness, MIN_ROUGHNESS, GAMEPLAY_MAX_ROUGHNESS);
 
     // ========================================================================
     // Normal Mapping
@@ -133,6 +133,7 @@ float4 fragMain(VSOutput input) : SV_TARGET {
         float aoSample = textures[NonUniformResourceIndex(material.occlusionIndex)].Sample(input.texCoord).r;
         ao = 1.0 + material.occlusionStrength * (aoSample - 1.0);
     }
+    calibrateGameplayMaterial(baseColor.rgb, roughness, ao);
 
     // ========================================================================
     // Emissive
@@ -211,7 +212,7 @@ float4 fragMain(VSOutput input) : SV_TARGET {
     {
         float3 L = normalize(-ubo.lightDir.xyz); // Vector TO the light source
         float3 H = normalize(V + L);
-        float3 radiance = float3(1.0, 0.98, 0.95) * 3.0;
+        float3 radiance = gameplaySunRadiance(ubo.gameplayVisuals);
 
         float NdotL = max(dot(N, L), 0.0);
         float NdotV = max(dot(N, V), 0.0);
@@ -224,14 +225,15 @@ float4 fragMain(VSOutput input) : SV_TARGET {
         float3 kD = (1.0 - F) * (1.0 - metallic);
         float3 diffuse = kD * baseColor.rgb / PI;
 
-        Lo += (diffuse + specular) * radiance * NdotL * shadowFactor;
+        float sunVisibility = lerp(GAMEPLAY_SHADOW_FLOOR, 1.0, shadowFactor);
+        Lo += (diffuse + specular) * radiance * NdotL * sunVisibility;
     }
 
     // Fill light
     {
-        float3 L = normalize(float3(-0.3, 0.5, -0.5));
+        float3 L = normalize(GAMEPLAY_FILL_DIR);
         float3 H = normalize(V + L);
-        float3 radiance = float3(0.6, 0.7, 0.9) * 0.5;
+        float3 radiance = gameplayFillRadiance(ubo.gameplayVisuals);
 
         float NdotL = max(dot(N, L), 0.0);
         float NdotV = max(dot(N, V), 0.0);
@@ -251,7 +253,7 @@ float4 fragMain(VSOutput input) : SV_TARGET {
     float3 sunDir3     = normalize(-ubo.lightDir.xyz);
     float3 skyColor    = evalSkyColor(float3(0.0, 1.0, 0.0), sunDir3); // zenith sky sample
     float3 groundColor = evalGroundColor(sunDir3);                      // earth-toned lower lobe
-    float3 ambient     = lerp(groundColor, skyColor, N.y * 0.5 + 0.5);
+    float3 ambient     = lerp(groundColor, skyColor, N.y * 0.5 + 0.5) * gameplayAmbientBoost(ubo.gameplayVisuals);
 
     float3 kS = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
     float3 kD = (1.0 - kS) * (1.0 - metallic);
@@ -260,11 +262,20 @@ float4 fragMain(VSOutput input) : SV_TARGET {
     float3 ambientSpecular = kS * ambient * (1.0 - roughness * 0.5);
     float3 ambientContribution = (ambientDiffuse + ambientSpecular) * ao;
 
-    // ========================================================================
+        // ========================================================================
     // Final Output
     // ========================================================================
     float3 color = ambientContribution + Lo + emissive;
-    color = acesTonemap(color);
+
+    // V1.3 scene polish (raster): lightweight atmospheric fog for depth readability.
+    float  viewDistance    = length(ubo.cameraPos.xyz - input.worldPos);
+    float  fogByDistance   = smoothstep(35.0, 240.0, viewDistance);
+    float  fogHeightAtten  = 1.0 - smoothstep(1.0, 12.0, input.worldPos.y);
+    float  fogFactor       = saturate(fogByDistance * (0.75 + 0.25 * fogHeightAtten));
+    float3 fogColor        = lerp(float3(0.52, 0.54, 0.58), skyColor, 0.35);
+    color                  = lerp(color, fogColor, fogFactor * 0.45);
+
+    color = applyReadabilityTonemap(color, gameplayExposure(ubo.gameplayVisuals));
 
     return float4(color, baseColor.a);
 }

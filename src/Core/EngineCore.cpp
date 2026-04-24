@@ -1,36 +1,170 @@
 #include "EngineCore.h"
 #include "VulkanUtils.h"
+#include "VmaContext.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdio>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 #include "../SceneManagement/Scene.h"
 #include "EngineAuxiliary.h"
+#include "EngineConfig.h"
 #include "ResourceManager.h"
 
+using namespace Laphria;
+
+namespace
+{
+constexpr uint32_t kPtTimestampQueryCountPerFrame = 8;
+constexpr double kWindowTitleUpdateIntervalSeconds = 0.5;
+enum PtTimestampSlot : uint32_t
+{
+    kPtTS_TlasStart = 0,
+    kPtTS_TlasEnd = 1,
+    kPtTS_RayTraceStart = 2,
+    kPtTS_RayTraceEnd = 3,
+    kPtTS_ReprojectionStart = 4,
+    kPtTS_ReprojectionEnd = 5,
+    kPtTS_DenoiserStart = 6,
+    kPtTS_DenoiserEnd = 7
+};
+}
+
+EngineCore::EngineCore(EngineHostOptions optionsIn, EngineHostCallbacks callbacksIn)
+    : options(std::move(optionsIn)), callbacks(std::move(callbacksIn))
+{
+}
+
+void EngineCore::run()
+{
+    try {
+        VulkanUtils::resetAllocationCounter();
+        initWindow();
+        initInput();
+        initVulkan();
+        initImgui();
+        invokeInitializeCallback();
+        // Game initialization may load models/maps after Vulkan init. Rebuild RT descriptor
+        // sets here so first-time RT/PT switching never uses stale pre-init bindings.
+        if (resourceManager) {
+            createRayTracingDescriptorSets();
+        }
+        mainLoop();
+        const auto vmaStats = Laphria::VmaContext::getStats();
+        LOGI("VMA stats: blocks=%u allocations=%u allocationBytes=%llu",
+             vmaStats.blockCount,
+             vmaStats.allocationCount,
+             static_cast<unsigned long long>(vmaStats.allocationBytes));
+        LOGI("Tracked Vulkan allocations: %llu", static_cast<unsigned long long>(VulkanUtils::getAllocationCounter()));
+        invokeShutdownCallback();
+        cleanup();
+    } catch (...) {
+        try {
+            if (vulkanInitialized) {
+                vulkan.logicalDevice.waitIdle();
+            }
+        } catch (...) {
+            // Best-effort cleanup path.
+        }
+
+        try {
+            cleanup();
+        } catch (...) {
+            // Suppress cleanup exceptions while propagating the original failure.
+        }
+
+        throw;
+    }
+}
+
+EngineServices EngineCore::buildServices()
+{
+    return EngineServices{
+        .window = window,
+        .camera = camera,
+        .scene = *scene,
+        .physics = *physicsSystem,
+        .resourceManager = *resourceManager,
+        .ui = ui,
+        .loadSceneAsset =
+            [this](const std::string &path) {
+                scene->loadScene(path, *resourceManager, *pipelines.descriptorSetLayoutMaterial);
+            },
+        .saveSceneAsset =
+            [this](const std::string &path) {
+                scene->saveScene(path, *resourceManager);
+            },
+        .loadModelAsset =
+            [this](const std::string &path, const SceneNode::Ptr &parent) {
+                scene->loadModel(path, *resourceManager, *pipelines.descriptorSetLayoutMaterial, parent);
+            },
+        .createCubePrimitive =
+            [this](float size) {
+                return resourceManager->createCubeModel(size, *pipelines.descriptorSetLayoutMaterial);
+            },
+        .createCubePrimitiveWithMaterial =
+            [this](float size, const Laphria::MaterialData &material) {
+                return resourceManager->createCubeModel(size, *pipelines.descriptorSetLayoutMaterial, material);
+            },
+        .createSpherePrimitive =
+            [this](float radius, int slices, int stacks) {
+                return resourceManager->createSphereModel(radius, slices, stacks, *pipelines.descriptorSetLayoutMaterial);
+            },
+        .createCylinderPrimitive =
+            [this](float radius, float height, int slices) {
+                return resourceManager->createCylinderModel(radius, height, slices, *pipelines.descriptorSetLayoutMaterial);
+            }
+    };
+}
+
+void EngineCore::invokeInitializeCallback()
+{
+    ui.showEditorPanels = options.showEditorPanels;
+    if (callbacks.initialize && scene && physicsSystem && resourceManager) {
+        auto services = buildServices();
+        callbacks.initialize(services);
+    }
+}
+
+void EngineCore::invokeShutdownCallback()
+{
+    if (callbacks.shutdown && scene && physicsSystem && resourceManager) {
+        auto services = buildServices();
+        callbacks.shutdown(services);
+    }
+}
+
 void EngineCore::initWindow() {
-    glfwInit();
+    if (glfwInit() != GLFW_TRUE) {
+        throw std::runtime_error("failed to initialize GLFW");
+    }
+    windowInitialized = true;
 
     // GLFW_NO_API: we manage the Vulkan surface ourselves, not via an OpenGL context.
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-    window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+    window = glfwCreateWindow(WIDTH, HEIGHT, options.windowTitle.c_str(), nullptr, nullptr);
     if (!window) {
         throw std::runtime_error("failed to create GLFW window");
     }
+    lastFrameTime = std::chrono::high_resolution_clock::now();
 }
 
 void EngineCore::initInput() {
-    input.init(window, camera, swapchain.framebufferResized);
+    input.init(window, camera, swapchain.framebufferResized, options.enableDefaultCameraInput);
 }
 
 void EngineCore::initVulkan() {
@@ -42,14 +176,17 @@ void EngineCore::initVulkan() {
     //  4. Descriptor set layouts must precede pipeline creation.
     //  5. Descriptor sets must be written after both pool and uniform buffers/images exist.
     vulkan.init(window);
+    vulkanInitialized = true;
     swapchain.init(vulkan, window);
+    imagesInFlight.assign(swapchain.images.size(), vk::Fence{});
     frames.init(vulkan, swapchain);
     createDescriptorPool();
 
     resourceManager = std::make_unique<ResourceManager>(vulkan.logicalDevice, vulkan.physicalDevice, frames.commandPool, vulkan.queue,
                                                         descriptorPool);
     scene = std::make_unique<Scene>();
-    scene->init({{-1000, -1000, -1000}, {1000, 1000, 1000}}); // Big bounds to ensure the model fits
+    constexpr float bounds = Laphria::EngineConfig::kDefaultSceneBoundsExtent;
+    scene->init({{-bounds, -bounds, -bounds}, {bounds, bounds, bounds}});
 
     physicsSystem = std::make_unique<PhysicsSystem>();
 
@@ -59,6 +196,7 @@ void EngineCore::initVulkan() {
     pipelines.createGraphicsPipeline(vulkan, swapchain.surfaceFormat.format, vulkan.findDepthFormat());
     pipelines.createShadowPipeline(vulkan);
     pipelines.createComputePipeline(vulkan);
+    pipelines.createSkinningPipeline(vulkan);
     pipelines.createPhysicsPipeline(vulkan);
     pipelines.createRayTracingPipeline(vulkan);
     pipelines.createShaderBindingTable(vulkan);
@@ -66,15 +204,19 @@ void EngineCore::initVulkan() {
     pipelines.createClassicRTPipeline(vulkan);
     pipelines.createClassicRTShaderBindingTable(vulkan);
 
+    resourceManager->setSkinningDescriptorSetLayout(*pipelines.skinningDescriptorSetLayout);
+
     createDescriptorSets();
     createComputeDescriptorSets();
     createPhysicsDescriptorSets();
     createRayTracingDescriptorSets();
     createDenoiserDescriptorSets();
+    createTimestampQueryPool();
 }
 
 void EngineCore::initImgui() {
     ui.init(vulkan, window, swapchain.surfaceFormat.format, vulkan.findDepthFormat());
+    imguiInitialized = true;
 }
 
 void EngineCore::mainLoop() {
@@ -82,30 +224,46 @@ void EngineCore::mainLoop() {
 
     while (!glfwWindowShouldClose(window)) {
         // Delta Time calculation
-        static auto lastTime = std::chrono::high_resolution_clock::now();
         auto currentTime = std::chrono::high_resolution_clock::now();
-        float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
-        lastTime = currentTime;
+        float deltaTime = std::chrono::duration<float>(currentTime - lastFrameTime).count();
+        lastFrameTime = currentTime;
+        updatePerformanceWindowTitle(deltaTime);
 
         glfwPollEvents();
         camera.update(deltaTime);
 
+        std::optional<EngineServices> services;
+        if (scene && physicsSystem && resourceManager) {
+            services.emplace(buildServices());
+        }
+
+        if (callbacks.updateFrame && services.has_value()) {
+            auto &servicesRef = *services;
+            callbacks.updateFrame(servicesRef, deltaTime);
+        }
+        if (scene && resourceManager) {
+            scene->update(deltaTime, *resourceManager);
+        }
+
         // Physics Update
-        if (ui.simulationRunning && physicsSystem) {
+        if (options.runPhysicsSimulation && ui.simulationRunning && physicsSystem) {
             auto start = std::chrono::high_resolution_clock::now();
 
             if (ui.useGPUPhysics) {
-                // For simplicity in this prototype:
-                // Using `beginSingleTimeCommands` to run physics immediately here.
-                // This stalls the CPU (via queue.waitIdle inside endSingleTimeCommands) but simplifies
-                // synchronization since we need the readback result on the same frame anyway.
-                // Known performance limitation: a production implementation would use async transfers
-                // with double-buffered SSBOs and a dedicated transfer queue to avoid the stall.
-
                 auto cmd = VulkanUtils::beginSingleTimeCommands(vulkan.logicalDevice, frames.commandPool);
                 physicsSystem->updateGPU(scene->getAllNodes(), deltaTime, cmd, pipelines.physicsPipelineLayout, pipelines.physicsPipeline, physicsDescriptorSet);
-                // Barrier is inside updateGPU.
-                VulkanUtils::endSingleTimeCommands(vulkan.logicalDevice, vulkan.queue, frames.commandPool, cmd);
+                cmd.end();
+
+                vk::raii::Fence physicsFence(vulkan.logicalDevice, vk::FenceCreateInfo{});
+                vk::SubmitInfo submitInfo{};
+                submitInfo.commandBufferCount = 1;
+                submitInfo.pCommandBuffers = &*cmd;
+                vulkan.queue.submit(submitInfo, *physicsFence);
+
+                const vk::Result waitResult = vulkan.logicalDevice.waitForFences(*physicsFence, vk::True, UINT64_MAX);
+                if (waitResult != vk::Result::eSuccess) {
+                    throw std::runtime_error("failed to wait for GPU physics fence");
+                }
 
                 // Readback immediately
                 physicsSystem->syncFromGPU(scene->getAllNodes());
@@ -122,6 +280,14 @@ void EngineCore::mainLoop() {
         ImGui::NewFrame();
 
         ui.draw(window, *scene, *physicsSystem, *resourceManager, *pipelines.descriptorSetLayoutMaterial, camera);
+        if (callbacks.drawUi && services.has_value()) {
+            auto &servicesRef = *services;
+            callbacks.drawUi(servicesRef);
+        }
+
+        if (scene) {
+            scene->syncSpatialIndex();
+        }
 
         // If models were loaded during the UI frame, the RT descriptor sets (bindings 5-8:
         // vertex/index/material/texture arrays) must be rebuilt to include the new buffers.
@@ -140,16 +306,51 @@ void EngineCore::mainLoop() {
     vulkan.logicalDevice.waitIdle();
 }
 
+void EngineCore::updatePerformanceWindowTitle(float deltaTimeSeconds)
+{
+    if (!window || deltaTimeSeconds <= 0.0f) {
+        return;
+    }
+
+    titleStatsAccumSeconds += static_cast<double>(deltaTimeSeconds);
+    ++titleStatsFrameCount;
+
+    if (titleStatsAccumSeconds < kWindowTitleUpdateIntervalSeconds || titleStatsFrameCount == 0) {
+        return;
+    }
+
+    const double averageFrameTimeSeconds = titleStatsAccumSeconds / static_cast<double>(titleStatsFrameCount);
+    const double fps = 1.0 / averageFrameTimeSeconds;
+    const double frameTimeMs = averageFrameTimeSeconds * 1000.0;
+
+    char titleBuffer[256];
+    std::snprintf(titleBuffer, sizeof(titleBuffer), "%s | %.1f FPS | %.2f ms",
+                  options.windowTitle.c_str(), fps, frameTimeMs);
+    glfwSetWindowTitle(window, titleBuffer);
+
+    titleStatsAccumSeconds = 0.0;
+    titleStatsFrameCount = 0;
+}
+
 void EngineCore::cleanupSwapChain() {
     swapchain.cleanup();
     frames.cleanupSwapChainDependents();
 }
 
 void EngineCore::cleanup() {
-    ui.cleanup();
+    if (imguiInitialized) {
+        ui.cleanup();
+        imguiInitialized = false;
+    }
 
-    glfwDestroyWindow(window);
-    glfwTerminate();
+    if (windowInitialized && window) {
+        glfwDestroyWindow(window);
+        window = nullptr;
+    }
+    if (windowInitialized) {
+        glfwTerminate();
+        windowInitialized = false;
+    }
 }
 
 void EngineCore::recreateSwapChain() {
@@ -165,6 +366,7 @@ void EngineCore::recreateSwapChain() {
 
     cleanupSwapChain();
     swapchain.init(vulkan, window);
+    imagesInFlight.assign(swapchain.images.size(), vk::Fence{});
     frames.recreate(vulkan, swapchain);
     // Compute, RT, and denoiser descriptor sets reference images that are recreated above
     // (storageImages, rayTracingOutputImages, and G-Buffer images are extent-dependent),
@@ -192,8 +394,8 @@ void EngineCore::createPhysicsDescriptorSets() {
 
     physicsDescriptorSet = std::move(vulkan.logicalDevice.allocateDescriptorSets(allocInfo)[0]);
 
-    // Create SSBO (Max 10000 objects)
-    size_t maxObjects = 10000;
+    // Create SSBO
+    constexpr size_t maxObjects = Laphria::EngineConfig::kMaxPhysicsObjects;
     physicsSystem->createSSBO(vulkan.logicalDevice, vulkan.physicalDevice, maxObjects * sizeof(PhysicsObject));
 
     // Bind SSBO to Set
@@ -253,7 +455,7 @@ void EngineCore::createRayTracingDescriptorSets() {
     //                  5 = vertex arrays, 6 = index arrays, 7 = material arrays, 8 = texture array.
     std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *pipelines.rayTracingDescriptorSetLayout);
 
-    std::vector<uint32_t> variableDescCounts(MAX_FRAMES_IN_FLIGHT, 1000);
+    std::vector<uint32_t> variableDescCounts(MAX_FRAMES_IN_FLIGHT, Laphria::EngineConfig::kBindlessModelCapacity);
     vk::DescriptorSetVariableDescriptorCountAllocateInfo variableDescCountInfo{
         .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
         .pDescriptorCounts = variableDescCounts.data()
@@ -330,15 +532,16 @@ void EngineCore::createRayTracingDescriptorSets() {
 
         // Since our ResourceManager stores ModelResource objects linearly in ID...
         // In a production engine, this would be an iterative flat map or array
-        int totalModels = 1000; // We capped our bindless array at 1000 slots
+        constexpr int totalModels = static_cast<int>(Laphria::EngineConfig::kBindlessModelCapacity);
         for (int modelId = 0; modelId < totalModels; ++modelId) {
             if (ModelResource *model = resourceManager->getModelResource(modelId)) {
                 // Writing a null VkBuffer into a descriptor is invalid even with ePartiallyBound.
                 if (!*model->vertexBuffer || !*model->indexBuffer || !*model->materialBuffer)
                     throw std::runtime_error("RT descriptor: model " + std::to_string(modelId) + " has null buffer(s)");
 
-                // 1. Accumulate Vertex Buffers
-                vertexInfos.push_back({*model->vertexBuffer, 0, VK_WHOLE_SIZE});
+                // 1. Accumulate Vertex Buffers (use skinned stream for RT/PT when available)
+                const vk::Buffer rtVertexBuffer = (model->hasRuntimeSkinning && *model->skinnedVertexBuffer) ? *model->skinnedVertexBuffer : *model->vertexBuffer;
+                vertexInfos.push_back({rtVertexBuffer, 0, VK_WHOLE_SIZE});
 
                 // 2. Accumulate Index Buffers
                 indexInfos.push_back({*model->indexBuffer, 0, VK_WHOLE_SIZE});
@@ -427,6 +630,7 @@ void EngineCore::createDenoiserDescriptorSets() {
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         size_t prevSlot = (i - 1 + MAX_FRAMES_IN_FLIGHT) % MAX_FRAMES_IN_FLIGHT;
+        const size_t atrousBase = i * 2;
 
         // Build the 13 image info structs in binding order.
         vk::DescriptorImageInfo infos[13] = {
@@ -438,8 +642,8 @@ void EngineCore::createDenoiserDescriptorSets() {
             {.imageView = *frames.historyColorViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 5: history colour write
             {.imageView = *frames.historyMomentsViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral}, // 6: history moments read
             {.imageView = *frames.historyMomentsViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 7: history moments write
-            {.imageView = *frames.atrousTempViews[0], .imageLayout = vk::ImageLayout::eGeneral}, // 8: A-Trous buffer A
-            {.imageView = *frames.atrousTempViews[1], .imageLayout = vk::ImageLayout::eGeneral}, // 9: A-Trous buffer B
+            {.imageView = *frames.atrousTempViews[atrousBase + 0], .imageLayout = vk::ImageLayout::eGeneral}, // 8: A-Trous buffer A
+            {.imageView = *frames.atrousTempViews[atrousBase + 1], .imageLayout = vk::ImageLayout::eGeneral}, // 9: A-Trous buffer B
             {.imageView = *frames.rayTracingOutputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 10: final denoised output (reuses slot 0 image)
             {.imageView = *frames.rtGBufferNormalsViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral}, // 11: previous-frame normals
             {.imageView = *frames.rtGBufferDepthViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral}, // 12: previous-frame depth
@@ -556,6 +760,107 @@ void EngineCore::recordComputeCommandBuffer(const vk::raii::CommandBuffer &comma
         vk::ImageAspectFlagBits::eColor);
 }
 
+void EngineCore::recordSkinningPass(const vk::raii::CommandBuffer &commandBuffer) const {
+    std::unordered_map<int, const SceneNode *> instanceRootsByModel;
+    for (const auto &node: scene->getAllNodes()) {
+        if (!node || node->modelId < 0) {
+            continue;
+        }
+        ModelResource *modelRes = resourceManager->getModelResource(node->modelId);
+        if (!modelRes || !modelRes->hasRuntimeSkinning || !*modelRes->skinningDescriptorSet || !modelRes->skinningJointMatricesMapped) {
+            continue;
+        }
+        const SceneNode *parent = node->getParent();
+        const bool isInstanceRoot = (parent == nullptr || parent->modelId != node->modelId);
+        if (isInstanceRoot && !instanceRootsByModel.contains(node->modelId)) {
+            instanceRootsByModel.emplace(node->modelId, node.get());
+        }
+    }
+
+    if (instanceRootsByModel.empty()) {
+        return;
+    }
+
+    vk::MemoryBarrier2 hostToComputeBarrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eHost,
+        .srcAccessMask = vk::AccessFlagBits2::eHostWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderRead};
+    vk::DependencyInfo hostToComputeDependency{
+        .memoryBarrierCount = 1,
+        .pMemoryBarriers = &hostToComputeBarrier};
+    commandBuffer.pipelineBarrier2(hostToComputeDependency);
+
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.skinningPipeline);
+
+    for (const auto &[modelId, rootNode] : instanceRootsByModel) {
+        ModelResource *modelRes = resourceManager->getModelResource(modelId);
+        if (!modelRes || modelRes->skinningJointMatrixCount == 0 || modelRes->skinningVertexCount == 0) {
+            continue;
+        }
+
+        std::unordered_map<int, const SceneNode *> nodesBySourceIndex;
+        std::vector<const SceneNode *> stack{rootNode};
+        while (!stack.empty()) {
+            const SceneNode *current = stack.back();
+            stack.pop_back();
+            if (!current || current->modelId != modelId) {
+                continue;
+            }
+            if (current->sourceNodeIndex >= 0 && !nodesBySourceIndex.contains(current->sourceNodeIndex)) {
+                nodesBySourceIndex.emplace(current->sourceNodeIndex, current);
+            }
+            for (const auto &child : current->getChildren()) {
+                if (child) {
+                    stack.push_back(child.get());
+                }
+            }
+        }
+
+        std::vector<glm::mat4> jointPalette(modelRes->skinningJointMatrixCount, glm::mat4(1.0f));
+        for (const auto &skin : modelRes->skins) {
+            for (size_t jointIndex = 0; jointIndex < skin.jointSourceNodeIndices.size(); ++jointIndex) {
+                const uint32_t paletteIndex = skin.jointMatrixOffset + static_cast<uint32_t>(jointIndex);
+                if (paletteIndex >= jointPalette.size()) {
+                    continue;
+                }
+                const auto nodeIt = nodesBySourceIndex.find(skin.jointSourceNodeIndices[jointIndex]);
+                if (nodeIt == nodesBySourceIndex.end() || !nodeIt->second) {
+                    continue;
+                }
+                jointPalette[paletteIndex] = nodeIt->second->getWorldTransform() * skin.inverseBindMatrices[jointIndex];
+            }
+        }
+
+        memcpy(modelRes->skinningJointMatricesMapped, jointPalette.data(), sizeof(glm::mat4) * jointPalette.size());
+
+        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelines.skinningPipelineLayout, 0, {*modelRes->skinningDescriptorSet}, nullptr);
+
+        Laphria::SkinningPushConstants push{};
+        push.vertexCount = modelRes->skinningVertexCount;
+        push.jointMatrixOffset = 0;
+        push.jointCount = modelRes->skinningJointMatrixCount;
+        commandBuffer.pushConstants<Laphria::SkinningPushConstants>(*pipelines.skinningPipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, push);
+
+        const uint32_t groupCountX = (modelRes->skinningVertexCount + 63u) / 64u;
+        commandBuffer.dispatch(groupCountX, 1, 1);
+    }
+
+    vk::MemoryBarrier2 skinningToConsumerBarrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eVertexInput | vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+        .dstAccessMask = vk::AccessFlagBits2::eVertexAttributeRead | vk::AccessFlagBits2::eAccelerationStructureReadKHR};
+    vk::DependencyInfo skinningToConsumerDependency{
+        .memoryBarrierCount = 1,
+        .pMemoryBarriers = &skinningToConsumerBarrier};
+    commandBuffer.pipelineBarrier2(skinningToConsumerDependency);
+
+    if (ui.renderMode != RenderMode::Rasterizer) {
+        resourceManager->recordSkinnedBLASRefit(commandBuffer);
+    }
+}
+
 void EngineCore::recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const {
     const uint32_t fi = frames.frameIndex;
 
@@ -659,8 +964,20 @@ void EngineCore::recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &com
 
 void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const {
     const uint32_t fi = frames.frameIndex;
+    const uint32_t queryBase = getPathTracerQueryBase(fi);
+    const size_t atrousBase = static_cast<size_t>(fi) * 2;
+    const size_t atrousA = atrousBase + 0;
+    const size_t atrousB = atrousBase + 1;
 
-    // 1. Transition All RT Output Images to General Layout for Writing
+    const float clampedScale = std::clamp(ui.pathTracerSettings.resolutionScale, 0.5f, 1.0f);
+    const float secondaryScale = ui.pathTracerSettings.reduceSecondaryEffects ? 0.90f : 1.0f;
+    const float effectiveScale = std::clamp(clampedScale * secondaryScale, 0.5f, 1.0f);
+    const uint32_t rtWidth = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.width) * effectiveScale));
+    const uint32_t rtHeight = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.height) * effectiveScale));
+    const uint32_t gx = (rtWidth + 15) / 16;
+    const uint32_t gy = (rtHeight + 15) / 16;
+
+    // 1. Transition all PT images to general layout for writing.
     auto transitionToGeneral = [&](vk::Image img) {
         transition_image_layout(img, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
                                 {}, vk::AccessFlagBits2::eShaderWrite,
@@ -671,8 +988,10 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     transitionToGeneral(*frames.rtGBufferNormals[fi]);
     transitionToGeneral(*frames.rtGBufferDepth[fi]);
     transitionToGeneral(*frames.rtMotionVectors[fi]);
+    transitionToGeneral(*frames.atrousTemp[atrousA]);
+    transitionToGeneral(*frames.atrousTemp[atrousB]);
 
-    // 2. Ray Tracing Dispatch (1 SPP Path Tracer)
+    // 2. Ray tracing dispatch.
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.rayTracingPipeline);
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR,
                                      *pipelines.rayTracingPipelineLayout, 0,
@@ -684,11 +1003,17 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
                                                     vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
                                                     0, rtPush);
 
+    if (*ptTimestampQueryPool) {
+        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eRayTracingShaderKHR, *ptTimestampQueryPool, queryBase + kPtTS_RayTraceStart);
+    }
     vk::StridedDeviceAddressRegionKHR callableRegion{};
     commandBuffer.traceRaysKHR(pipelines.raygenRegion, pipelines.missRegion, pipelines.hitRegion,
-                               callableRegion, swapchain.extent.width, swapchain.extent.height, 1);
+                               callableRegion, rtWidth, rtHeight, 1);
+    if (*ptTimestampQueryPool) {
+        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eRayTracingShaderKHR, *ptTimestampQueryPool, queryBase + kPtTS_RayTraceEnd);
+    }
 
-    // 3. Barrier: RT Writes → Compute Reads
+    // 3. Barrier: RT writes -> compute reads.
     auto barrierRTtoCompute = [&](vk::Image img) {
         transition_image_layout(img, vk::ImageLayout::eGeneral, vk::ImageLayout::eGeneral,
                                 vk::AccessFlagBits2::eShaderWrite, vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
@@ -700,102 +1025,96 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     barrierRTtoCompute(*frames.rtGBufferDepth[fi]);
     barrierRTtoCompute(*frames.rtMotionVectors[fi]);
 
-    // Transition the A-Trous ping-pong buffers to General (scratch buffers, discarded each frame).
-    // History images (historyColor/historyMoments) are initialized to General once in
-    // FrameContext::createHistoryResources and stay in General across frames.
-    for (size_t k = 0; k < 2; ++k)
-        transition_image_layout(*frames.atrousTemp[k], vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
-                                {}, vk::AccessFlagBits2::eShaderWrite,
-                                vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eComputeShader,
-                                vk::ImageAspectFlagBits::eColor);
-
-    // 4. Reprojection Pass
+    // 4. Reprojection pass.
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.reprojectionPipeline);
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
                                      *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
 
-    // phiColor doubles as historyAlpha here: 0.1 when camera is static (90% history),
-    // 1.0 when it moved (discard history to prevent ghosting bands).
     float historyAlpha = ptCameraMoved ? 1.0f : 0.1f;
-    DenoisePushConstants reproPush{.stepSize = 0, .isLastPass = 0, .phiColor = historyAlpha, .phiNormal = 128.0f};
+    DenoisePushConstants reproPush{
+        .stepSize = 0,
+        .isLastPass = 0,
+        .phiColor = historyAlpha,
+        .phiNormal = 128.0f,
+        .exposureScale = ui.visualsV1.exposure};
     commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
                                                       vk::ShaderStageFlagBits::eCompute, 0, reproPush);
-
-    const uint32_t gx = (swapchain.extent.width + 15) / 16;
-    const uint32_t gy = (swapchain.extent.height + 15) / 16;
+    if (*ptTimestampQueryPool) {
+        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_ReprojectionStart);
+    }
     commandBuffer.dispatch(gx, gy, 1);
+    if (*ptTimestampQueryPool) {
+        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_ReprojectionEnd);
+    }
 
-    // 5. Barrier: Reprojection → A-Trous
     auto barrierCompute = [&](vk::Image img) {
         transition_image_layout(img, vk::ImageLayout::eGeneral, vk::ImageLayout::eGeneral,
                                 vk::AccessFlagBits2::eShaderWrite, vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
                                 vk::PipelineStageFlagBits2::eComputeShader, vk::PipelineStageFlagBits2::eComputeShader,
                                 vk::ImageAspectFlagBits::eColor);
     };
-    barrierCompute(*frames.atrousTemp[0]);
-    barrierCompute(*frames.historyMoments[fi]); // A-Trous reads historyMomentsOut for variance
+    barrierCompute(*frames.atrousTemp[atrousA]);
+    barrierCompute(*frames.historyMoments[fi]);
 
-    // 6. A-Trous Spatial Filter (5 Iterations)
+    // 5. A-Trous denoiser.
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.atrousPipeline);
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
                                      *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
 
-    static constexpr int ATROUS_ITERATIONS = 5;
-    for (int iter = 0; iter < ATROUS_ITERATIONS; ++iter) {
-        int32_t stepSize = 1 << iter; // 1, 2, 4, 8, 16
-        int32_t isLastPass = (iter == ATROUS_ITERATIONS - 1) ? 1 : 0;
-
+    const int atrousIterations = std::clamp(ui.pathTracerSettings.denoiserIterations, 1, 5);
+    if (*ptTimestampQueryPool) {
+        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_DenoiserStart);
+    }
+    for (int iter = 0; iter < atrousIterations; ++iter) {
+        const int32_t stepSize = 1 << iter;
+        const int32_t isLastPass = (iter == atrousIterations - 1) ? 1 : 0;
         DenoisePushConstants atrousPush{
             .stepSize = stepSize,
             .isLastPass = isLastPass,
             .phiColor = 1.0f,
-            .phiNormal = 128.0f
-        };
+            .phiNormal = 128.0f,
+            .exposureScale = ui.visualsV1.exposure};
         commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
                                                           vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
         commandBuffer.dispatch(gx, gy, 1);
 
         if (!isLastPass) {
-            // Barrier between iterations: wait for this pass's write before the next pass reads it.
-            int writeBuf = iter % 2; // 0→writes[1], 1→writes[0], ...
-            barrierCompute(*frames.atrousTemp[1 - writeBuf]);
+            const int writeBuf = iter % 2;
+            barrierCompute(*frames.atrousTemp[(writeBuf == 0) ? atrousB : atrousA]);
         }
     }
+    if (*ptTimestampQueryPool) {
+        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_DenoiserEnd);
+    }
 
-    // 7. Transition Final Denoised Image for Blit
-    // The last A-Trous pass wrote the tonemapped result to rayTracingOutputImages[fi].
+    // 6. Blit denoised image to swapchain.
     transition_image_layout(*frames.rayTracingOutputImages[fi],
                             vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal,
                             vk::AccessFlagBits2::eShaderWrite, vk::AccessFlagBits2::eTransferRead,
                             vk::PipelineStageFlagBits2::eComputeShader, vk::PipelineStageFlagBits2::eTransfer,
                             vk::ImageAspectFlagBits::eColor);
 
-    // 8. Transition SwapChain Image for Blit
     transition_image_layout(swapchain.images[imageIndex],
                             vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
                             {}, vk::AccessFlagBits2::eTransferWrite,
                             vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eTransfer,
                             vk::ImageAspectFlagBits::eColor);
 
-    // 9. Blit Denoised Result to SwapChain
     vk::ImageBlit blitRegion{
         .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-        .srcOffsets = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}},
+        .srcOffsets = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(rtWidth), static_cast<int32_t>(rtHeight), 1}}},
         .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
         .dstOffsets = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}}
     };
     commandBuffer.blitImage(*frames.rayTracingOutputImages[fi], vk::ImageLayout::eTransferSrcOptimal,
                             swapchain.images[imageIndex], vk::ImageLayout::eTransferDstOptimal, blitRegion, vk::Filter::eLinear);
 
-    // 9b. Restore RT Output Image to eGeneral so It Matches rtDescriptorSets / denoiserDescriptorSets
-    // (prevents VUID-vkCmdDraw-None-09600 when switching back to Rasterizer mode).
     transition_image_layout(*frames.rayTracingOutputImages[fi],
                             vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eGeneral,
                             vk::AccessFlagBits2::eTransferRead, {},
                             vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eBottomOfPipe,
                             vk::ImageAspectFlagBits::eColor);
 
-    // 10. Transition SwapChain to Color Attachment for UI Rendering
     transition_image_layout(swapchain.images[imageIndex],
                             vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eColorAttachmentOptimal,
                             vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
@@ -807,15 +1126,16 @@ void EngineCore::createDescriptorPool() {
     // Generous pool sizes to accommodate an arbitrary number of loaded models.
     // eSampledImage / eSampler are separate because the shadow map binding uses them
     // as distinct descriptor types (binding 1 and 2 in the global layout).
+    constexpr uint32_t poolScale = Laphria::EngineConfig::kDescriptorPoolScale;
     std::array<vk::DescriptorPoolSize, 7> poolSizes = {
-        vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 1000},
+        vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, poolScale},
         // 1000 per loaded model (material textures) + 2×1000 for the two RT descriptor sets.
-        vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, 5000},
-        vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 1000},
-        vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1000},
+        vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, 5 * poolScale},
+        vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, poolScale},
+        vk::DescriptorPoolSize{vk::DescriptorType::eSampler, poolScale},
         // 1000 for materials + vertex and index buffers * MAX_FRAMES
-        vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 15000},
-        vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 1000},
+        vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 15 * poolScale},
+        vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, poolScale},
         vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT}
     };
 
@@ -824,7 +1144,7 @@ void EngineCore::createDescriptorPool() {
         // eUpdateAfterBind: required for bindless descriptor indexing (VK_EXT_descriptor_indexing).
         .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet |
                  vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind,
-        .maxSets = 1000 * MAX_FRAMES_IN_FLIGHT,
+        .maxSets = poolScale * MAX_FRAMES_IN_FLIGHT,
         .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data()
     };
@@ -899,19 +1219,125 @@ void EngineCore::createDescriptorSets() {
     }
 }
 
+void EngineCore::createTimestampQueryPool() {
+    vk::QueryPoolCreateInfo queryPoolInfo{
+        .queryType = vk::QueryType::eTimestamp,
+        .queryCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * kPtTimestampQueryCountPerFrame};
+    ptTimestampQueryPool = vk::raii::QueryPool(vulkan.logicalDevice, queryPoolInfo);
+    timestampPeriodNs = vulkan.physicalDevice.getProperties().limits.timestampPeriod;
+}
+
+uint32_t EngineCore::getPathTracerQueryBase(uint32_t frameSlot) const {
+    return frameSlot * kPtTimestampQueryCountPerFrame;
+}
+
+void EngineCore::collectPathTracerTimings(uint32_t frameSlot) {
+    if (!*ptTimestampQueryPool || !ptTimestampsValid[frameSlot]) {
+        return;
+    }
+
+    std::array<uint64_t, kPtTimestampQueryCountPerFrame> timestamps{};
+    const VkResult queryResult = vkGetQueryPoolResults(
+        static_cast<VkDevice>(*vulkan.logicalDevice),
+        static_cast<VkQueryPool>(*ptTimestampQueryPool),
+        getPathTracerQueryBase(frameSlot),
+        kPtTimestampQueryCountPerFrame,
+        sizeof(timestamps),
+        timestamps.data(),
+        sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT);
+
+    if (queryResult != VK_SUCCESS) {
+        return;
+    }
+
+    auto toMs = [this](uint64_t start, uint64_t end) -> float {
+        if (end <= start) {
+            return 0.0f;
+        }
+        const double deltaTicks = static_cast<double>(end - start);
+        const double deltaNs = deltaTicks * static_cast<double>(timestampPeriodNs);
+        return static_cast<float>(deltaNs * 1e-6);
+    };
+
+    ui.pathTracerPerfStats.tlasBuildMs = toMs(timestamps[kPtTS_TlasStart], timestamps[kPtTS_TlasEnd]);
+    ui.pathTracerPerfStats.rayTraceMs = toMs(timestamps[kPtTS_RayTraceStart], timestamps[kPtTS_RayTraceEnd]);
+    ui.pathTracerPerfStats.reprojectionMs = toMs(timestamps[kPtTS_ReprojectionStart], timestamps[kPtTS_ReprojectionEnd]);
+    ui.pathTracerPerfStats.denoiserMs = toMs(timestamps[kPtTS_DenoiserStart], timestamps[kPtTS_DenoiserEnd]);
+
+    const uint64_t totalStart = (timestamps[kPtTS_TlasStart] != 0) ? timestamps[kPtTS_TlasStart] : timestamps[kPtTS_RayTraceStart];
+    const uint64_t totalEnd = (timestamps[kPtTS_DenoiserEnd] != 0) ? timestamps[kPtTS_DenoiserEnd] : timestamps[kPtTS_RayTraceEnd];
+    ui.pathTracerPerfStats.totalFrameMs = toMs(totalStart, totalEnd);
+}
+
+void EngineCore::updateAdaptivePathTracerSettings() {
+    if (ui.pathTracerSettings.qualityMode == UISystem::PathTracerQualityMode::Manual) {
+        return;
+    }
+
+    const float frameMs = ui.pathTracerPerfStats.totalFrameMs;
+    if (frameMs <= 0.0f) {
+        return;
+    }
+
+    const bool aggressive = (ui.pathTracerSettings.qualityMode == UISystem::PathTracerQualityMode::AutoAggressive);
+    const float targetMs = std::max(8.0f, ui.pathTracerSettings.targetFrameMs);
+    const float dropMargin = aggressive ? 0.25f : 0.75f;
+    const float raiseMargin = aggressive ? 2.5f : 1.5f;
+
+    if (frameMs > targetMs + dropMargin) {
+        if (ui.pathTracerSettings.denoiserIterations > 1) {
+            ui.pathTracerSettings.denoiserIterations -= 1;
+        } else {
+            ui.pathTracerSettings.resolutionScale = std::max(0.50f, ui.pathTracerSettings.resolutionScale - 0.05f);
+        }
+        return;
+    }
+
+    if (frameMs < targetMs - raiseMargin) {
+        if (ui.pathTracerSettings.resolutionScale < 1.0f) {
+            ui.pathTracerSettings.resolutionScale = std::min(1.0f, ui.pathTracerSettings.resolutionScale + 0.05f);
+        } else if (ui.pathTracerSettings.denoiserIterations < 5) {
+            ui.pathTracerSettings.denoiserIterations += 1;
+        }
+    }
+}
+
 void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
     auto &commandBuffer = frames.commandBuffers[frames.frameIndex];
+    const uint32_t queryBase = getPathTracerQueryBase(frames.frameIndex);
+    if (*ptTimestampQueryPool) {
+        commandBuffer.resetQueryPool(*ptTimestampQueryPool, queryBase, kPtTimestampQueryCountPerFrame);
+    }
 
     vk::ClearValue clearColor = vk::ClearColorValue(0.02f, 0.02f, 0.02f, 1.0f);
+    if (ui.renderMode == RenderMode::Rasterizer) {
+        // V1.3: raster path uses direct atmospheric clear color (no compute sky prepass).
+        clearColor = vk::ClearColorValue(0.60f, 0.64f, 0.72f, 1.0f);
+    }
+
+    recordSkinningPass(commandBuffer);
 
     // --- Build TLAS ---
     std::vector<vk::AccelerationStructureInstanceKHR> tlasInstances;
+    uint32_t nodesWithModelId = 0;
+    uint32_t nodesMissingModelResource = 0;
+    uint32_t nodesWithNoBlas = 0;
+    uint32_t meshRefs = 0;
+    uint32_t skippedInvalidMeshRef = 0;
 
     for (const auto &node: scene->getAllNodes()) {
         if (node->modelId >= 0) {
+            ++nodesWithModelId;
             ModelResource *modelRes = resourceManager->getModelResource(node->modelId);
-            if (!modelRes || modelRes->blasElements.empty())
+            if (!modelRes) {
+                ++nodesMissingModelResource;
                 continue;
+            }
+            if (modelRes->blasElements.empty()) {
+                ++nodesWithNoBlas;
+                continue;
+            }
 
             glm::mat4 transform = node->getWorldTransform();
 
@@ -924,8 +1350,12 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
             }
 
             for (int meshIdx: node->getMeshIndices()) {
+                ++meshRefs;
                 if (meshIdx < 0 || meshIdx >= modelRes->blasElements.size())
+                {
+                    ++skippedInvalidMeshRef;
                     continue;
+                }
 
                 auto &blas = modelRes->blasElements[meshIdx];
 
@@ -957,6 +1387,12 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
     }
 
     if (ui.renderMode != RenderMode::Rasterizer) {
+        if (tlasInstances.size() > frames.MAX_TLAS_INSTANCES) {
+            throw std::runtime_error(
+                "TLAS instance count (" + std::to_string(tlasInstances.size()) +
+                ") exceeds MAX_TLAS_INSTANCES (" + std::to_string(frames.MAX_TLAS_INSTANCES) + ")");
+        }
+
         // Only copy instance data when there is something to copy; building with
         // primitiveCount = 0 is valid and produces a traversable empty TLAS.
         if (!tlasInstances.empty()) {
@@ -1003,7 +1439,13 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
         buildRange.transformOffset = 0;
 
         const vk::AccelerationStructureBuildRangeInfoKHR *pBuildRange = &buildRange;
+        if (*ptTimestampQueryPool) {
+            commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, *ptTimestampQueryPool, queryBase + kPtTS_TlasStart);
+        }
         commandBuffer.buildAccelerationStructuresKHR(buildInfo, pBuildRange);
+        if (*ptTimestampQueryPool) {
+            commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, *ptTimestampQueryPool, queryBase + kPtTS_TlasEnd);
+        }
 
         // Memory barrier to ensure TLAS build finishes before the ray tracing shader reads it
         vk::MemoryBarrier2 asBuildToRayTracingBarrier{
@@ -1087,7 +1529,7 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
                 if (!modelRes)
                     continue;
 
-                resourceManager->bindResources(commandBuffer, node->modelId);
+                resourceManager->bindResources(commandBuffer, node->modelId, modelRes->hasRuntimeSkinning);
                 glm::mat4 worldTransform = node->getWorldTransform();
 
                 if (*modelRes->descriptorSet) {
@@ -1130,11 +1572,17 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
         };
         vk::DependencyInfo shadowReadDep{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &shadowToRead};
         commandBuffer.pipelineBarrier2(shadowReadDep);
+        // V1.3: remove compute sky from raster path; render directly into a cleared color target.
 
-        // Starfield compute pass — dispatches the compute shader which writes the starfield
-        // to the storage image, then blits it to the swapchain image (transitioning it to
-        // eColorAttachmentOptimal) so the main pass can render geometry on top.
-        recordComputeCommandBuffer(commandBuffer, imageIndex);
+        transition_image_layout(
+            swapchain.images[imageIndex],
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eColorAttachmentOptimal,
+            {},
+            vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
+            vk::PipelineStageFlagBits2::eTopOfPipe,
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::ImageAspectFlagBits::eColor);
     }
 
     if (ui.renderMode == RenderMode::PathTracer) {
@@ -1156,7 +1604,7 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
     vk::RenderingAttachmentInfo attachmentInfo = {
         .imageView = *swapchain.imageViews[imageIndex],
         .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eLoad,
+        .loadOp = (ui.renderMode == RenderMode::Rasterizer) ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
         .storeOp = vk::AttachmentStoreOp::eStore,
         .clearValue = clearColor
     };
@@ -1196,15 +1644,19 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
         commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *pipelines.graphicsPipelineLayout, 0,
                                          *descriptorSets[frames.frameIndex], nullptr);
 
-        // Define culling bounds based on camera position and view distance
-        // This is a simple "box cull" around the camera for now
-        glm::vec3 camPos = camera.position;
-        float viewDistance = 2000.0f;
-        AABB cullBounds = {
-            camPos - glm::vec3(viewDistance),
-            camPos + glm::vec3(viewDistance)
-        };
-        scene->draw(commandBuffer, pipelines.graphicsPipelineLayout, *resourceManager, cullBounds);
+        const float aspectRatio = static_cast<float>(swapchain.extent.width) / static_cast<float>(swapchain.extent.height);
+        const glm::mat4 view = camera.getViewMatrix();
+        const glm::mat4 proj = glm::perspective(
+            glm::radians(Laphria::EngineConfig::kMainCameraFovDegrees),
+            aspectRatio,
+            Laphria::EngineConfig::kMainCameraNearPlane,
+            Laphria::EngineConfig::kMainCameraFarPlane);
+        const glm::mat4 viewProjection = proj * view;
+        const glm::mat4 invViewProjection = glm::inverse(viewProjection);
+
+        const Laphria::Frustum frustum = Laphria::Frustum::fromViewProjection(viewProjection);
+        const Laphria::AABB cullBounds = Laphria::Frustum::computeAABB(invViewProjection);
+        scene->draw(commandBuffer, pipelines.graphicsPipelineLayout, *resourceManager, cullBounds, frustum);
     }
 
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *commandBuffer);
@@ -1262,11 +1714,41 @@ void EngineCore::transition_image_layout(
 }
 
 void EngineCore::drawFrame() {
+    if (!renderModeInitialized) {
+        lastSubmittedRenderMode = ui.renderMode;
+        renderModeInitialized = true;
+    } else if (ui.renderMode != lastSubmittedRenderMode) {
+        // Renderer switches can otherwise overlap in-flight GPU work that uses different
+        // pipeline/resource access patterns (especially PT denoiser scratch buffers).
+        vulkan.logicalDevice.waitIdle();
+        ptCameraMoved = true; // force history reset on the first PT frame after a mode switch
+        lastSubmittedRenderMode = ui.renderMode;
+    }
+
     // Note: inFlightFences, presentCompleteSemaphores, and commandBuffers are indexed by frameIndex,
     //       while renderFinishedSemaphores is indexed by imageIndex
     auto fenceResult = vulkan.logicalDevice.waitForFences(*frames.inFlightFences[frames.frameIndex], vk::True, UINT64_MAX);
     if (fenceResult != vk::Result::eSuccess) {
         throw std::runtime_error("failed to wait for fence!");
+    }
+
+    // Runtime skinned BLAS refit currently reuses per-model AS buffers across frames.
+    // Serialize in-flight submissions in this mode to avoid cross-frame AS write hazards.
+    if (resourceManager && resourceManager->hasRuntimeSkinnedModels()) {
+        for (size_t i = 0; i < frames.inFlightFences.size(); ++i) {
+            if (i == frames.frameIndex) {
+                continue;
+            }
+            const auto syncResult = vulkan.logicalDevice.waitForFences(*frames.inFlightFences[i], vk::True, UINT64_MAX);
+            if (syncResult != vk::Result::eSuccess) {
+                throw std::runtime_error("failed to synchronize runtime skinned BLAS updates");
+            }
+        }
+    }
+
+    if (submittedRenderModes[frames.frameIndex] == RenderMode::PathTracer) {
+        collectPathTracerTimings(frames.frameIndex);
+        updateAdaptivePathTracerSettings();
     }
 
     auto [result, imageIndex] = swapchain.swapChain.acquireNextImage(
@@ -1280,7 +1762,17 @@ void EngineCore::drawFrame() {
         assert(result == vk::Result::eTimeout || result == vk::Result::eNotReady);
         throw std::runtime_error("failed to acquire swap chain image!");
     }
-    frames.updateUniformBuffer(frames.frameIndex, camera, swapchain.extent, ui.lightDirection);
+
+    // If this swapchain image is still associated with an older in-flight frame, wait for it.
+    if (imageIndex < imagesInFlight.size() && imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
+        const auto imageFenceResult = vulkan.logicalDevice.waitForFences(
+            std::array<vk::Fence, 1>{imagesInFlight[imageIndex]}, vk::True, UINT64_MAX);
+        if (imageFenceResult != vk::Result::eSuccess) {
+            throw std::runtime_error("failed to wait for in-flight swapchain image fence");
+        }
+    }
+
+    frames.updateUniformBuffer(frames.frameIndex, camera, swapchain.extent, ui.lightDirection, ui.visualsV1);
 
     // Detect camera movement for path tracer history reset.
     // Any translation or rotation invalidates the reprojected history.
@@ -1300,11 +1792,12 @@ void EngineCore::drawFrame() {
 
     // 2. Main Pass
     recordCommandBuffer(imageIndex);
+    submittedRenderModes[frames.frameIndex] = ui.renderMode;
+    ptTimestampsValid[frames.frameIndex] = (ui.renderMode == RenderMode::PathTracer);
 
     // The swapchain image is accessed at eColorAttachmentOutput (main/ImGui pass) and at
     // eTransfer (blit in compute and RT paths). Both stages must wait for vkAcquireNextImage.
-    vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput |
-                                                    vk::PipelineStageFlagBits::eTransfer);
+    vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eAllCommands);
     const vk::SubmitInfo submitInfo{
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &*frames.presentCompleteSemaphores[frames.frameIndex],
@@ -1318,6 +1811,9 @@ void EngineCore::drawFrame() {
     commandBuffer.end();
 
     vulkan.queue.submit(submitInfo, *frames.inFlightFences[frames.frameIndex]);
+    if (imageIndex < imagesInFlight.size()) {
+        imagesInFlight[imageIndex] = *frames.inFlightFences[frames.frameIndex];
+    }
 
     const vk::PresentInfoKHR presentInfoKHR{
         .waitSemaphoreCount = 1,
@@ -1347,3 +1843,5 @@ void EngineCore::drawFrame() {
     }
     frames.frameIndex = (frames.frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 }
+
+
