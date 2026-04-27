@@ -1319,23 +1319,15 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
     recordSkinningPass(commandBuffer);
 
     // --- Build TLAS ---
-    std::vector<vk::AccelerationStructureInstanceKHR> tlasInstances;
-    uint32_t nodesWithModelId = 0;
-    uint32_t nodesMissingModelResource = 0;
-    uint32_t nodesWithNoBlas = 0;
-    uint32_t meshRefs = 0;
-    uint32_t skippedInvalidMeshRef = 0;
-
-    for (const auto &node: scene->getAllNodes()) {
-        if (node->modelId >= 0) {
-            ++nodesWithModelId;
-            ModelResource *modelRes = resourceManager->getModelResource(node->modelId);
-            if (!modelRes) {
-                ++nodesMissingModelResource;
+    if (ui.renderMode != RenderMode::Rasterizer) {
+        std::vector<vk::AccelerationStructureInstanceKHR> tlasInstances;
+        for (const auto &node: scene->getAllNodes()) {
+            if (node->modelId < 0) {
                 continue;
             }
-            if (modelRes->blasElements.empty()) {
-                ++nodesWithNoBlas;
+
+            ModelResource *modelRes = resourceManager->getModelResource(node->modelId);
+            if (!modelRes || modelRes->blasElements.empty()) {
                 continue;
             }
 
@@ -1350,10 +1342,7 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
             }
 
             for (int meshIdx: node->getMeshIndices()) {
-                ++meshRefs;
-                if (meshIdx < 0 || meshIdx >= modelRes->blasElements.size())
-                {
-                    ++skippedInvalidMeshRef;
+                if (meshIdx < 0 || meshIdx >= modelRes->blasElements.size()) {
                     continue;
                 }
 
@@ -1384,9 +1373,7 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
                 tlasInstances.push_back(instance);
             }
         }
-    }
 
-    if (ui.renderMode != RenderMode::Rasterizer) {
         if (tlasInstances.size() > frames.MAX_TLAS_INSTANCES) {
             throw std::runtime_error(
                 "TLAS instance count (" + std::to_string(tlasInstances.size()) +
