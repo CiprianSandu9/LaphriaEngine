@@ -26,10 +26,12 @@ public:
     struct PathTracerSettings
     {
         float                 resolutionScale = 1.0f;
-        int                   denoiserIterations = 5;
-        PathTracerQualityMode qualityMode = PathTracerQualityMode::AutoBalanced;
+        int                   denoiserIterations = 1;
+        PathTracerQualityMode qualityMode = PathTracerQualityMode::Manual;
         bool                  reduceSecondaryEffects = false;
         float                 targetFrameMs = 16.6f;
+        bool                  enableReprojection = true;
+        bool                  enableDenoiser = true;
     };
 
     struct PathTracerPerfStats

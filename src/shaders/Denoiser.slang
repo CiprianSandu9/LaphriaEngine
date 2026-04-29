@@ -1,6 +1,7 @@
 #include "ShaderCommon.slang"
 
 // Denoiser descriptor set (Set 0) — all storage images.
+[[vk::binding(0,  0)]] RWTexture2D<float4> noisyColor;       // raw RT output
 [[vk::binding(1,  0)]] RWTexture2D<float4> gBufferNormals;     // G-Buffer normals (edge-stopping)
 [[vk::binding(2,  0)]] RWTexture2D<float>  gBufferDepth;       // G-Buffer depth (edge-stopping)
 [[vk::binding(7,  0)]] RWTexture2D<float2> historyMomentsOut;  // variance estimate (R=mean, G=mean²)
@@ -14,6 +15,7 @@ struct DenoisePushConstants {
     float phiColor;    // luminance edge-stopping weight (typical: 10.0)
     float phiNormal;   // normal edge-stopping exponent  (typical: 128.0)
     float exposureScale;
+    int   useRawInput; // 1 if Reprojection was skipped
 };
 [[vk::push_constant]] DenoisePushConstants push;
 
@@ -40,7 +42,22 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
                  (push.stepSize == 8) ? 3 : 4;
     bool readA = (iter % 2 == 0);
 
-    float3 centerColor = readA ? atrousTempA[pixel].rgb : atrousTempB[pixel].rgb;
+    if (push.stepSize == 0) {
+        // Pass-through mode: denoiser disabled, just apply tonemap.
+        float3 color = (push.useRawInput != 0) ? noisyColor[pixel].rgb : atrousTempA[pixel].rgb;
+        if (push.isLastPass != 0) {
+            float3 tonemapped = applyAcesTonemap(color, push.exposureScale);
+            finalOutput[pixel] = float4(tonemapped, 1.0);
+        }
+        return;
+    }
+
+    float3 centerColor;
+    if (push.useRawInput != 0 && iter == 0) {
+        centerColor = noisyColor[pixel].rgb;
+    } else {
+        centerColor = readA ? atrousTempA[pixel].rgb : atrousTempB[pixel].rgb;
+    }
     // Sky pixels write a zero normal (length = 0); guard against the NaN that normalize() would produce.
     float3 rawNorm    = gBufferNormals[pixel].xyz;
     float3 centerNorm  = (dot(rawNorm, rawNorm) > 0.0001) ? normalize(rawNorm) : float3(0.0, 0.0, 1.0);
@@ -51,8 +68,15 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
     // collapses to zero on the first frame when there is no temporal history yet.
     // Without this floor, all neighbor weights become ~0 and the A-Trous filter degenerates
     // into a pass-through, preserving raw 1-SPP salt-and-pepper noise.
-    float2 moments  = historyMomentsOut[pixel];
-    float  variance = max(moments.y - moments.x * moments.x, 0.01);
+    float variance;
+    if (push.useRawInput != 0) {
+        // Reprojection was skipped, so temporal moments are stale/undefined.
+        // Use a deterministic floor variance to keep edge-stopping stable.
+        variance = 0.01;
+    } else {
+        float2 moments = historyMomentsOut[pixel];
+        variance = max(moments.y - moments.x * moments.x, 0.01);
+    }
     float  centerLum = luminance(centerColor);
 
     float3 colorSum  = float3(0.0, 0.0, 0.0);
@@ -69,7 +93,12 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
             // Clamp to image boundary.
             samplePixel = clamp(samplePixel, int2(0, 0), int2(dims) - int2(1, 1));
 
-            float3 sampleColor   = readA ? atrousTempA[samplePixel].rgb : atrousTempB[samplePixel].rgb;
+            float3 sampleColor;
+            if (push.useRawInput != 0 && iter == 0) {
+                sampleColor = noisyColor[samplePixel].rgb;
+            } else {
+                sampleColor = readA ? atrousTempA[samplePixel].rgb : atrousTempB[samplePixel].rgb;
+            }
             float3 rawSampleNorm = gBufferNormals[samplePixel].xyz;
             float3 sampleNorm    = (dot(rawSampleNorm, rawSampleNorm) > 0.0001) ? normalize(rawSampleNorm) : float3(0.0, 0.0, 1.0);
             float  sampleDepth   = gBufferDepth[samplePixel];

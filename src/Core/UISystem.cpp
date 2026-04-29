@@ -1077,6 +1077,11 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         }
         ImGui::Checkbox("Reduce Secondary Effects", &pathTracerSettings.reduceSecondaryEffects);
         ImGui::DragFloat("Target Frame (ms)", &pathTracerSettings.targetFrameMs, 0.1f, 8.0f, 40.0f, "%.2f");
+        
+        ImGui::Separator();
+        ImGui::Text("Debug Toggles:");
+        ImGui::Checkbox("Enable Reprojection", &pathTracerSettings.enableReprojection);
+        ImGui::Checkbox("Enable Denoiser", &pathTracerSettings.enableDenoiser);
 
         ImGui::Separator();
         ImGui::Text("PT Timings (GPU):");

@@ -140,6 +140,7 @@ struct DenoisePushConstants
 	float   phiColor;    // luminance edge-stopping weight (typical: 10.0)
 	float   phiNormal;   // normal edge-stopping exponent (typical: 128.0)
 	float   exposureScale; // global exposure multiplier applied on final denoise pass
+	int32_t useRawInput;
 };
 
 struct SkinningPushConstants

@@ -1034,25 +1034,28 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     barrierRTtoCompute(*frames.rtMotionVectors[fi]);
 
     // 4. Reprojection pass.
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.reprojectionPipeline);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-                                     *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
+    if (ui.pathTracerSettings.enableReprojection) {
+        commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.reprojectionPipeline);
+        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                                         *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
 
-    float historyAlpha = ptCameraMoved ? 1.0f : 0.1f;
-    DenoisePushConstants reproPush{
-        .stepSize = 0,
-        .isLastPass = 0,
-        .phiColor = historyAlpha,
-        .phiNormal = 128.0f,
-        .exposureScale = ui.exposure};
-    commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
-                                                      vk::ShaderStageFlagBits::eCompute, 0, reproPush);
-    if (*ptTimestampQueryPool) {
-        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_ReprojectionStart);
-    }
-    commandBuffer.dispatch(gx, gy, 1);
-    if (*ptTimestampQueryPool) {
-        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_ReprojectionEnd);
+        float historyAlpha = ptCameraMoved ? 1.0f : 0.1f;
+        DenoisePushConstants reproPush{
+            .stepSize = 0,
+            .isLastPass = 0,
+            .phiColor = historyAlpha,
+            .phiNormal = 128.0f,
+            .exposureScale = ui.exposure,
+            .useRawInput = 0};
+        commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
+                                                          vk::ShaderStageFlagBits::eCompute, 0, reproPush);
+        if (*ptTimestampQueryPool) {
+            commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_ReprojectionStart);
+        }
+        commandBuffer.dispatch(gx, gy, 1);
+        if (*ptTimestampQueryPool) {
+            commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_ReprojectionEnd);
+        }
     }
 
     auto barrierCompute = [&](vk::Image img) {
@@ -1069,28 +1072,47 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
                                      *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
 
-    const int atrousIterations = std::clamp(ui.pathTracerSettings.denoiserIterations, 1, 5);
+    const int atrousIterations = ui.pathTracerSettings.enableDenoiser ? std::clamp(ui.pathTracerSettings.denoiserIterations, 1, 5) : 0;
+    const int useRawInput = ui.pathTracerSettings.enableReprojection ? 0 : 1;
+    
     if (*ptTimestampQueryPool) {
         commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_DenoiserStart);
     }
-    for (int iter = 0; iter < atrousIterations; ++iter) {
-        const int32_t stepSize = 1 << iter;
-        const int32_t isLastPass = (iter == atrousIterations - 1) ? 1 : 0;
+    
+    if (atrousIterations == 0) {
+        // Pass-through tonemapping
         DenoisePushConstants atrousPush{
-            .stepSize = stepSize,
-            .isLastPass = isLastPass,
+            .stepSize = 0,
+            .isLastPass = 1,
             .phiColor = 1.0f,
             .phiNormal = 128.0f,
-            .exposureScale = ui.exposure};
+            .exposureScale = ui.exposure,
+            .useRawInput = useRawInput};
         commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
                                                           vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
         commandBuffer.dispatch(gx, gy, 1);
+    } else {
+        for (int iter = 0; iter < atrousIterations; ++iter) {
+            const int32_t stepSize = 1 << iter;
+            const int32_t isLastPass = (iter == atrousIterations - 1) ? 1 : 0;
+            DenoisePushConstants atrousPush{
+                .stepSize = stepSize,
+                .isLastPass = isLastPass,
+                .phiColor = 1.0f,
+                .phiNormal = 128.0f,
+                .exposureScale = ui.exposure,
+                .useRawInput = useRawInput};
+            commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
+                                                              vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
+            commandBuffer.dispatch(gx, gy, 1);
 
-        if (!isLastPass) {
-            const int writeBuf = iter % 2;
-            barrierCompute(*frames.atrousTemp[(writeBuf == 0) ? atrousB : atrousA]);
+            if (!isLastPass) {
+                const int writeBuf = iter % 2;
+                barrierCompute(*frames.atrousTemp[(writeBuf == 0) ? atrousB : atrousA]);
+            }
         }
     }
+    
     if (*ptTimestampQueryPool) {
         commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_DenoiserEnd);
     }

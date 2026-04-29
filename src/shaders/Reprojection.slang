@@ -21,6 +21,7 @@ struct DenoisePushConstants {
     float phiColor;
     float phiNormal;
     float exposureScale;
+    int   useRawInput;
 };
 [[vk::push_constant]] DenoisePushConstants push;
 
@@ -51,11 +52,12 @@ void reprojectionMain(uint3 dispatchID : SV_DispatchThreadID)
 
     // ── Temporal reprojection ────────────────────────────────────────────────
     // mv = currentCenterUV - prevCenterUV, where centerUV = (pixel + 0.5) / dims.
-    // Rearranged: prevPixelIndex = floor(pixel + 0.5 - mv*dims - 0.5) = floor(pixel - mv*dims).
-    // The old code subtracted an extra 0.5 on top of the correct derivation, shifting
-    // every lookup one pixel up-left and breaking accumulation even for a static camera.
+    // Rearranged: prevCenterInPixels = pixel + 0.5 - mv*dims.
+    // Convert center-space back to integer texel index with floor(centerInPixels).
+    // Using trunc(pixel - mv*dims) biases lookups by up to 1 texel for subpixel motion,
+    // which appears as watery blur / crawling in temporally accumulated details.
     float2 mv        = motionVectors[pixel];
-    int2   prevPixel = int2(float2(pixel) - mv * float2(dims));
+    int2   prevPixel = int2(floor(float2(pixel) + 0.5 - mv * float2(dims)));
 
     // Rejection heuristics: normals must align and depths must be close.
     bool   valid = all(prevPixel >= int2(0, 0)) && all(prevPixel < int2(dims));
@@ -66,7 +68,9 @@ void reprojectionMain(uint3 dispatchID : SV_DispatchThreadID)
         float3 prevNormal = prevGBufferNormals[prevPixel].xyz;
         float  prevDepth  = prevGBufferDepth[prevPixel];
 
-        float normalDot   = dot(normalize(currentNormal), normalize(prevNormal));
+        float3 currN      = (dot(currentNormal, currentNormal) > 0.0001) ? normalize(currentNormal) : float3(0.0, 0.0, 1.0);
+        float3 prevN      = (dot(prevNormal, prevNormal) > 0.0001) ? normalize(prevNormal) : float3(0.0, 0.0, 1.0);
+        float normalDot   = dot(currN, prevN);
         float depthRelErr = abs(currentDepth - prevDepth) / max(abs(currentDepth), 0.001);
 
         if (normalDot > 0.9 && depthRelErr < 0.1 && currentDepth > 0.0 && prevDepth > 0.0) {
