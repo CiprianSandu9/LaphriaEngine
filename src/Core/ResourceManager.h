@@ -123,6 +123,13 @@ struct ModelImportReport
 	std::vector<std::string> supportedFeatures;
 	bool                     hasAnimations = false;
 	bool                     hasSkins = false;
+	std::optional<double>    parseMs;
+	std::optional<double>    textureDecodeMs;
+	std::optional<double>    textureUploadMs;
+	std::optional<double>    meshExtractionMs;
+	std::optional<double>    bufferUploadMs;
+	std::optional<double>    blasBuildMs;
+	std::optional<double>    totalMs;
 };
 
 class GltfImporter;
@@ -174,12 +181,22 @@ class ResourceManager
 	std::unique_ptr<GltfImporter>               gltfImporter;
 	std::unique_ptr<GpuResourceRegistry>        gpuResourceRegistry;
 
-	void loadTextures(const fastgltf::Asset &gltf, const std::filesystem::path &modelDir, ModelResource *modelRes) const;
+	struct TextureLoadStats
+	{
+		double decodeMs = 0.0;
+		double uploadMs = 0.0;
+		uint32_t basisuBc7Count = 0;
+		uint32_t basisuBc3Count = 0;
+		uint32_t basisuBc1Count = 0;
+		uint32_t nativeKtxCount = 0;
+		uint32_t rgbaFallbackCount = 0;
+	};
 
-	bool prepareKTXFromMemory(const unsigned char *data, size_t length, Laphria::VulkanUtils::VmaImage &outImage, uint32_t &width, uint32_t &height,
-	                          vk::Format &format) const;
+	void loadTextures(const fastgltf::Asset &gltf, const std::filesystem::path &modelDir, ModelResource *modelRes,
+	                  TextureLoadStats &stats) const;
 
-	void prepareTextureFromPixels(const unsigned char *pixels, int width, int height, Laphria::VulkanUtils::VmaImage &outImage, vk::Format &format) const;
+	bool prepareKTXFromMemory(const unsigned char *data, size_t length, Laphria::VulkanUtils::TextureUploadPayload &outPayload,
+	                          std::string &outPathTag) const;
 
 	void finalizeProceduralModel(ModelResource *modelRes, const std::vector<Laphria::Vertex> &vertices, const std::vector<uint32_t> &indices,
 	                             vk::DescriptorSetLayout layout, const std::string &meshName,

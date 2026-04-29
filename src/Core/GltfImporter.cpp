@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <cmath>
 #include <glm/gtx/matrix_decompose.hpp>
+#include <limits>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -17,9 +19,7 @@ namespace
 {
 ModelResource::AnimationInterpolationMode toInterpolationMode(fastgltf::AnimationInterpolation interpolation)
 {
-	return interpolation == fastgltf::AnimationInterpolation::Step
-	           ? ModelResource::AnimationInterpolationMode::Step
-	           : ModelResource::AnimationInterpolationMode::Linear;
+	return interpolation == fastgltf::AnimationInterpolation::Step ? ModelResource::AnimationInterpolationMode::Step : ModelResource::AnimationInterpolationMode::Linear;
 }
 
 bool readAccessorTimes(const fastgltf::Asset &gltf, size_t accessorIndex, std::vector<float> &outTimes)
@@ -72,14 +72,44 @@ bool readAccessorQuat(const fastgltf::Asset &gltf, size_t accessorIndex, std::ve
 	});
 	return true;
 }
-} // namespace
+
+fastgltf::Extensions enabledGltfExtensions()
+{
+	return fastgltf::Extensions::KHR_texture_transform |
+	       fastgltf::Extensions::KHR_texture_basisu |
+	       fastgltf::Extensions::MSFT_texture_dds |
+	       fastgltf::Extensions::KHR_mesh_quantization |
+	       fastgltf::Extensions::EXT_meshopt_compression |
+	       fastgltf::Extensions::KHR_lights_punctual |
+	       fastgltf::Extensions::EXT_texture_webp |
+	       fastgltf::Extensions::KHR_materials_specular |
+	       fastgltf::Extensions::KHR_materials_ior |
+	       fastgltf::Extensions::KHR_materials_iridescence |
+	       fastgltf::Extensions::KHR_materials_volume |
+	       fastgltf::Extensions::KHR_materials_transmission |
+	       fastgltf::Extensions::KHR_materials_clearcoat |
+	       fastgltf::Extensions::KHR_materials_emissive_strength |
+	       fastgltf::Extensions::KHR_materials_sheen |
+	       fastgltf::Extensions::KHR_materials_unlit |
+	       fastgltf::Extensions::KHR_materials_anisotropy |
+	       fastgltf::Extensions::EXT_mesh_gpu_instancing |
+	       fastgltf::Extensions::MSFT_packing_normalRoughnessMetallic |
+	       fastgltf::Extensions::MSFT_packing_occlusionRoughnessMetallic |
+	       fastgltf::Extensions::KHR_materials_dispersion |
+	       fastgltf::Extensions::KHR_materials_variants |
+	       fastgltf::Extensions::KHR_accessor_float64 |
+	       fastgltf::Extensions::KHR_draco_mesh_compression |
+	       fastgltf::Extensions::GODOT_single_root |
+	       fastgltf::Extensions::KHR_materials_diffuse_transmission;
+}
+}        // namespace
 
 SceneNode::Ptr GltfImporter::processGltfNode(const fastgltf::Asset &gltf, size_t nodeIndex, ModelResource &modelResource, std::vector<Laphria::Vertex> &vertices,
                                              std::vector<uint32_t> &indices, std::vector<ModelResource::SkinningInfluence> &skinningInfluences,
                                              std::vector<int> &nodeSkinIndices) const
 {
-	const auto &node = gltf.nodes[nodeIndex];
-	auto        newNode = std::make_shared<SceneNode>(std::string(node.name));
+	const auto &node         = gltf.nodes[nodeIndex];
+	auto        newNode      = std::make_shared<SceneNode>(std::string(node.name));
 	newNode->sourceNodeIndex = static_cast<int>(nodeIndex);
 	if (node.skinIndex.has_value())
 	{
@@ -107,16 +137,16 @@ SceneNode::Ptr GltfImporter::processGltfNode(const fastgltf::Asset &gltf, size_t
 
 	if (node.meshIndex.has_value())
 	{
-		const auto &mesh = gltf.meshes[node.meshIndex.value()];
+		const auto         &mesh = gltf.meshes[node.meshIndex.value()];
 		Laphria::LoadedMesh loadedMesh;
 		loadedMesh.name = mesh.name;
 
 		for (const auto &primitive : mesh.primitives)
 		{
 			Laphria::MeshPrimitive meshPrim;
-			meshPrim.vertexOffset = vertices.size();
-			meshPrim.firstIndex = indices.size();
-			meshPrim.materialIndex = primitive.materialIndex.has_value() ? primitive.materialIndex.value() : -1;
+			meshPrim.vertexOffset             = vertices.size();
+			meshPrim.firstIndex               = indices.size();
+			meshPrim.materialIndex            = primitive.materialIndex.has_value() ? primitive.materialIndex.value() : -1;
 			const uint32_t primitiveSkinIndex = (nodeSkinIndices[nodeIndex] >= 0) ? static_cast<uint32_t>(nodeSkinIndices[nodeIndex]) : 0u;
 
 			auto posIt = primitive.findAttribute("POSITION");
@@ -132,9 +162,9 @@ SceneNode::Ptr GltfImporter::processGltfNode(const fastgltf::Asset &gltf, size_t
 				}
 
 				fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(gltf, posAcc, [&](fastgltf::math::fvec3 p, size_t i) {
-					vertices[vCount + i].pos = glm::vec3(p.x(), p.y(), p.z());
-					vertices[vCount + i].color = glm::vec3(1.0f);
-					vertices[vCount + i].normal = glm::vec3(0, 1, 0);
+					vertices[vCount + i].pos      = glm::vec3(p.x(), p.y(), p.z());
+					vertices[vCount + i].color    = glm::vec3(1.0f);
+					vertices[vCount + i].normal   = glm::vec3(0, 1, 0);
 					vertices[vCount + i].texCoord = glm::vec2(0.0f);
 				});
 			}
@@ -163,7 +193,7 @@ SceneNode::Ptr GltfImporter::processGltfNode(const fastgltf::Asset &gltf, size_t
 					{
 						return;
 					}
-					auto &influence = skinningInfluences[meshPrim.vertexOffset + i];
+					auto &influence  = skinningInfluences[meshPrim.vertexOffset + i];
 					influence.joints = glm::uvec4(
 					    static_cast<uint32_t>(std::max(0, static_cast<int>(std::lround(j.x())))),
 					    static_cast<uint32_t>(std::max(0, static_cast<int>(std::lround(j.y())))),
@@ -180,9 +210,9 @@ SceneNode::Ptr GltfImporter::processGltfNode(const fastgltf::Asset &gltf, size_t
 					{
 						return;
 					}
-					auto      &influence = skinningInfluences[meshPrim.vertexOffset + i];
-					glm::vec4  weights(w.x(), w.y(), w.z(), w.w());
-					const float sum = weights.x + weights.y + weights.z + weights.w;
+					auto       &influence = skinningInfluences[meshPrim.vertexOffset + i];
+					glm::vec4   weights(w.x(), w.y(), w.z(), w.w());
+					const float sum   = weights.x + weights.y + weights.z + weights.w;
 					influence.weights = sum > 1e-6f ? (weights / sum) : glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
 				});
 			}
@@ -197,7 +227,7 @@ SceneNode::Ptr GltfImporter::processGltfNode(const fastgltf::Asset &gltf, size_t
 
 			if (primitive.indicesAccessor.has_value())
 			{
-				auto &idxAcc = gltf.accessors[primitive.indicesAccessor.value()];
+				auto &idxAcc        = gltf.accessors[primitive.indicesAccessor.value()];
 				meshPrim.indexCount = idxAcc.count;
 				fastgltf::iterateAccessor<uint32_t>(gltf, idxAcc, [&](uint32_t idx) { indices.push_back(idx); });
 			}
@@ -225,8 +255,8 @@ SceneNode::Ptr GltfImporter::processGltfNode(const fastgltf::Asset &gltf, size_t
 
 					glm::vec3 edge1 = v1.pos - v0.pos;
 					glm::vec3 edge2 = v2.pos - v0.pos;
-					glm::vec2 duv1 = v1.texCoord - v0.texCoord;
-					glm::vec2 duv2 = v2.texCoord - v0.texCoord;
+					glm::vec2 duv1  = v1.texCoord - v0.texCoord;
+					glm::vec2 duv2  = v2.texCoord - v0.texCoord;
 
 					const float denom = duv1.x * duv2.y - duv2.x * duv1.y;
 					if (std::abs(denom) < 1e-6f)
@@ -243,14 +273,14 @@ SceneNode::Ptr GltfImporter::processGltfNode(const fastgltf::Asset &gltf, size_t
 
 				for (size_t i = 0; i < primVertexCount; ++i)
 				{
-					auto      &v = vertices[meshPrim.vertexOffset + i];
-					glm::vec3  N = glm::normalize(v.normal);
-					glm::vec3  T = glm::vec3(v.tangent);
+					auto       &v   = vertices[meshPrim.vertexOffset + i];
+					glm::vec3   N   = glm::normalize(v.normal);
+					glm::vec3   T   = glm::vec3(v.tangent);
 					const float len = glm::length(T);
 					if (len < 1e-6f)
 					{
 						glm::vec3 up = std::abs(N.y) < 0.99f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
-						T = glm::normalize(glm::cross(up, N));
+						T            = glm::normalize(glm::cross(up, N));
 					}
 					else
 					{
@@ -300,27 +330,35 @@ SceneNode::Ptr GltfImporter::buildSceneNodes(const fastgltf::Asset &gltf, ModelR
 
 GltfImporter::ParsedAsset GltfImporter::parseAsset(const std::string &path) const
 {
-	fastgltf::Parser parser;
+	fastgltf::Parser parser(enabledGltfExtensions());
+	LOGI("GLTF parse: reading file bytes for %s", path.c_str());
 	auto data = fastgltf::GltfDataBuffer::FromPath(path);
 	if (data.error() != fastgltf::Error::None)
 	{
-		throw std::runtime_error("Failed to load glTF file");
+		std::ostringstream oss;
+		oss << "Failed to load glTF file: " << fastgltf::getErrorName(data.error()) << " - " << fastgltf::getErrorMessage(data.error());
+		throw std::runtime_error(oss.str());
 	}
 
 	constexpr auto gltfOptions = fastgltf::Options::LoadExternalBuffers | fastgltf::Options::LoadExternalImages |
 	                             fastgltf::Options::GenerateMeshIndices | fastgltf::Options::DecomposeNodeMatrices;
 
 	std::filesystem::path modelDir = std::filesystem::path(path).parent_path();
+	LOGI("GLTF parse: starting document parse for %s", path.c_str());
 	auto asset = parser.loadGltf(data.get(), modelDir, gltfOptions);
 	if (asset.error() != fastgltf::Error::None)
 	{
-		throw std::runtime_error("Failed to parse glTF");
+		std::ostringstream oss;
+		oss << "Failed to parse glTF: " << fastgltf::getErrorName(asset.error()) << " - " << fastgltf::getErrorMessage(asset.error());
+		throw std::runtime_error(oss.str());
 	}
+	LOGI("GLTF parse: document parsed for %s (meshes=%zu images=%zu materials=%zu)",
+	     path.c_str(), asset.get().meshes.size(), asset.get().images.size(), asset.get().materials.size());
 
 	const bool hasSkinning = detectSkinningAttributes(asset.get());
 	return ParsedAsset{
-	    .asset = std::move(asset.get()),
-	    .modelDirectory = std::move(modelDir),
+	    .asset                 = std::move(asset.get()),
+	    .modelDirectory        = std::move(modelDir),
 	    .hasSkinningAttributes = hasSkinning};
 }
 
@@ -335,13 +373,13 @@ std::vector<GltfImporter::TextureImportSource> GltfImporter::buildTextureImportS
 
 		std::visit(fastgltf::visitor{
 		               [&](const fastgltf::sources::URI &uri) {
-			               source.kind = TextureImportSource::Kind::Uri;
+			               source.kind    = TextureImportSource::Kind::Uri;
 			               source.uriPath = modelDirectory / uri.uri.fspath();
 		               },
 		               [&](const fastgltf::sources::Array &array) {
-			               source.kind = TextureImportSource::Kind::Bytes;
-			               const auto *data = reinterpret_cast<const unsigned char *>(array.bytes.data());
-			               source.bytes.assign(data, data + array.bytes.size());
+			               source.kind        = TextureImportSource::Kind::Bytes;
+			               source.bytesData   = reinterpret_cast<const unsigned char *>(array.bytes.data());
+			               source.bytesLength = array.bytes.size();
 		               },
 		               [&](const fastgltf::sources::BufferView &view) {
 			               if (view.bufferViewIndex >= gltf.bufferViews.size())
@@ -366,9 +404,9 @@ std::vector<GltfImporter::TextureImportSource> GltfImporter::buildTextureImportS
 					                              return;
 				                              }
 
-				                              source.kind = TextureImportSource::Kind::Bytes;
-				                              const auto *data = reinterpret_cast<const unsigned char *>(array.bytes.data()) + bufferView.byteOffset;
-				                              source.bytes.assign(data, data + bufferView.byteLength);
+				                              source.kind        = TextureImportSource::Kind::Bytes;
+				                              source.bytesData   = reinterpret_cast<const unsigned char *>(array.bytes.data()) + bufferView.byteOffset;
+				                              source.bytesLength = bufferView.byteLength;
 			                              },
 			                              [&](auto &) {
 				                              source.kind = TextureImportSource::Kind::Unsupported;
@@ -393,7 +431,7 @@ void GltfImporter::populateAnimationClips(const fastgltf::Asset &gltf, ModelReso
 
 	for (size_t animationIndex = 0; animationIndex < gltf.animations.size(); ++animationIndex)
 	{
-		const auto &animation = gltf.animations[animationIndex];
+		const auto                  &animation = gltf.animations[animationIndex];
 		ModelResource::AnimationClip clip;
 		clip.id = !animation.name.empty() ? std::string(animation.name.c_str()) : ("clip_" + std::to_string(animationIndex));
 
@@ -423,8 +461,8 @@ void GltfImporter::populateAnimationClips(const fastgltf::Asset &gltf, ModelReso
 				continue;
 			}
 
-			clip.durationSeconds = std::max(clip.durationSeconds, keyTimes.back());
-			auto &nodeTracks = clip.nodeTracks[static_cast<int>(channel.nodeIndex.value())];
+			clip.durationSeconds     = std::max(clip.durationSeconds, keyTimes.back());
+			auto      &nodeTracks    = clip.nodeTracks[static_cast<int>(channel.nodeIndex.value())];
 			const auto interpolation = toInterpolationMode(sampler.interpolation);
 
 			switch (channel.path)
@@ -438,8 +476,8 @@ void GltfImporter::populateAnimationClips(const fastgltf::Asset &gltf, ModelReso
 						continue;
 					}
 					nodeTracks.translation = ModelResource::AnimationTrackVec3{
-					    .keyTimes = std::move(keyTimes),
-					    .keyValues = std::move(values),
+					    .keyTimes      = std::move(keyTimes),
+					    .keyValues     = std::move(values),
 					    .interpolation = interpolation};
 					break;
 				}
@@ -452,8 +490,8 @@ void GltfImporter::populateAnimationClips(const fastgltf::Asset &gltf, ModelReso
 						continue;
 					}
 					nodeTracks.rotation = ModelResource::AnimationTrackQuat{
-					    .keyTimes = std::move(keyTimes),
-					    .keyValues = std::move(values),
+					    .keyTimes      = std::move(keyTimes),
+					    .keyValues     = std::move(values),
 					    .interpolation = interpolation};
 					break;
 				}
@@ -466,8 +504,8 @@ void GltfImporter::populateAnimationClips(const fastgltf::Asset &gltf, ModelReso
 						continue;
 					}
 					nodeTracks.scale = ModelResource::AnimationTrackVec3{
-					    .keyTimes = std::move(keyTimes),
-					    .keyValues = std::move(values),
+					    .keyTimes      = std::move(keyTimes),
+					    .keyValues     = std::move(values),
 					    .interpolation = interpolation};
 					break;
 				}
@@ -488,34 +526,60 @@ void GltfImporter::populateMaterials(const fastgltf::Asset &gltf, ModelResource 
 	modelResource.materials.clear();
 	modelResource.materials.reserve(gltf.materials.size());
 
+	auto resolveTextureImageIndex = [&](size_t textureIndex) -> int {
+		if (textureIndex >= gltf.textures.size())
+		{
+			return -1;
+		}
+		const auto &texture = gltf.textures[textureIndex];
+		size_t      imageIndex = std::numeric_limits<size_t>::max();
+		if (texture.imageIndex.has_value())
+		{
+			imageIndex = texture.imageIndex.value();
+		}
+		else if (texture.basisuImageIndex.has_value())
+		{
+			imageIndex = texture.basisuImageIndex.value();
+		}
+		else
+		{
+			return -1;
+		}
+		if (imageIndex >= gltf.images.size())
+		{
+			return -1;
+		}
+		return static_cast<int>(imageIndex);
+	};
+
 	for (const auto &mat : gltf.materials)
 	{
 		Laphria::PBRMaterial pbrMat;
 		pbrMat.data.baseColorFactor = glm::vec4(mat.pbrData.baseColorFactor[0], mat.pbrData.baseColorFactor[1], mat.pbrData.baseColorFactor[2], mat.pbrData.baseColorFactor[3]);
-		pbrMat.data.metallicFactor = mat.pbrData.metallicFactor;
+		pbrMat.data.metallicFactor  = mat.pbrData.metallicFactor;
 		pbrMat.data.roughnessFactor = mat.pbrData.roughnessFactor;
 
 		if (mat.pbrData.baseColorTexture.has_value())
 		{
-			pbrMat.baseColorTextureIndex = gltf.textures[mat.pbrData.baseColorTexture.value().textureIndex].imageIndex.value();
+			pbrMat.baseColorTextureIndex = resolveTextureImageIndex(mat.pbrData.baseColorTexture.value().textureIndex);
 		}
 		if (mat.pbrData.metallicRoughnessTexture.has_value())
 		{
-			pbrMat.metallicRoughnessTextureIndex = gltf.textures[mat.pbrData.metallicRoughnessTexture.value().textureIndex].imageIndex.value();
+			pbrMat.metallicRoughnessTextureIndex = resolveTextureImageIndex(mat.pbrData.metallicRoughnessTexture.value().textureIndex);
 		}
 		if (mat.normalTexture.has_value())
 		{
-			pbrMat.normalTextureIndex = gltf.textures[mat.normalTexture.value().textureIndex].imageIndex.value();
-			pbrMat.data.normalScale = mat.normalTexture.value().scale;
+			pbrMat.normalTextureIndex = resolveTextureImageIndex(mat.normalTexture.value().textureIndex);
+			pbrMat.data.normalScale   = mat.normalTexture.value().scale;
 		}
 		if (mat.occlusionTexture.has_value())
 		{
-			pbrMat.occlusionTextureIndex = gltf.textures[mat.occlusionTexture.value().textureIndex].imageIndex.value();
+			pbrMat.occlusionTextureIndex  = resolveTextureImageIndex(mat.occlusionTexture.value().textureIndex);
 			pbrMat.data.occlusionStrength = mat.occlusionTexture.value().strength;
 		}
 		if (mat.emissiveTexture.has_value())
 		{
-			pbrMat.emissiveTextureIndex = gltf.textures[mat.emissiveTexture.value().textureIndex].imageIndex.value();
+			pbrMat.emissiveTextureIndex = resolveTextureImageIndex(mat.emissiveTexture.value().textureIndex);
 		}
 
 		if (mat.specular != nullptr)
@@ -523,16 +587,16 @@ void GltfImporter::populateMaterials(const fastgltf::Asset &gltf, ModelResource 
 			pbrMat.data.specularFactor = mat.specular->specularFactor;
 			if (mat.specular->specularTexture.has_value())
 			{
-				pbrMat.specularTextureIndex = gltf.textures[mat.specular->specularTexture.value().textureIndex].imageIndex.value();
+				pbrMat.specularTextureIndex = resolveTextureImageIndex(mat.specular->specularTexture.value().textureIndex);
 			}
 		}
 
-		pbrMat.data.baseColorIndex = pbrMat.baseColorTextureIndex;
+		pbrMat.data.baseColorIndex         = pbrMat.baseColorTextureIndex;
 		pbrMat.data.metallicRoughnessIndex = pbrMat.metallicRoughnessTextureIndex;
-		pbrMat.data.normalIndex = pbrMat.normalTextureIndex;
-		pbrMat.data.occlusionIndex = pbrMat.occlusionTextureIndex;
-		pbrMat.data.emissiveIndex = pbrMat.emissiveTextureIndex;
-		pbrMat.data.specularTextureIndex = pbrMat.specularTextureIndex;
+		pbrMat.data.normalIndex            = pbrMat.normalTextureIndex;
+		pbrMat.data.occlusionIndex         = pbrMat.occlusionTextureIndex;
+		pbrMat.data.emissiveIndex          = pbrMat.emissiveTextureIndex;
+		pbrMat.data.specularTextureIndex   = pbrMat.specularTextureIndex;
 
 		modelResource.materials.push_back(pbrMat);
 	}
@@ -540,7 +604,7 @@ void GltfImporter::populateMaterials(const fastgltf::Asset &gltf, ModelResource 
 
 std::vector<Laphria::MaterialData> GltfImporter::buildPerPrimitiveMaterials(ModelResource &modelResource) const
 {
-	uint32_t currentFlatPrimitiveIndex = 0;
+	uint32_t                           currentFlatPrimitiveIndex = 0;
 	std::vector<Laphria::MaterialData> perPrimitiveMaterials;
 
 	for (auto &mesh : modelResource.meshes)
@@ -553,9 +617,9 @@ std::vector<Laphria::MaterialData> GltfImporter::buildPerPrimitiveMaterials(Mode
 				primMat = modelResource.materials[prim.materialIndex].data;
 			}
 
-			prim.flatPrimitiveIndex = currentFlatPrimitiveIndex++;
-			primMat.firstIndex = prim.firstIndex;
-			primMat.vertexOffset = prim.vertexOffset;
+			prim.flatPrimitiveIndex     = currentFlatPrimitiveIndex++;
+			primMat.firstIndex          = prim.firstIndex;
+			primMat.vertexOffset        = prim.vertexOffset;
 			primMat.globalTextureOffset = modelResource.globalTextureOffset;
 
 			perPrimitiveMaterials.push_back(primMat);

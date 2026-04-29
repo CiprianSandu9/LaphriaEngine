@@ -452,14 +452,14 @@ void createImage(const vk::raii::Device &device, const vk::raii::PhysicalDevice 
                  uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling,
                  vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties,
                  vk::raii::Image &image, vk::raii::DeviceMemory &imageMemory,
-                 uint32_t arrayLayers)
+                 uint32_t arrayLayers, uint32_t mipLevels)
 {
 	vk::ImageCreateInfo imageInfo{};
 	imageInfo.imageType     = vk::ImageType::e2D;
 	imageInfo.extent.width  = width;
 	imageInfo.extent.height = height;
 	imageInfo.extent.depth  = 1;
-	imageInfo.mipLevels     = 1;
+	imageInfo.mipLevels     = mipLevels;
 	imageInfo.arrayLayers   = arrayLayers;
 	imageInfo.format        = format;
 	imageInfo.tiling        = tiling;
@@ -518,7 +518,7 @@ void createImage(const vk::raii::Device &device, const vk::raii::PhysicalDevice 
 void createImage(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
                  uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling,
                  vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties,
-                 VmaImage &image, uint32_t arrayLayers)
+                 VmaImage &image, uint32_t arrayLayers, uint32_t mipLevels)
 {
 	image.reset();
 
@@ -527,7 +527,7 @@ void createImage(const vk::raii::Device &device, const vk::raii::PhysicalDevice 
 	imageInfo.extent.width  = width;
 	imageInfo.extent.height = height;
 	imageInfo.extent.depth  = 1;
-	imageInfo.mipLevels     = 1;
+	imageInfo.mipLevels     = mipLevels;
 	imageInfo.arrayLayers   = arrayLayers;
 	imageInfo.format        = format;
 	imageInfo.tiling        = tiling;
@@ -576,7 +576,7 @@ void createImage(const vk::raii::Device &device, const vk::raii::PhysicalDevice 
 	image.image.bindMemory(*image.memory, 0);
 }
 
-vk::raii::ImageView createImageView(const vk::raii::Device &device, vk::Image image, vk::Format format, vk::ImageAspectFlags aspectFlags)
+vk::raii::ImageView createImageView(const vk::raii::Device &device, vk::Image image, vk::Format format, vk::ImageAspectFlags aspectFlags, uint32_t mipLevels)
 {
 	vk::ImageViewCreateInfo viewInfo{};
 	viewInfo.image                           = image;
@@ -584,7 +584,7 @@ vk::raii::ImageView createImageView(const vk::raii::Device &device, vk::Image im
 	viewInfo.format                          = format;
 	viewInfo.subresourceRange.aspectMask     = aspectFlags;
 	viewInfo.subresourceRange.baseMipLevel   = 0;
-	viewInfo.subresourceRange.levelCount     = 1;
+	viewInfo.subresourceRange.levelCount     = mipLevels;
 	viewInfo.subresourceRange.baseArrayLayer = 0;
 	viewInfo.subresourceRange.layerCount     = 1;
 
@@ -592,7 +592,7 @@ vk::raii::ImageView createImageView(const vk::raii::Device &device, vk::Image im
 }
 
 vk::raii::ImageView createImageViewLayer(const vk::raii::Device &device, vk::Image image, vk::Format format,
-                                         vk::ImageAspectFlags aspectFlags, uint32_t baseArrayLayer)
+                                         vk::ImageAspectFlags aspectFlags, uint32_t baseArrayLayer, uint32_t mipLevels)
 {
 	vk::ImageViewCreateInfo viewInfo{};
 	viewInfo.image                           = image;
@@ -600,7 +600,7 @@ vk::raii::ImageView createImageViewLayer(const vk::raii::Device &device, vk::Ima
 	viewInfo.format                          = format;
 	viewInfo.subresourceRange.aspectMask     = aspectFlags;
 	viewInfo.subresourceRange.baseMipLevel   = 0;
-	viewInfo.subresourceRange.levelCount     = 1;
+	viewInfo.subresourceRange.levelCount     = mipLevels;
 	viewInfo.subresourceRange.baseArrayLayer = baseArrayLayer;
 	viewInfo.subresourceRange.layerCount     = 1;
 
@@ -608,7 +608,7 @@ vk::raii::ImageView createImageViewLayer(const vk::raii::Device &device, vk::Ima
 }
 
 vk::raii::ImageView createImageViewArray(const vk::raii::Device &device, vk::Image image, vk::Format format,
-                                         vk::ImageAspectFlags aspectFlags, uint32_t layerCount)
+                                         vk::ImageAspectFlags aspectFlags, uint32_t layerCount, uint32_t mipLevels)
 {
 	vk::ImageViewCreateInfo viewInfo{};
 	viewInfo.image                           = image;
@@ -616,7 +616,7 @@ vk::raii::ImageView createImageViewArray(const vk::raii::Device &device, vk::Ima
 	viewInfo.format                          = format;
 	viewInfo.subresourceRange.aspectMask     = aspectFlags;
 	viewInfo.subresourceRange.baseMipLevel   = 0;
-	viewInfo.subresourceRange.levelCount     = 1;
+	viewInfo.subresourceRange.levelCount     = mipLevels;
 	viewInfo.subresourceRange.baseArrayLayer = 0;
 	viewInfo.subresourceRange.layerCount     = layerCount;
 
@@ -628,7 +628,7 @@ vk::raii::ImageView createImageViewArray(const vk::raii::Device &device, vk::Ima
 // rather than pipelineBarrier2(), which is reserved for the inline barriers in EngineCore
 // that need fine-grained Synchronization2 control.
 void recordImageLayoutTransition(const vk::raii::CommandBuffer &commandBuffer, vk::Image image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
-                                 vk::ImageAspectFlags aspectMask)
+                                 vk::ImageAspectFlags aspectMask, uint32_t baseMipLevel, uint32_t levelCount)
 {
 	vk::ImageMemoryBarrier barrier{};
 	barrier.oldLayout                       = oldLayout;
@@ -637,8 +637,8 @@ void recordImageLayoutTransition(const vk::raii::CommandBuffer &commandBuffer, v
 	barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
 	barrier.image                           = image;
 	barrier.subresourceRange.aspectMask     = aspectMask;
-	barrier.subresourceRange.baseMipLevel   = 0;
-	barrier.subresourceRange.levelCount     = 1;
+	barrier.subresourceRange.baseMipLevel   = baseMipLevel;
+	barrier.subresourceRange.levelCount     = levelCount;
 	barrier.subresourceRange.baseArrayLayer = 0;
 	barrier.subresourceRange.layerCount     = 1;
 
@@ -705,6 +705,19 @@ void recordCopyBufferToImage(const vk::raii::CommandBuffer &commandBuffer, vk::B
 	commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, region);
 }
 
+void createStagingBufferWithData(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
+                                 const void *data, vk::DeviceSize size,
+                                 vk::raii::Buffer &stagingBuffer, vk::raii::DeviceMemory &stagingMemory)
+{
+	createBuffer(device, physicalDevice, size, vk::BufferUsageFlagBits::eTransferSrc,
+	             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+	             stagingBuffer, stagingMemory);
+
+	void *mapped = stagingMemory.mapMemory(0, size);
+	memcpy(mapped, data, size);
+	stagingMemory.unmapMemory();
+}
+
 // Uploads CPU data to a device-local buffer via a host-visible staging buffer.
 // Pattern: allocate host-coherent staging buffer → memcpy → copy to device-local buffer.
 // The staging buffer is destroyed at the end of this call (RAII).
@@ -715,14 +728,7 @@ void createDeviceLocalBufferFromData(const vk::raii::Device &device, const vk::r
 {
 	vk::raii::Buffer       stagingBuffer{nullptr};
 	vk::raii::DeviceMemory stagingMemory{nullptr};
-
-	createBuffer(device, physicalDevice, size, vk::BufferUsageFlagBits::eTransferSrc,
-	             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-	             stagingBuffer, stagingMemory);
-
-	void *mapped = stagingMemory.mapMemory(0, size);
-	memcpy(mapped, data, size);
-	stagingMemory.unmapMemory();
+	createStagingBufferWithData(device, physicalDevice, data, size, stagingBuffer, stagingMemory);
 
 	createBuffer(device, physicalDevice, size, vk::BufferUsageFlagBits::eTransferDst | usage,
 	             vk::MemoryPropertyFlagBits::eDeviceLocal, buffer, bufferMemory);
@@ -737,19 +743,34 @@ void createDeviceLocalBufferFromData(const vk::raii::Device &device, const vk::r
 {
 	vk::raii::Buffer       stagingBuffer{nullptr};
 	vk::raii::DeviceMemory stagingMemory{nullptr};
-
-	createBuffer(device, physicalDevice, size, vk::BufferUsageFlagBits::eTransferSrc,
-	             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-	             stagingBuffer, stagingMemory);
-
-	void *mapped = stagingMemory.mapMemory(0, size);
-	memcpy(mapped, data, size);
-	stagingMemory.unmapMemory();
+	createStagingBufferWithData(device, physicalDevice, data, size, stagingBuffer, stagingMemory);
 
 	createBuffer(device, physicalDevice, size, vk::BufferUsageFlagBits::eTransferDst | usage,
 	             vk::MemoryPropertyFlagBits::eDeviceLocal, buffer);
 
 	copyBuffer(device, commandPool, queue, stagingBuffer, buffer, size);
+}
+
+void createDeviceLocalBufferFromDataBatched(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
+                                            const vk::raii::CommandBuffer &commandBuffer,
+                                            std::vector<vk::raii::Buffer> &stagingBuffers,
+                                            std::vector<vk::raii::DeviceMemory> &stagingMemories,
+                                            const void *data, vk::DeviceSize size, vk::BufferUsageFlags usage,
+                                            VmaBuffer &buffer)
+{
+	vk::raii::Buffer       stagingBuffer{nullptr};
+	vk::raii::DeviceMemory stagingMemory{nullptr};
+	createStagingBufferWithData(device, physicalDevice, data, size, stagingBuffer, stagingMemory);
+
+	createBuffer(device, physicalDevice, size, vk::BufferUsageFlagBits::eTransferDst | usage,
+	             vk::MemoryPropertyFlagBits::eDeviceLocal, buffer);
+
+	vk::BufferCopy copyRegion{};
+	copyRegion.size = size;
+	commandBuffer.copyBuffer(*stagingBuffer, *buffer, copyRegion);
+
+	stagingBuffers.push_back(std::move(stagingBuffer));
+	stagingMemories.push_back(std::move(stagingMemory));
 }
 
 // Uploads raw pixel data to a device-local sampled image via a staging buffer.
@@ -761,18 +782,11 @@ void createTextureImageFromData(const vk::raii::Device &device, const vk::raii::
 {
 	vk::raii::Buffer       stagingBuffer{nullptr};
 	vk::raii::DeviceMemory stagingMemory{nullptr};
-
-	createBuffer(device, physicalDevice, size, vk::BufferUsageFlagBits::eTransferSrc,
-	             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-	             stagingBuffer, stagingMemory);
-
-	void *mapped = stagingMemory.mapMemory(0, size);
-	memcpy(mapped, data, size);
-	stagingMemory.unmapMemory();
+	createStagingBufferWithData(device, physicalDevice, data, size, stagingBuffer, stagingMemory);
 
 	createImage(device, physicalDevice, width, height, format, vk::ImageTiling::eOptimal,
 	            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-	            vk::MemoryPropertyFlagBits::eDeviceLocal, image, imageMemory);
+	            vk::MemoryPropertyFlagBits::eDeviceLocal, image, imageMemory, 1, 1);
 
 	transitionImageLayout(device, commandPool, queue, *image, format, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 	copyBufferToImage(device, commandPool, queue, *stagingBuffer, *image, width, height);
@@ -786,31 +800,72 @@ void createTextureImageFromData(const vk::raii::Device &device, const vk::raii::
 {
 	vk::raii::Buffer       stagingBuffer{nullptr};
 	vk::raii::DeviceMemory stagingMemory{nullptr};
-
-	createBuffer(device, physicalDevice, size, vk::BufferUsageFlagBits::eTransferSrc,
-	             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-	             stagingBuffer, stagingMemory);
-
-	void *mapped = stagingMemory.mapMemory(0, size);
-	memcpy(mapped, data, size);
-	stagingMemory.unmapMemory();
+	createStagingBufferWithData(device, physicalDevice, data, size, stagingBuffer, stagingMemory);
 
 	createImage(device, physicalDevice, width, height, format, vk::ImageTiling::eOptimal,
 	            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-	            vk::MemoryPropertyFlagBits::eDeviceLocal, image);
+	            vk::MemoryPropertyFlagBits::eDeviceLocal, image, 1, 1);
 
 	transitionImageLayout(device, commandPool, queue, *image, format, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 	copyBufferToImage(device, commandPool, queue, *stagingBuffer, *image, width, height);
 	transitionImageLayout(device, commandPool, queue, *image, format, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
+void createTextureImageFromDataBatched(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
+                                       const vk::raii::CommandBuffer &commandBuffer,
+                                       std::vector<vk::raii::Buffer> &stagingBuffers,
+                                       std::vector<vk::raii::DeviceMemory> &stagingMemories,
+                                       const void *data, vk::DeviceSize size, uint32_t width, uint32_t height, vk::Format format,
+                                       VmaImage &image)
+{
+	vk::raii::Buffer       stagingBuffer{nullptr};
+	vk::raii::DeviceMemory stagingMemory{nullptr};
+	createStagingBufferWithData(device, physicalDevice, data, size, stagingBuffer, stagingMemory);
+
+	createImage(device, physicalDevice, width, height, format, vk::ImageTiling::eOptimal,
+	            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+	            vk::MemoryPropertyFlagBits::eDeviceLocal, image, 1, 1);
+
+	recordImageLayoutTransition(commandBuffer, *image, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+	recordCopyBufferToImage(commandBuffer, *stagingBuffer, *image, width, height);
+	recordImageLayoutTransition(commandBuffer, *image, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+	stagingBuffers.push_back(std::move(stagingBuffer));
+	stagingMemories.push_back(std::move(stagingMemory));
+}
+
+void createTextureImageFromPayloadBatched(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
+                                          const vk::raii::CommandBuffer &commandBuffer,
+                                          std::vector<vk::raii::Buffer> &stagingBuffers,
+                                          std::vector<vk::raii::DeviceMemory> &stagingMemories,
+                                          const TextureUploadPayload &payload,
+                                          VmaImage &image)
+{
+	vk::raii::Buffer       stagingBuffer{nullptr};
+	vk::raii::DeviceMemory stagingMemory{nullptr};
+	createStagingBufferWithData(device, physicalDevice, payload.data.data(), payload.data.size(), stagingBuffer, stagingMemory);
+
+	createImage(device, physicalDevice, payload.width, payload.height, payload.format, vk::ImageTiling::eOptimal,
+	            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+	            vk::MemoryPropertyFlagBits::eDeviceLocal, image, 1, payload.mipLevels);
+
+	recordImageLayoutTransition(commandBuffer, *image, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+	                            vk::ImageAspectFlagBits::eColor, 0, payload.mipLevels);
+	commandBuffer.copyBufferToImage(*stagingBuffer, *image, vk::ImageLayout::eTransferDstOptimal, payload.copyRegions);
+	recordImageLayoutTransition(commandBuffer, *image, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+	                            vk::ImageAspectFlagBits::eColor, 0, payload.mipLevels);
+
+	stagingBuffers.push_back(std::move(stagingBuffer));
+	stagingMemories.push_back(std::move(stagingMemory));
+}
+
 void transitionImageLayout(const vk::raii::Device &device, const vk::raii::CommandPool &commandPool, const vk::raii::Queue &queue,
-                           vk::Image image, vk::Format format, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
+                           vk::Image image, vk::Format format, vk::ImageLayout oldLayout, vk::ImageLayout newLayout, uint32_t mipLevels)
 {
 	auto                 commandBuffer = beginSingleTimeCommands(device, commandPool);
 	vk::ImageAspectFlags aspectMask    = vk::ImageAspectFlagBits::eColor;
 
-	recordImageLayoutTransition(commandBuffer, image, oldLayout, newLayout, aspectMask);
+	recordImageLayoutTransition(commandBuffer, image, oldLayout, newLayout, aspectMask, 0, mipLevels);
 
 	endSingleTimeCommands(device, queue, commandPool, commandBuffer);
 }

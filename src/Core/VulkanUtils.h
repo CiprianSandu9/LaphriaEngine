@@ -3,11 +3,23 @@
 
 #include "EngineAuxiliary.h"
 #include <vma/vk_mem_alloc.h>
+#include <vector>
 
 namespace Laphria
 {
 namespace VulkanUtils
 {
+struct TextureUploadPayload
+{
+	std::vector<unsigned char>  data;
+	std::vector<vk::BufferImageCopy> copyRegions;
+	vk::Format                  format = vk::Format::eUndefined;
+	uint32_t                    width = 0;
+	uint32_t                    height = 0;
+	uint32_t                    mipLevels = 1;
+	bool                        isCompressed = false;
+};
+
 struct VmaBuffer
 {
 	vk::raii::Buffer       buffer{nullptr};
@@ -95,31 +107,31 @@ void createImage(const vk::raii::Device &device, const vk::raii::PhysicalDevice 
                  uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling,
                  vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties,
                  vk::raii::Image &image, vk::raii::DeviceMemory &imageMemory,
-                 uint32_t arrayLayers = 1);
+                 uint32_t arrayLayers = 1, uint32_t mipLevels = 1);
 void createImage(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
                  uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling,
                  vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties,
-                 VmaImage &image, uint32_t arrayLayers = 1);
+                 VmaImage &image, uint32_t arrayLayers = 1, uint32_t mipLevels = 1);
 
-vk::raii::ImageView createImageView(const vk::raii::Device &device, vk::Image image, vk::Format format, vk::ImageAspectFlags aspectFlags);
+vk::raii::ImageView createImageView(const vk::raii::Device &device, vk::Image image, vk::Format format, vk::ImageAspectFlags aspectFlags, uint32_t mipLevels = 1);
 
 // Creates a 2D image view for a single layer of an array image.
 vk::raii::ImageView createImageViewLayer(const vk::raii::Device &device, vk::Image image, vk::Format format,
-                                         vk::ImageAspectFlags aspectFlags, uint32_t baseArrayLayer);
+                                         vk::ImageAspectFlags aspectFlags, uint32_t baseArrayLayer, uint32_t mipLevels = 1);
 
 // Creates a 2D_ARRAY image view spanning all layers of an array image.
 vk::raii::ImageView createImageViewArray(const vk::raii::Device &device, vk::Image image, vk::Format format,
-                                         vk::ImageAspectFlags aspectFlags, uint32_t layerCount);
+                                         vk::ImageAspectFlags aspectFlags, uint32_t layerCount, uint32_t mipLevels = 1);
 
 void transitionImageLayout(const vk::raii::Device &device, const vk::raii::CommandPool &commandPool, const vk::raii::Queue &queue,
-                           vk::Image image, vk::Format format, vk::ImageLayout oldLayout, vk::ImageLayout newLayout);
+                           vk::Image image, vk::Format format, vk::ImageLayout oldLayout, vk::ImageLayout newLayout, uint32_t mipLevels = 1);
 
 void copyBufferToImage(const vk::raii::Device &device, const vk::raii::CommandPool &commandPool, const vk::raii::Queue &queue,
                        vk::Buffer buffer, vk::Image image, uint32_t width, uint32_t height);
 
 // Recording Helpers (Non-blocking, for existing command buffers)
 void recordImageLayoutTransition(const vk::raii::CommandBuffer &commandBuffer, vk::Image image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
-                                 vk::ImageAspectFlags aspectMask = vk::ImageAspectFlagBits::eColor);
+                                 vk::ImageAspectFlags aspectMask = vk::ImageAspectFlagBits::eColor, uint32_t baseMipLevel = 0, uint32_t levelCount = 1);
 
 void recordCopyBufferToImage(const vk::raii::CommandBuffer &commandBuffer, vk::Buffer buffer, vk::Image image, uint32_t width, uint32_t height);
 
@@ -132,6 +144,12 @@ void createDeviceLocalBufferFromData(const vk::raii::Device &device, const vk::r
                                      const vk::raii::CommandPool &commandPool, const vk::raii::Queue &queue,
                                      const void *data, vk::DeviceSize size, vk::BufferUsageFlags usage,
                                      VmaBuffer &buffer);
+void createDeviceLocalBufferFromDataBatched(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
+                                            const vk::raii::CommandBuffer &commandBuffer,
+                                            std::vector<vk::raii::Buffer> &stagingBuffers,
+                                            std::vector<vk::raii::DeviceMemory> &stagingMemories,
+                                            const void *data, vk::DeviceSize size, vk::BufferUsageFlags usage,
+                                            VmaBuffer &buffer);
 
 void createTextureImageFromData(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
                                 const vk::raii::CommandPool &commandPool, const vk::raii::Queue &queue,
@@ -141,6 +159,18 @@ void createTextureImageFromData(const vk::raii::Device &device, const vk::raii::
                                 const vk::raii::CommandPool &commandPool, const vk::raii::Queue &queue,
                                 const void *data, vk::DeviceSize size, uint32_t width, uint32_t height, vk::Format format,
                                 VmaImage &image);
+void createTextureImageFromDataBatched(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
+                                       const vk::raii::CommandBuffer &commandBuffer,
+                                       std::vector<vk::raii::Buffer> &stagingBuffers,
+                                       std::vector<vk::raii::DeviceMemory> &stagingMemories,
+                                       const void *data, vk::DeviceSize size, uint32_t width, uint32_t height, vk::Format format,
+                                       VmaImage &image);
+void createTextureImageFromPayloadBatched(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
+                                          const vk::raii::CommandBuffer &commandBuffer,
+                                          std::vector<vk::raii::Buffer> &stagingBuffers,
+                                          std::vector<vk::raii::DeviceMemory> &stagingMemories,
+                                          const TextureUploadPayload &payload,
+                                          VmaImage &image);
 
 // Command Helpers
 vk::raii::CommandBuffer beginSingleTimeCommands(const vk::raii::Device &device, const vk::raii::CommandPool &commandPool);

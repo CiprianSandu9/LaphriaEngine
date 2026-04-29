@@ -4,6 +4,7 @@
 #include "ResourceManager.h"
 
 #include <fastgltf/types.hpp>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -22,7 +23,8 @@ class GltfImporter
 
 		Kind                  kind = Kind::Unsupported;
 		std::filesystem::path uriPath;
-		std::vector<unsigned char> bytes;
+		const unsigned char  *bytesData = nullptr;
+		size_t                bytesLength = 0;
 	};
 
 	struct ParsedAsset

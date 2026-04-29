@@ -18,7 +18,8 @@ void GpuResourceRegistry::setSkinningDescriptorSetLayout(vk::DescriptorSetLayout
 	skinningDescriptorSetLayout = layout;
 }
 
-void GpuResourceRegistry::uploadModelBuffers(ModelResource &modelResource, const std::vector<Laphria::Vertex> &vertices, const std::vector<uint32_t> &indices) const
+void GpuResourceRegistry::uploadModelBuffers(ModelResource &modelResource, const std::vector<Laphria::Vertex> &vertices, const std::vector<uint32_t> &indices,
+                                             const UploadBatchContext *batchContext) const
 {
 	modelResource.vertexCount = static_cast<uint32_t>(vertices.size());
 	modelResource.indexCount = static_cast<uint32_t>(indices.size());
@@ -31,19 +32,40 @@ void GpuResourceRegistry::uploadModelBuffers(ModelResource &modelResource, const
 	constexpr vk::BufferUsageFlags vertexUsage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eStorageBuffer |
 	                                             vk::BufferUsageFlagBits::eShaderDeviceAddress |
 	                                             vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-	Laphria::VulkanUtils::createDeviceLocalBufferFromData(device, physicalDevice, commandPool, queue,
-	                                                      vertices.data(), sizeof(Laphria::Vertex) * vertices.size(), vertexUsage,
-	                                                      modelResource.vertexBuffer);
+	if (batchContext && batchContext->commandBuffer && batchContext->stagingBuffers && batchContext->stagingMemories)
+	{
+		Laphria::VulkanUtils::createDeviceLocalBufferFromDataBatched(device, physicalDevice, *batchContext->commandBuffer,
+		                                                             *batchContext->stagingBuffers, *batchContext->stagingMemories,
+		                                                             vertices.data(), sizeof(Laphria::Vertex) * vertices.size(), vertexUsage,
+		                                                             modelResource.vertexBuffer);
+	}
+	else
+	{
+		Laphria::VulkanUtils::createDeviceLocalBufferFromData(device, physicalDevice, commandPool, queue,
+		                                                      vertices.data(), sizeof(Laphria::Vertex) * vertices.size(), vertexUsage,
+		                                                      modelResource.vertexBuffer);
+	}
 
 	constexpr vk::BufferUsageFlags indexUsage = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eStorageBuffer |
 	                                            vk::BufferUsageFlagBits::eShaderDeviceAddress |
 	                                            vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-	Laphria::VulkanUtils::createDeviceLocalBufferFromData(device, physicalDevice, commandPool, queue,
-	                                                      indices.data(), sizeof(uint32_t) * indices.size(), indexUsage,
-	                                                      modelResource.indexBuffer);
+	if (batchContext && batchContext->commandBuffer && batchContext->stagingBuffers && batchContext->stagingMemories)
+	{
+		Laphria::VulkanUtils::createDeviceLocalBufferFromDataBatched(device, physicalDevice, *batchContext->commandBuffer,
+		                                                             *batchContext->stagingBuffers, *batchContext->stagingMemories,
+		                                                             indices.data(), sizeof(uint32_t) * indices.size(), indexUsage,
+		                                                             modelResource.indexBuffer);
+	}
+	else
+	{
+		Laphria::VulkanUtils::createDeviceLocalBufferFromData(device, physicalDevice, commandPool, queue,
+		                                                      indices.data(), sizeof(uint32_t) * indices.size(), indexUsage,
+		                                                      modelResource.indexBuffer);
+	}
 }
 
-void GpuResourceRegistry::uploadMaterialBuffer(ModelResource &modelResource, const std::vector<Laphria::MaterialData> &materials) const
+void GpuResourceRegistry::uploadMaterialBuffer(ModelResource &modelResource, const std::vector<Laphria::MaterialData> &materials,
+                                               const UploadBatchContext *batchContext) const
 {
 	if (materials.empty())
 	{
@@ -51,20 +73,42 @@ void GpuResourceRegistry::uploadMaterialBuffer(ModelResource &modelResource, con
 	}
 
 	const vk::DeviceSize bufferSize = sizeof(Laphria::MaterialData) * materials.size();
-	Laphria::VulkanUtils::createDeviceLocalBufferFromData(device, physicalDevice, commandPool, queue,
-	                                                      materials.data(), bufferSize, vk::BufferUsageFlagBits::eStorageBuffer,
-	                                                      modelResource.materialBuffer);
+	if (batchContext && batchContext->commandBuffer && batchContext->stagingBuffers && batchContext->stagingMemories)
+	{
+		Laphria::VulkanUtils::createDeviceLocalBufferFromDataBatched(device, physicalDevice, *batchContext->commandBuffer,
+		                                                             *batchContext->stagingBuffers, *batchContext->stagingMemories,
+		                                                             materials.data(), bufferSize, vk::BufferUsageFlagBits::eStorageBuffer,
+		                                                             modelResource.materialBuffer);
+	}
+	else
+	{
+		Laphria::VulkanUtils::createDeviceLocalBufferFromData(device, physicalDevice, commandPool, queue,
+		                                                      materials.data(), bufferSize, vk::BufferUsageFlagBits::eStorageBuffer,
+		                                                      modelResource.materialBuffer);
+	}
 }
 
-void GpuResourceRegistry::uploadMaterialBuffer(ModelResource &modelResource, const Laphria::MaterialData &material) const
+void GpuResourceRegistry::uploadMaterialBuffer(ModelResource &modelResource, const Laphria::MaterialData &material,
+                                               const UploadBatchContext *batchContext) const
 {
-	Laphria::VulkanUtils::createDeviceLocalBufferFromData(device, physicalDevice, commandPool, queue,
-	                                                      &material, sizeof(Laphria::MaterialData), vk::BufferUsageFlagBits::eStorageBuffer,
-	                                                      modelResource.materialBuffer);
+	if (batchContext && batchContext->commandBuffer && batchContext->stagingBuffers && batchContext->stagingMemories)
+	{
+		Laphria::VulkanUtils::createDeviceLocalBufferFromDataBatched(device, physicalDevice, *batchContext->commandBuffer,
+		                                                             *batchContext->stagingBuffers, *batchContext->stagingMemories,
+		                                                             &material, sizeof(Laphria::MaterialData), vk::BufferUsageFlagBits::eStorageBuffer,
+		                                                             modelResource.materialBuffer);
+	}
+	else
+	{
+		Laphria::VulkanUtils::createDeviceLocalBufferFromData(device, physicalDevice, commandPool, queue,
+		                                                      &material, sizeof(Laphria::MaterialData), vk::BufferUsageFlagBits::eStorageBuffer,
+		                                                      modelResource.materialBuffer);
+	}
 }
 
 void GpuResourceRegistry::createSkinningResources(const fastgltf::Asset &gltf, ModelResource &modelResource, const std::vector<Laphria::Vertex> &vertices,
-                                                  const std::vector<ModelResource::SkinningInfluence> &skinningInfluences, const std::vector<int> &nodeSkinIndices) const
+                                                  const std::vector<ModelResource::SkinningInfluence> &skinningInfluences, const std::vector<int> &nodeSkinIndices,
+                                                  const UploadBatchContext *batchContext) const
 {
 	if (!modelResource.hasSkins || gltf.skins.empty() || vertices.empty())
 	{
@@ -148,20 +192,43 @@ void GpuResourceRegistry::createSkinningResources(const fastgltf::Asset &gltf, M
 		influence.joints += glm::uvec4(jointOffset, jointOffset, jointOffset, jointOffset);
 	}
 
-	Laphria::VulkanUtils::createDeviceLocalBufferFromData(
-	    device, physicalDevice, commandPool, queue,
-	    influences.data(), sizeof(ModelResource::SkinningInfluence) * influences.size(),
-	    vk::BufferUsageFlagBits::eStorageBuffer,
-	    modelResource.skinningInfluenceBuffer);
+	if (batchContext && batchContext->commandBuffer && batchContext->stagingBuffers && batchContext->stagingMemories)
+	{
+		Laphria::VulkanUtils::createDeviceLocalBufferFromDataBatched(
+		    device, physicalDevice, *batchContext->commandBuffer,
+		    *batchContext->stagingBuffers, *batchContext->stagingMemories,
+		    influences.data(), sizeof(ModelResource::SkinningInfluence) * influences.size(),
+		    vk::BufferUsageFlagBits::eStorageBuffer,
+		    modelResource.skinningInfluenceBuffer);
+	}
+	else
+	{
+		Laphria::VulkanUtils::createDeviceLocalBufferFromData(
+		    device, physicalDevice, commandPool, queue,
+		    influences.data(), sizeof(ModelResource::SkinningInfluence) * influences.size(),
+		    vk::BufferUsageFlagBits::eStorageBuffer,
+		    modelResource.skinningInfluenceBuffer);
+	}
 
 	constexpr vk::BufferUsageFlags skinnedVertexUsage = vk::BufferUsageFlagBits::eVertexBuffer |
 	                                                    vk::BufferUsageFlagBits::eStorageBuffer |
 	                                                    vk::BufferUsageFlagBits::eShaderDeviceAddress |
 	                                                    vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-	Laphria::VulkanUtils::createDeviceLocalBufferFromData(
-	    device, physicalDevice, commandPool, queue,
-	    vertices.data(), sizeof(Laphria::Vertex) * vertices.size(), skinnedVertexUsage,
-	    modelResource.skinnedVertexBuffer);
+	if (batchContext && batchContext->commandBuffer && batchContext->stagingBuffers && batchContext->stagingMemories)
+	{
+		Laphria::VulkanUtils::createDeviceLocalBufferFromDataBatched(
+		    device, physicalDevice, *batchContext->commandBuffer,
+		    *batchContext->stagingBuffers, *batchContext->stagingMemories,
+		    vertices.data(), sizeof(Laphria::Vertex) * vertices.size(), skinnedVertexUsage,
+		    modelResource.skinnedVertexBuffer);
+	}
+	else
+	{
+		Laphria::VulkanUtils::createDeviceLocalBufferFromData(
+		    device, physicalDevice, commandPool, queue,
+		    vertices.data(), sizeof(Laphria::Vertex) * vertices.size(), skinnedVertexUsage,
+		    modelResource.skinnedVertexBuffer);
+	}
 
 	const vk::DeviceSize jointPaletteBufferSize = sizeof(glm::mat4) * modelResource.skinningJointMatrixCount;
 	Laphria::VulkanUtils::createBuffer(

@@ -5,8 +5,11 @@
 
 #include <fastgltf/types.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <ktx.h>
 
 using namespace Laphria;
@@ -19,6 +22,67 @@ namespace
 {
 static_assert(sizeof(Vertex) == 60, "Skinning shader expects Vertex stride of 60 bytes.");
 static_assert(sizeof(ModelResource::SkinningInfluence) == 48, "Skinning shader expects SkinningInfluence stride of 48 bytes.");
+
+std::vector<unsigned char> readBinaryFile(const std::filesystem::path &path)
+{
+	std::ifstream file(path, std::ios::binary | std::ios::ate);
+	if (!file)
+	{
+		return {};
+	}
+	const std::streamsize fileSize = static_cast<std::streamsize>(file.tellg());
+	if (fileSize <= 0)
+	{
+		return {};
+	}
+	std::vector<unsigned char> bytes(static_cast<size_t>(fileSize));
+	file.seekg(0, std::ios::beg);
+	file.read(reinterpret_cast<char *>(bytes.data()), fileSize);
+	if (!file)
+	{
+		return {};
+	}
+	return bytes;
+}
+
+bool supportsSampledImageFormat(const vk::raii::PhysicalDevice &physicalDevice, vk::Format format)
+{
+	const vk::FormatProperties properties = physicalDevice.getFormatProperties(format);
+	return static_cast<bool>(properties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage);
+}
+
+vk::Format toUnormEquivalent(vk::Format format)
+{
+	switch (format)
+	{
+	case vk::Format::eR8G8B8A8Srgb: return vk::Format::eR8G8B8A8Unorm;
+	case vk::Format::eB8G8R8A8Srgb: return vk::Format::eB8G8R8A8Unorm;
+	case vk::Format::eBc1RgbSrgbBlock: return vk::Format::eBc1RgbUnormBlock;
+	case vk::Format::eBc1RgbaSrgbBlock: return vk::Format::eBc1RgbaUnormBlock;
+	case vk::Format::eBc2SrgbBlock: return vk::Format::eBc2UnormBlock;
+	case vk::Format::eBc3SrgbBlock: return vk::Format::eBc3UnormBlock;
+	case vk::Format::eBc7SrgbBlock: return vk::Format::eBc7UnormBlock;
+	default: return format;
+	}
+}
+
+void buildSingleMipRgbaPayload(const unsigned char *pixels, uint32_t width, uint32_t height, VulkanUtils::TextureUploadPayload &payload)
+{
+	payload.data.assign(pixels, pixels + (static_cast<size_t>(width) * static_cast<size_t>(height) * 4u));
+	payload.copyRegions.clear();
+	payload.copyRegions.push_back(vk::BufferImageCopy{
+	    .bufferOffset = 0,
+	    .bufferRowLength = 0,
+	    .bufferImageHeight = 0,
+	    .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .imageOffset = {0, 0, 0},
+	    .imageExtent = {width, height, 1}});
+	payload.format = vk::Format::eR8G8B8A8Unorm;
+	payload.width = width;
+	payload.height = height;
+	payload.mipLevels = 1;
+	payload.isCompressed = false;
+}
 }
 
 ResourceManager::ResourceManager(vk::raii::Device &device, vk::raii::PhysicalDevice &physicalDevice, vk::raii::CommandPool &commandPool, vk::raii::Queue &queue,
@@ -41,8 +105,8 @@ void ResourceManager::setSkinningDescriptorSetLayout(vk::DescriptorSetLayout lay
 
 // Texture Helpers
 
-bool ResourceManager::prepareKTXFromMemory(const unsigned char *data, size_t length, VulkanUtils::VmaImage &outImage, uint32_t &width, uint32_t &height,
-                                           vk::Format &format) const {
+bool ResourceManager::prepareKTXFromMemory(const unsigned char *data, size_t length, VulkanUtils::TextureUploadPayload &outPayload,
+                                           std::string &outPathTag) const {
     static const unsigned char ktx2Magic[12] = {
         0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A
     };
@@ -53,77 +117,198 @@ bool ResourceManager::prepareKTXFromMemory(const unsigned char *data, size_t len
     if (ktxTexture2_CreateFromMemory(data, length, KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &ktx2) != KTX_SUCCESS)
         return false;
 
+    auto cleanup = [&]() {
+        if (ktx2 != nullptr) {
+            ktxTexture_Destroy(ktxTexture(ktx2));
+        }
+    };
+
+    outPathTag = "native-ktx-vkformat";
+
     if (ktxTexture2_NeedsTranscoding(ktx2)) {
-        // Simply use RGBA32 for now or BC7 if available. simplified for this file.
-        ktxTexture2_TranscodeBasis(ktx2, KTX_TTF_RGBA32, 0);
+        struct Candidate {
+            ktx_transcode_fmt_e target;
+            vk::Format format;
+            const char *tag;
+        };
+        const Candidate defaultCandidates[] = {
+            {KTX_TTF_BC7_RGBA, vk::Format::eBc7UnormBlock, "basisu->bc7"},
+            {KTX_TTF_BC3_RGBA, vk::Format::eBc3UnormBlock, "basisu->bc3"},
+            {KTX_TTF_BC1_RGB, vk::Format::eBc1RgbUnormBlock, "basisu->bc1"},
+            {KTX_TTF_RGBA32, vk::Format::eR8G8B8A8Unorm, "rgba-fallback"}
+        };
+        const Candidate *candidates = defaultCandidates;
+        const size_t candidateCount = sizeof(defaultCandidates) / sizeof(defaultCandidates[0]);
+
+        bool transcoded = false;
+        for (size_t candidateIndex = 0; candidateIndex < candidateCount; ++candidateIndex) {
+            const auto &candidate = candidates[candidateIndex];
+            if (candidate.target != KTX_TTF_RGBA32 && !supportsSampledImageFormat(physicalDevice, candidate.format)) {
+                continue;
+            }
+            if (ktxTexture2_TranscodeBasis(ktx2, candidate.target, 0) == KTX_SUCCESS) {
+                outPathTag = candidate.tag;
+                transcoded = true;
+                break;
+            }
+        }
+        if (!transcoded) {
+            cleanup();
+            return false;
+        }
     }
 
-    auto vkFormat = static_cast<vk::Format>(ktx2->vkFormat);
-    if (vkFormat == vk::Format::eUndefined)
+    vk::Format vkFormat = static_cast<vk::Format>(ktx2->vkFormat);
+    if (vkFormat == vk::Format::eUndefined) {
         vkFormat = vk::Format::eR8G8B8A8Unorm;
+        outPathTag = "rgba-fallback";
+    }
+    // Keep import behavior consistent with the RGBA path and existing shaders:
+    // shaders perform manual sRGB->linear for color textures, so avoid hardware sRGB decode here.
+    vkFormat = toUnormEquivalent(vkFormat);
 
-    ktx_size_t offset;
-    ktxTexture_GetImageOffset(ktxTexture(ktx2), 0, 0, 0, &offset);
-    ktx_uint8_t *textureData = ktxTexture_GetData(ktxTexture(ktx2)) + offset;
-    ktx_size_t textureSize = ktxTexture_GetImageSize(ktxTexture(ktx2), 0);
-    width = ktx2->baseWidth;
-    height = ktx2->baseHeight;
+    const uint32_t baseWidth = ktx2->baseWidth;
+    const uint32_t baseHeight = ktx2->baseHeight;
+    const uint32_t mipLevels = std::max<uint32_t>(1, ktx2->numLevels);
+    const bool isCompressed = (vkFormat != vk::Format::eR8G8B8A8Unorm);
 
-    VulkanUtils::createTextureImageFromData(device, physicalDevice, commandPool, queue,
-                                            textureData, textureSize, width, height, vkFormat,
-                                            outImage);
+    const auto *textureData = ktxTexture_GetData(ktxTexture(ktx2));
+    const ktx_size_t textureSize = ktxTexture_GetDataSize(ktxTexture(ktx2));
+    if (textureData == nullptr || textureSize == 0) {
+        cleanup();
+        return false;
+    }
 
-    // width/height are already set above
-    format = vkFormat;
+    outPayload.data.assign(textureData, textureData + textureSize);
+    outPayload.copyRegions.clear();
+    outPayload.copyRegions.reserve(mipLevels);
+    outPayload.format = vkFormat;
+    outPayload.width = baseWidth;
+    outPayload.height = baseHeight;
+    outPayload.mipLevels = mipLevels;
+    outPayload.isCompressed = isCompressed;
 
-    ktxTexture_Destroy(ktxTexture(ktx2));
+    ktx_size_t sequentialOffset = 0;
+    for (uint32_t mipLevel = 0; mipLevel < mipLevels; ++mipLevel) {
+        ktx_size_t imageOffset = 0;
+        const bool hasExplicitOffset = (ktxTexture_GetImageOffset(ktxTexture(ktx2), mipLevel, 0, 0, &imageOffset) == KTX_SUCCESS);
+        if (!hasExplicitOffset) {
+            imageOffset = sequentialOffset;
+        }
+
+        const uint32_t mipWidth = std::max<uint32_t>(1, baseWidth >> mipLevel);
+        const uint32_t mipHeight = std::max<uint32_t>(1, baseHeight >> mipLevel);
+        outPayload.copyRegions.push_back(vk::BufferImageCopy{
+            .bufferOffset = imageOffset,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {vk::ImageAspectFlagBits::eColor, mipLevel, 0, 1},
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {mipWidth, mipHeight, 1}});
+
+        const ktx_size_t imageSize = ktxTexture_GetImageSize(ktxTexture(ktx2), mipLevel);
+        sequentialOffset += imageSize;
+    }
+
+    cleanup();
     return true;
 }
 
-void ResourceManager::prepareTextureFromPixels(const unsigned char *pixels, int width, int height, VulkanUtils::VmaImage &outImage, vk::Format &format) const {
-    vk::DeviceSize size = width * height * 4;
-    format = vk::Format::eR8G8B8A8Unorm;
-
-    VulkanUtils::createTextureImageFromData(device, physicalDevice, commandPool, queue,
-                                            pixels, size, width, height, format,
-                                            outImage);
-}
-
-void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::filesystem::path &modelDir, ModelResource *modelRes) const {
+void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::filesystem::path &modelDir, ModelResource *modelRes, TextureLoadStats &stats) const {
     const auto textureSources = gltfImporter->buildTextureImportSources(gltf, modelDir);
+    if (textureSources.empty()) {
+        return;
+    }
+    LOGI("Texture import: %zu image(s) detected", textureSources.size());
 
     modelRes->textureImages.reserve(textureSources.size());
     modelRes->textureImageViews.reserve(textureSources.size());
     modelRes->textureSamplers.reserve(textureSources.size());
 
+    constexpr size_t maxBatchTextures = 16;
+    constexpr size_t maxBatchBytes = 256ull * 1024ull * 1024ull; // 256 MiB of staging per submit.
+
+    vk::raii::CommandBuffer uploadCommandBuffer{nullptr};
+    std::vector<vk::raii::Buffer> stagingBuffers;
+    std::vector<vk::raii::DeviceMemory> stagingMemories;
+    stagingBuffers.reserve(maxBatchTextures);
+    stagingMemories.reserve(maxBatchTextures);
+    size_t batchTextureCount = 0;
+    size_t batchBytes = 0;
+    size_t submittedTextureCount = 0;
+
+    auto beginBatch = [&]() {
+        uploadCommandBuffer = VulkanUtils::beginSingleTimeCommands(device, commandPool);
+    };
+    auto flushBatch = [&]() {
+        if (batchTextureCount == 0) {
+            return;
+        }
+        const auto uploadSubmitStart = std::chrono::high_resolution_clock::now();
+        VulkanUtils::endSingleTimeCommands(device, queue, commandPool, uploadCommandBuffer);
+        const auto uploadSubmitEnd = std::chrono::high_resolution_clock::now();
+        stats.uploadMs += std::chrono::duration<double, std::milli>(uploadSubmitEnd - uploadSubmitStart).count();
+
+        submittedTextureCount += batchTextureCount;
+        LOGI("Texture upload progress: %zu/%zu textures submitted", submittedTextureCount, textureSources.size());
+
+        stagingBuffers.clear();
+        stagingMemories.clear();
+        batchTextureCount = 0;
+        batchBytes = 0;
+    };
+    beginBatch();
+
     for (size_t i = 0; i < textureSources.size(); ++i) {
+        const auto decodeStart = std::chrono::high_resolution_clock::now();
         const auto &source = textureSources[i];
 
         VulkanUtils::VmaImage img{};
-        uint32_t width = 0, height = 0;
-        vk::Format format = vk::Format::eUndefined;
+        VulkanUtils::TextureUploadPayload payload{};
         bool success = false;
+        std::string decodePathTag = "rgba-fallback";
 
         if (source.kind == GltfImporter::TextureImportSource::Kind::Uri) {
             LOGI("Loading texture from URI: %s", source.uriPath.string().c_str());
-            int w, h, c;
-            if (unsigned char *px = stbi_load(source.uriPath.string().c_str(), &w, &h, &c, STBI_rgb_alpha)) {
-                prepareTextureFromPixels(px, w, h, img, format);
-                success = true;
-                stbi_image_free(px);
-            } else {
-                LOGE("Failed to load texture from file: %s", source.uriPath.string().c_str());
-            }
+			const std::string extension = source.uriPath.extension().string();
+			if (extension == ".ktx2" || extension == ".KTX2")
+			{
+				const auto bytes = readBinaryFile(source.uriPath);
+				if (!bytes.empty())
+				{
+					success = prepareKTXFromMemory(bytes.data(), bytes.size(), payload, decodePathTag);
+				}
+				if (!success)
+				{
+					LOGE("Failed to load KTX2 texture from file: %s", source.uriPath.string().c_str());
+				}
+			}
+			else
+			{
+				int w, h, c;
+				if (unsigned char *px = stbi_load(source.uriPath.string().c_str(), &w, &h, &c, STBI_rgb_alpha))
+				{
+					buildSingleMipRgbaPayload(px, static_cast<uint32_t>(w), static_cast<uint32_t>(h), payload);
+					success = true;
+					decodePathTag = "rgba-fallback";
+					stbi_image_free(px);
+				}
+				else
+				{
+					LOGE("Failed to load texture from file: %s", source.uriPath.string().c_str());
+				}
+			}
         } else if (source.kind == GltfImporter::TextureImportSource::Kind::Bytes) {
-            LOGI("Loading embedded texture (size: %zu)", source.bytes.size());
-            const auto *data = source.bytes.data();
-            const size_t len = source.bytes.size();
+            LOGI("Loading embedded texture (size: %zu)", source.bytesLength);
+            const auto *data = source.bytesData;
+            const size_t len = source.bytesLength;
 
-            if (!prepareKTXFromMemory(data, len, img, width, height, format)) {
+            if (!prepareKTXFromMemory(data, len, payload, decodePathTag)) {
                 int w, h, c;
                 if (unsigned char *px = stbi_load_from_memory(data, static_cast<int>(len), &w, &h, &c, STBI_rgb_alpha)) {
-                    prepareTextureFromPixels(px, w, h, img, format);
+                    buildSingleMipRgbaPayload(px, static_cast<uint32_t>(w), static_cast<uint32_t>(h), payload);
                     success = true;
+                    decodePathTag = "rgba-fallback";
                     stbi_image_free(px);
                 } else {
                     LOGE("Failed to decode embedded texture (Index: %zu)", i);
@@ -137,16 +322,41 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
 
         if (!success) {
             LOGW("Texture invalid, using white placeholder.");
-            unsigned char white[] = {255, 255, 255, 255};
-            prepareTextureFromPixels(white, 1, 1, img, format);
+            static const unsigned char white[] = {255, 255, 255, 255};
+            buildSingleMipRgbaPayload(white, 1, 1, payload);
+            decodePathTag = "rgba-fallback";
         }
+
+        if (decodePathTag == "basisu->bc7") {
+            ++stats.basisuBc7Count;
+        } else if (decodePathTag == "basisu->bc3") {
+            ++stats.basisuBc3Count;
+        } else if (decodePathTag == "basisu->bc1") {
+            ++stats.basisuBc1Count;
+        } else if (decodePathTag == "native-ktx-vkformat") {
+            ++stats.nativeKtxCount;
+        } else {
+            ++stats.rgbaFallbackCount;
+        }
+        LOGI("Texture path[%zu]: %s", i, decodePathTag.c_str());
+
+        const auto decodeEnd = std::chrono::high_resolution_clock::now();
+        stats.decodeMs += std::chrono::duration<double, std::milli>(decodeEnd - decodeStart).count();
+
+        const auto uploadRecordStart = std::chrono::high_resolution_clock::now();
+        VulkanUtils::createTextureImageFromPayloadBatched(device, physicalDevice, uploadCommandBuffer,
+                                                          stagingBuffers, stagingMemories, payload, img);
+        const auto uploadRecordEnd = std::chrono::high_resolution_clock::now();
+        stats.uploadMs += std::chrono::duration<double, std::milli>(uploadRecordEnd - uploadRecordStart).count();
+        ++batchTextureCount;
+        batchBytes += payload.data.size();
 
         vk::ImageViewCreateInfo viewInfo{};
         viewInfo.image = *img;
         viewInfo.viewType = vk::ImageViewType::e2D;
-        viewInfo.format = format;
+        viewInfo.format = payload.format;
         viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.levelCount = payload.mipLevels;
         viewInfo.subresourceRange.layerCount = 1;
         modelRes->textureImages.push_back(std::move(img));
         modelRes->textureImageViews.emplace_back(device, viewInfo);
@@ -160,11 +370,28 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
         samplerInfo.addressModeW = vk::SamplerAddressMode::eRepeat;
         samplerInfo.anisotropyEnable = vk::True;
         samplerInfo.maxAnisotropy = physicalDevice.getProperties().limits.maxSamplerAnisotropy;
+        samplerInfo.maxLod = static_cast<float>(payload.mipLevels);
         modelRes->textureSamplers.emplace_back(device, samplerInfo);
+
+        if (((i + 1) % 8) == 0 || (i + 1) == textureSources.size()) {
+            LOGI("Texture decode progress: %zu/%zu", i + 1, textureSources.size());
+        }
+        if (batchTextureCount >= maxBatchTextures || batchBytes >= maxBatchBytes) {
+            flushBatch();
+            if ((i + 1) < textureSources.size()) {
+                beginBatch();
+            }
+        }
     }
+
+    flushBatch();
+    LOGI("Texture decode path summary: bc7=%u bc3=%u bc1=%u nativeKtx=%u rgbaFallback=%u",
+         stats.basisuBc7Count, stats.basisuBc3Count, stats.basisuBc1Count, stats.nativeKtxCount,
+         stats.rgbaFallbackCount);
 }
 
 SceneNode::Ptr ResourceManager::loadGltfModel(const std::string &path, vk::DescriptorSetLayout layout) {
+    const auto importStart = std::chrono::high_resolution_clock::now();
     ModelImportReport report{};
     report.modelPath = path;
 
@@ -197,7 +424,10 @@ SceneNode::Ptr ResourceManager::loadGltfModel(const std::string &path, vk::Descr
 
     LOGI("Loading GLTF: %s", path.c_str());
 
+    const auto parseStart = std::chrono::high_resolution_clock::now();
     const GltfImporter::ParsedAsset parsedAsset = gltfImporter->parseAsset(path);
+    const auto parseEnd = std::chrono::high_resolution_clock::now();
+    report.parseMs = std::chrono::duration<double, std::milli>(parseEnd - parseStart).count();
     const auto &gltf = parsedAsset.asset;
     const std::filesystem::path &modelDir = parsedAsset.modelDirectory;
     report.hasAnimations = !gltf.animations.empty();
@@ -231,26 +461,32 @@ SceneNode::Ptr ResourceManager::loadGltfModel(const std::string &path, vk::Descr
     modelRes->globalTextureOffset = totalTexturesLoaded;
 
     // 1. Textures
-    loadTextures(gltf, modelDir, modelRes.get());
+    TextureLoadStats textureStats{};
+    loadTextures(gltf, modelDir, modelRes.get(), textureStats);
+    report.textureDecodeMs = textureStats.decodeMs;
+    report.textureUploadMs = textureStats.uploadMs;
+    report.supportedFeatures.push_back("texture_decode_path_bc7:" + std::to_string(textureStats.basisuBc7Count));
+    report.supportedFeatures.push_back("texture_decode_path_bc3:" + std::to_string(textureStats.basisuBc3Count));
+    report.supportedFeatures.push_back("texture_decode_path_bc1:" + std::to_string(textureStats.basisuBc1Count));
+    report.supportedFeatures.push_back("texture_decode_path_native_ktx:" + std::to_string(textureStats.nativeKtxCount));
+    report.supportedFeatures.push_back("texture_decode_path_rgba_fallback:" + std::to_string(textureStats.rgbaFallbackCount));
 
     // 2. Materials
     gltfImporter->populateMaterials(gltf, *modelRes);
 
     // 3. Meshes & Scene Graph
+    const auto meshStart = std::chrono::high_resolution_clock::now();
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<ModelResource::SkinningInfluence> skinningInfluences;
     std::vector<int> nodeSkinIndices(gltf.nodes.size(), -1);
     SceneNode::Ptr rootNode = gltfImporter->buildSceneNodes(gltf, *modelRes, vertices, indices, skinningInfluences, nodeSkinIndices);
+    const auto meshEnd = std::chrono::high_resolution_clock::now();
+    report.meshExtractionMs = std::chrono::duration<double, std::milli>(meshEnd - meshStart).count();
     if (report.hasAnimations && !modelRes->animationClips.empty()) {
         report.supportedFeatures.push_back("runtime_animation_playback");
     } else if (report.hasAnimations && modelRes->animationClips.empty()) {
         report.warnings.push_back("Animation clips were found, but no runtime-supported TRS channels were imported.");
-    }
-    if (report.hasSkins && modelRes->hasRuntimeSkinning) {
-        report.supportedFeatures.push_back("gpu_skinning_raster");
-    } else if (report.hasSkins) {
-        report.warnings.push_back("Skinning data detected, but GPU skinning setup is incomplete. Mesh will render in bind pose.");
     }
     if (hasSkinningAttributes && !report.hasSkins) {
         report.warnings.push_back("JOINTS_0/WEIGHTS_0 attributes were found without a skin block.");
@@ -260,15 +496,53 @@ SceneNode::Ptr ResourceManager::loadGltfModel(const std::string &path, vk::Descr
     std::vector<MaterialData> perPrimitiveMaterials = gltfImporter->buildPerPrimitiveMaterials(*modelRes);
 
     if (!perPrimitiveMaterials.empty()) {
-        gpuResourceRegistry->uploadMaterialBuffer(*modelRes, perPrimitiveMaterials);
+        const auto bufferUploadStart = std::chrono::high_resolution_clock::now();
+        auto bufferUploadCommandBuffer = VulkanUtils::beginSingleTimeCommands(device, commandPool);
+        std::vector<vk::raii::Buffer> bufferStagingBuffers;
+        std::vector<vk::raii::DeviceMemory> bufferStagingMemories;
+        GpuResourceRegistry::UploadBatchContext uploadBatchContext{
+            .commandBuffer = &bufferUploadCommandBuffer,
+            .stagingBuffers = &bufferStagingBuffers,
+            .stagingMemories = &bufferStagingMemories};
+
+        gpuResourceRegistry->uploadMaterialBuffer(*modelRes, perPrimitiveMaterials, &uploadBatchContext);
+
+        // 5. Upload Geometry
+        gpuResourceRegistry->uploadModelBuffers(*modelRes, vertices, indices, &uploadBatchContext);
+        gpuResourceRegistry->createSkinningResources(gltf, *modelRes, vertices, skinningInfluences, nodeSkinIndices, &uploadBatchContext);
+
+        VulkanUtils::endSingleTimeCommands(device, queue, commandPool, bufferUploadCommandBuffer);
+        const auto bufferUploadEnd = std::chrono::high_resolution_clock::now();
+        report.bufferUploadMs = std::chrono::duration<double, std::milli>(bufferUploadEnd - bufferUploadStart).count();
+    } else {
+        const auto bufferUploadStart = std::chrono::high_resolution_clock::now();
+        auto bufferUploadCommandBuffer = VulkanUtils::beginSingleTimeCommands(device, commandPool);
+        std::vector<vk::raii::Buffer> bufferStagingBuffers;
+        std::vector<vk::raii::DeviceMemory> bufferStagingMemories;
+        GpuResourceRegistry::UploadBatchContext uploadBatchContext{
+            .commandBuffer = &bufferUploadCommandBuffer,
+            .stagingBuffers = &bufferStagingBuffers,
+            .stagingMemories = &bufferStagingMemories};
+
+        gpuResourceRegistry->uploadModelBuffers(*modelRes, vertices, indices, &uploadBatchContext);
+        gpuResourceRegistry->createSkinningResources(gltf, *modelRes, vertices, skinningInfluences, nodeSkinIndices, &uploadBatchContext);
+
+        VulkanUtils::endSingleTimeCommands(device, queue, commandPool, bufferUploadCommandBuffer);
+        const auto bufferUploadEnd = std::chrono::high_resolution_clock::now();
+        report.bufferUploadMs = std::chrono::duration<double, std::milli>(bufferUploadEnd - bufferUploadStart).count();
     }
 
-    // 5. Upload Geometry
-    gpuResourceRegistry->uploadModelBuffers(*modelRes, vertices, indices);
-    gpuResourceRegistry->createSkinningResources(gltf, *modelRes, vertices, skinningInfluences, nodeSkinIndices);
+    if (report.hasSkins && modelRes->hasRuntimeSkinning) {
+        report.supportedFeatures.push_back("gpu_skinning_raster");
+    } else if (report.hasSkins) {
+        report.warnings.push_back("Skinning data detected, but GPU skinning setup is incomplete. Mesh will render in bind pose.");
+    }
 
     // 6. Build BLAS (requires vertex/index buffers to be on the GPU)
+    const auto blasStart = std::chrono::high_resolution_clock::now();
     gpuResourceRegistry->buildBLAS(*modelRes, vertices, indices);
+    const auto blasEnd = std::chrono::high_resolution_clock::now();
+    report.blasBuildMs = std::chrono::duration<double, std::milli>(blasEnd - blasStart).count();
 
     // Store model resource
     models.push_back(std::move(modelRes));
@@ -295,6 +569,11 @@ SceneNode::Ptr ResourceManager::loadGltfModel(const std::string &path, vk::Descr
     fixNodes(rootNode);
 
     LOGI("Loaded Model. Vertices: %zu, Indices: %zu", vertices.size(), indices.size());
+    const auto importEnd = std::chrono::high_resolution_clock::now();
+    report.totalMs = std::chrono::duration<double, std::milli>(importEnd - importStart).count();
+    LOGI("Import timings (ms) | parse=%.2f decode=%.2f texUpload=%.2f mesh=%.2f bufUpload=%.2f blas=%.2f total=%.2f",
+         report.parseMs.value_or(0.0), report.textureDecodeMs.value_or(0.0), report.textureUploadMs.value_or(0.0),
+         report.meshExtractionMs.value_or(0.0), report.bufferUploadMs.value_or(0.0), report.blasBuildMs.value_or(0.0), report.totalMs.value_or(0.0));
 
     models.back()->prototype = rootNode;
     if (!res->hasRuntimeSkinning) {
