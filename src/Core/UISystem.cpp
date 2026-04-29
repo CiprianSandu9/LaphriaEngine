@@ -1058,6 +1058,10 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
     if (ImGui::RadioButton("Path Tracer##render_mode", renderMode == RenderMode::PathTracer))
         renderMode = RenderMode::PathTracer;
     ImGui::SliderFloat("Exposure", &exposure, 0.1f, 4.0f, "%.2f");
+    const char *colorSpaceModels[] = {"Hardware SRGB", "Legacy Manual"};
+    int colorSpaceMode = static_cast<int>(textureColorSpaceModel);
+    ImGui::Combo("Texture Color Space", &colorSpaceMode, colorSpaceModels, IM_ARRAYSIZE(colorSpaceModels));
+    textureColorSpaceModel = static_cast<TextureColorSpaceModel>(colorSpaceMode);
 
     if (ImGui::CollapsingHeader("Path Tracer##settings", ImGuiTreeNodeFlags_DefaultOpen)) {
         pathTracerSettings.resolutionScale = std::clamp(pathTracerSettings.resolutionScale, 0.5f, 1.0f);

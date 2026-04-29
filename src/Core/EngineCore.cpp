@@ -241,6 +241,9 @@ void EngineCore::mainLoop() {
             auto &servicesRef = *services;
             callbacks.updateFrame(servicesRef, deltaTime);
         }
+        if (resourceManager) {
+            resourceManager->setTextureColorSpaceModel(ui.textureColorSpaceModel);
+        }
         if (scene && resourceManager) {
             scene->update(deltaTime, *resourceManager);
         }
@@ -1769,7 +1772,7 @@ void EngineCore::drawFrame() {
         }
     }
 
-    frames.updateUniformBuffer(frames.frameIndex, camera, swapchain.extent, ui.lightDirection, ui.exposure);
+    frames.updateUniformBuffer(frames.frameIndex, camera, swapchain.extent, ui.lightDirection, ui.exposure, ui.textureColorSpaceModel);
 
     // Detect camera movement for path tracer history reset.
     // Any translation or rotation invalidates the reprojected history.

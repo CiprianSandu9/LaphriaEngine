@@ -2,6 +2,7 @@
 #define LAPHRIAENGINE_ENGINEAUXILIARY_H
 
 #include <cstdio>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <glm/gtx/hash.hpp>
 
@@ -59,6 +60,12 @@ enum class RenderMode
 	Rasterizer,   // shadow + starfield compute + raster graphics pipeline
 	RayTracer,    // classic RT: direct illumination with RT shadows, tone-mapped in ClosestHit
 	PathTracer,   // path tracer with temporal reprojection and A-Trous denoiser
+};
+
+enum class TextureColorSpaceModel : uint32_t
+{
+	HardwareSrgb = 0,
+	LegacyManual = 1
 };
 
 namespace Laphria
@@ -122,6 +129,7 @@ struct UniformBufferObject
 	alignas(4)  float     jitter_y;       // sub-pixel y jitter in NDC
 	alignas(4)  uint32_t  _pad0;          // padding for 16-byte struct alignment
 	alignas(4)  float     exposure = 1.0f; // global tone-mapping exposure scalar
+	alignas(4)  uint32_t  textureColorSpaceModel = static_cast<uint32_t>(TextureColorSpaceModel::HardwareSrgb);
 	alignas(16) glm::vec3 _padExposure = glm::vec3(0.0f);
 };
 

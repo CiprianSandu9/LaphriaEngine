@@ -11,6 +11,7 @@ find_package(imgui REQUIRED)
 find_package(KTX REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(stb REQUIRED)
+find_package(Python3 COMPONENTS Interpreter)
 
 find_program(SLANGC_EXECUTABLE slangc HINTS $ENV{VULKAN_SDK}/bin REQUIRED)
 
@@ -239,3 +240,17 @@ add_test(
         NAME LaphriaEngineUnitTests
         COMMAND LaphriaEngineUnitTests
 )
+
+if (Python3_Interpreter_FOUND)
+    add_custom_target(docs-generate
+            COMMAND ${Python3_EXECUTABLE} tools/docs/generate_pt_shader_docs.py --out docs/architecture/path_tracer_shaders/generated
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            COMMENT "Generate path tracer shader documentation contracts")
+
+    add_custom_target(docs-check
+            COMMAND ${Python3_EXECUTABLE} tools/docs/generate_pt_shader_docs.py --out docs/architecture/path_tracer_shaders/generated --check
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            COMMENT "Check path tracer shader docs for drift")
+else ()
+    message(STATUS "Python3 interpreter not found; docs-generate/docs-check targets are disabled.")
+endif ()

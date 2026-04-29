@@ -23,7 +23,7 @@ class FrameContext
 	void cleanupSwapChainDependents();
 	void recreate(VulkanDevice &dev, SwapchainManager &swapchain);
 	void updateUniformBuffer(uint32_t frameIdx, const Camera &camera, vk::Extent2D extent, glm::vec3 lightDirection,
-	                         float exposure);
+	                         float exposure, TextureColorSpaceModel textureColorSpaceModel);
 
 	// ── CSM Shadow resources (extent-independent, NOT cleaned on swapchain resize) ──
 	// One depth array image per frame-in-flight; each has NUM_SHADOW_CASCADES layers at SHADOW_MAP_DIM x SHADOW_MAP_DIM.

@@ -55,6 +55,7 @@ public:
     // State shared with EngineCore's main loop.
     bool useGPUPhysics = false;
     RenderMode renderMode = RenderMode::Rasterizer;
+    TextureColorSpaceModel textureColorSpaceModel = TextureColorSpaceModel::HardwareSrgb;
     bool simulationRunning = false;
     float physicsTime = 0.0f; // updated by EngineCore after each tick
     glm::vec3 lightDirection = glm::vec3(-0.30f, -1.0f, -0.20f);

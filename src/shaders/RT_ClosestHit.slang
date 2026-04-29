@@ -88,7 +88,7 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
     float4 baseColor = mat.baseColorFactor;
     if (mat.baseColorIndex >= 0) {
         float4 sampled = globalTextures[NonUniformResourceIndex(mat.baseColorIndex + mat.globalTextureOffset)].SampleLevel(uv, 0.0);
-        baseColor.rgb *= sRGBToLinear(sampled.rgb);
+        baseColor.rgb *= decodeColorSample(sampled.rgb, ubo.textureColorSpaceModel);
         baseColor.a *= sampled.a;
     }
 
@@ -140,7 +140,7 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
     float3 emissive = mat.emissiveFactor;
     if (mat.emissiveIndex >= 0) {
         float3 emissiveSample = globalTextures[NonUniformResourceIndex(mat.emissiveIndex + mat.globalTextureOffset)].SampleLevel(uv, 0.0).rgb;
-        emissive *= sRGBToLinear(emissiveSample);
+        emissive *= decodeColorSample(emissiveSample, ubo.textureColorSpaceModel);
     }
 
     // Fresnel base reflectance

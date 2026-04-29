@@ -41,6 +41,29 @@ The current codebase includes an editor and validation refactor with expanded bu
 - glTF 2.0 (`.glb` and `.gltf`) import via `fastgltf`
 - Embedded and external image handling with KTX2 and stb fallback
 - Animation clip extraction (TRS channels) and runtime clip selection
+- Batched GPU upload path for model import (reduced per-resource queue stalls)
+- Import stage timing logs (parse, texture decode/upload, mesh extraction, buffer upload, BLAS build, total)
+
+#### Runtime Asset Prep Workflow (Heavy Models)
+
+For large assets (for example Sponza), keep source and runtime versions separate:
+- Source asset: `*_source.glb`
+- Runtime asset: `*_runtime.glb`
+
+Hybrid default compression profile:
+- `ETC1S`: metallic-roughness and occlusion
+- `UASTC`: base color, emissive, normal maps
+
+Runtime color-space model:
+- `Hardware SRGB` (default): color textures sampled with hardware SRGB decode
+- `Legacy Manual`: UNORM color textures with shader-side `sRGBToLinear`
+- Changing this toggle requires reloading/re-importing model assets to fully apply.
+
+Prepare a runtime asset:
+
+```powershell
+python tools/assets/prepare_gltf_assets.py --input Assets/sponza_source.glb --output Assets/sponza_runtime.glb
+```
 
 ### Host API
 - New `EngineHost` entrypoint around `EngineCore`

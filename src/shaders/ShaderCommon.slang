@@ -33,8 +33,12 @@ struct UniformBuffer {
     float    jitter_y;       // Sub-pixel y jitter in NDC
     uint     _pad0;
     float    exposure;       // global tone-mapping exposure scalar
+    uint     textureColorSpaceModel;
     float3   _padExposure;
 };
+
+static const uint TEXTURE_COLORSPACE_HARDWARE_SRGB = 0;
+static const uint TEXTURE_COLORSPACE_LEGACY_MANUAL = 1;
 
 // ============================================================================
 // Rasterizer structs (unchanged)
@@ -123,6 +127,13 @@ float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
 
 float3 sRGBToLinear(float3 srgb) {
     return pow(srgb, float3(2.2, 2.2, 2.2));
+}
+
+float3 decodeColorSample(float3 sampled, uint textureColorSpaceModel) {
+    if (textureColorSpaceModel == TEXTURE_COLORSPACE_LEGACY_MANUAL) {
+        return sRGBToLinear(sampled);
+    }
+    return sampled;
 }
 
 float3 linearToSRGB(float3 linear) {

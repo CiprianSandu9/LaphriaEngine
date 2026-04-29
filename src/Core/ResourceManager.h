@@ -5,6 +5,7 @@
 #include "EngineAuxiliary.h"
 #include "VulkanUtils.h"
 #include <fastgltf/types.hpp>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -144,6 +145,7 @@ class ResourceManager
 	// Load a GLTF model and return the root node of the constructed hierarchy
 	SceneNode::Ptr loadGltfModel(const std::string &path, vk::DescriptorSetLayout layout);
 	void setSkinningDescriptorSetLayout(vk::DescriptorSetLayout layout) const;
+	void setTextureColorSpaceModel(TextureColorSpaceModel model);
 
 	// Primitives
 	SceneNode::Ptr createSphereModel(float radius, int slices, int stacks, vk::DescriptorSetLayout layout);
@@ -190,19 +192,31 @@ class ResourceManager
 		uint32_t basisuBc1Count = 0;
 		uint32_t nativeKtxCount = 0;
 		uint32_t rgbaFallbackCount = 0;
+		uint32_t srgbColorCount = 0;
+		uint32_t unormLinearCount = 0;
+		uint32_t mixedUsageCount = 0;
+		uint32_t forcedRemapCount = 0;
+	};
+
+	enum class TextureSemanticRole : uint8_t
+	{
+		Color,
+		Linear
 	};
 
 	void loadTextures(const fastgltf::Asset &gltf, const std::filesystem::path &modelDir, ModelResource *modelRes,
 	                  TextureLoadStats &stats) const;
 
-	bool prepareKTXFromMemory(const unsigned char *data, size_t length, Laphria::VulkanUtils::TextureUploadPayload &outPayload,
-	                          std::string &outPathTag) const;
+	bool prepareKTXFromMemory(const unsigned char *data, size_t length, TextureSemanticRole role,
+	                          Laphria::VulkanUtils::TextureUploadPayload &outPayload, std::string &outPathTag,
+	                          TextureLoadStats &stats) const;
 
 	void finalizeProceduralModel(ModelResource *modelRes, const std::vector<Laphria::Vertex> &vertices, const std::vector<uint32_t> &indices,
 	                             vk::DescriptorSetLayout layout, const std::string &meshName,
 	                             const std::optional<Laphria::MaterialData> &materialOverride = std::nullopt) const;
 
 	std::unordered_map<std::string, int> loadedModels;
+	TextureColorSpaceModel textureColorSpaceModel = TextureColorSpaceModel::HardwareSrgb;
 };        // End of ResourceManager class
 
 #endif        // LAPHRIAENGINE_RESOURCEMANAGER_H

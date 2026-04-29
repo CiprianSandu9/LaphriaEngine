@@ -260,7 +260,7 @@ void FrameContext::createUniformBuffers(const VulkanDevice &dev) {
 }
 
 void FrameContext::updateUniformBuffer(uint32_t frameIdx, const Camera &camera, vk::Extent2D extent, glm::vec3 lightDirection,
-                                       float exposure) {
+                                       float exposure, TextureColorSpaceModel textureColorSpaceModel) {
     Laphria::UniformBufferObject ubo{};
     ubo.view = camera.getViewMatrix();
 
@@ -381,6 +381,7 @@ void FrameContext::updateUniformBuffer(uint32_t frameIdx, const Camera &camera, 
     ubo.jitter_y = 0.0f;
     ubo._pad0 = 0;
     ubo.exposure = std::max(0.0f, exposure);
+    ubo.textureColorSpaceModel = static_cast<uint32_t>(textureColorSpaceModel);
     ubo._padExposure = glm::vec3(0.0f);
 
     // Update persistent state for the next frame.

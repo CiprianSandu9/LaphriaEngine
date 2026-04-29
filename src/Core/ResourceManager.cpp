@@ -23,6 +23,12 @@ namespace
 static_assert(sizeof(Vertex) == 60, "Skinning shader expects Vertex stride of 60 bytes.");
 static_assert(sizeof(ModelResource::SkinningInfluence) == 48, "Skinning shader expects SkinningInfluence stride of 48 bytes.");
 
+enum class ImportTextureRole : uint8_t
+{
+	Color,
+	Linear
+};
+
 std::vector<unsigned char> readBinaryFile(const std::filesystem::path &path)
 {
 	std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -51,7 +57,37 @@ bool supportsSampledImageFormat(const vk::raii::PhysicalDevice &physicalDevice, 
 	return static_cast<bool>(properties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage);
 }
 
-vk::Format toUnormEquivalent(vk::Format format)
+bool isSrgbFormat(vk::Format format)
+{
+	switch (format)
+	{
+	case vk::Format::eR8G8B8A8Srgb:
+	case vk::Format::eB8G8R8A8Srgb:
+	case vk::Format::eBc1RgbSrgbBlock:
+	case vk::Format::eBc1RgbaSrgbBlock:
+	case vk::Format::eBc2SrgbBlock:
+	case vk::Format::eBc3SrgbBlock:
+	case vk::Format::eBc7SrgbBlock: return true;
+	default: return false;
+	}
+}
+
+vk::Format srgbTwin(vk::Format format)
+{
+	switch (format)
+	{
+	case vk::Format::eR8G8B8A8Unorm: return vk::Format::eR8G8B8A8Srgb;
+	case vk::Format::eB8G8R8A8Unorm: return vk::Format::eB8G8R8A8Srgb;
+	case vk::Format::eBc1RgbUnormBlock: return vk::Format::eBc1RgbSrgbBlock;
+	case vk::Format::eBc1RgbaUnormBlock: return vk::Format::eBc1RgbaSrgbBlock;
+	case vk::Format::eBc2UnormBlock: return vk::Format::eBc2SrgbBlock;
+	case vk::Format::eBc3UnormBlock: return vk::Format::eBc3SrgbBlock;
+	case vk::Format::eBc7UnormBlock: return vk::Format::eBc7SrgbBlock;
+	default: return vk::Format::eUndefined;
+	}
+}
+
+vk::Format unormTwin(vk::Format format)
 {
 	switch (format)
 	{
@@ -62,11 +98,95 @@ vk::Format toUnormEquivalent(vk::Format format)
 	case vk::Format::eBc2SrgbBlock: return vk::Format::eBc2UnormBlock;
 	case vk::Format::eBc3SrgbBlock: return vk::Format::eBc3UnormBlock;
 	case vk::Format::eBc7SrgbBlock: return vk::Format::eBc7UnormBlock;
-	default: return format;
+	default: return vk::Format::eUndefined;
 	}
 }
 
-void buildSingleMipRgbaPayload(const unsigned char *pixels, uint32_t width, uint32_t height, VulkanUtils::TextureUploadPayload &payload)
+int resolveTextureImageIndex(const fastgltf::Asset &gltf, size_t textureIndex)
+{
+	if (textureIndex >= gltf.textures.size())
+	{
+		return -1;
+	}
+	const auto &texture = gltf.textures[textureIndex];
+	if (texture.imageIndex.has_value())
+	{
+		return static_cast<int>(texture.imageIndex.value());
+	}
+	if (texture.basisuImageIndex.has_value())
+	{
+		return static_cast<int>(texture.basisuImageIndex.value());
+	}
+	return -1;
+}
+
+std::vector<ImportTextureRole> buildTextureRoles(const fastgltf::Asset &gltf, uint32_t &mixedUsageCount)
+{
+	constexpr uint8_t kUsageColor = 1u << 0u;
+	constexpr uint8_t kUsageLinear = 1u << 1u;
+	std::vector<uint8_t> usage(gltf.images.size(), 0u);
+
+	auto markTextureUsage = [&](size_t textureIndex, uint8_t usageFlag) {
+		const int imageIndex = resolveTextureImageIndex(gltf, textureIndex);
+		if (imageIndex >= 0 && static_cast<size_t>(imageIndex) < usage.size())
+		{
+			usage[static_cast<size_t>(imageIndex)] |= usageFlag;
+		}
+	};
+
+	for (const auto &material : gltf.materials)
+	{
+		if (material.pbrData.baseColorTexture.has_value())
+		{
+			markTextureUsage(material.pbrData.baseColorTexture->textureIndex, kUsageColor);
+		}
+		if (material.emissiveTexture.has_value())
+		{
+			markTextureUsage(material.emissiveTexture->textureIndex, kUsageColor);
+		}
+		if (material.normalTexture.has_value())
+		{
+			markTextureUsage(material.normalTexture->textureIndex, kUsageLinear);
+		}
+		if (material.pbrData.metallicRoughnessTexture.has_value())
+		{
+			markTextureUsage(material.pbrData.metallicRoughnessTexture->textureIndex, kUsageLinear);
+		}
+		if (material.occlusionTexture.has_value())
+		{
+			markTextureUsage(material.occlusionTexture->textureIndex, kUsageLinear);
+		}
+		if (material.specular != nullptr && material.specular->specularTexture.has_value())
+		{
+			markTextureUsage(material.specular->specularTexture->textureIndex, kUsageLinear);
+		}
+	}
+
+	std::vector<ImportTextureRole> roles(gltf.images.size(), ImportTextureRole::Linear);
+	for (size_t i = 0; i < usage.size(); ++i)
+	{
+		const bool hasColor = (usage[i] & kUsageColor) != 0u;
+		const bool hasLinear = (usage[i] & kUsageLinear) != 0u;
+		if (hasColor && hasLinear)
+		{
+			++mixedUsageCount;
+			LOGW("Texture image %zu is used by both color and linear slots; treating as color (SRGB-preferred path).", i);
+			roles[i] = ImportTextureRole::Color;
+		}
+		else if (hasColor)
+		{
+			roles[i] = ImportTextureRole::Color;
+		}
+		else
+		{
+			roles[i] = ImportTextureRole::Linear;
+		}
+	}
+	return roles;
+}
+
+void buildSingleMipRgbaPayload(const unsigned char *pixels, uint32_t width, uint32_t height, vk::Format format,
+                               VulkanUtils::TextureUploadPayload &payload)
 {
 	payload.data.assign(pixels, pixels + (static_cast<size_t>(width) * static_cast<size_t>(height) * 4u));
 	payload.copyRegions.clear();
@@ -77,7 +197,7 @@ void buildSingleMipRgbaPayload(const unsigned char *pixels, uint32_t width, uint
 	    .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
 	    .imageOffset = {0, 0, 0},
 	    .imageExtent = {width, height, 1}});
-	payload.format = vk::Format::eR8G8B8A8Unorm;
+	payload.format = format;
 	payload.width = width;
 	payload.height = height;
 	payload.mipLevels = 1;
@@ -101,12 +221,23 @@ void ResourceManager::setSkinningDescriptorSetLayout(vk::DescriptorSetLayout lay
     gpuResourceRegistry->setSkinningDescriptorSetLayout(layout);
 }
 
+void ResourceManager::setTextureColorSpaceModel(TextureColorSpaceModel model) {
+    if (textureColorSpaceModel == model) {
+        return;
+    }
+    textureColorSpaceModel = model;
+    loadedModels.clear();
+    LOGI("Texture color-space model switched to %s. Model cache cleared; reload assets to apply new texture formats.",
+         textureColorSpaceModel == TextureColorSpaceModel::HardwareSrgb ? "HardwareSrgb" : "LegacyManual");
+}
+
 // Internal helper struct for texture batching
 
 // Texture Helpers
 
-bool ResourceManager::prepareKTXFromMemory(const unsigned char *data, size_t length, VulkanUtils::TextureUploadPayload &outPayload,
-                                           std::string &outPathTag) const {
+bool ResourceManager::prepareKTXFromMemory(const unsigned char *data, size_t length, TextureSemanticRole role,
+                                           VulkanUtils::TextureUploadPayload &outPayload, std::string &outPathTag,
+                                           TextureLoadStats &stats) const {
     static const unsigned char ktx2Magic[12] = {
         0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A
     };
@@ -125,20 +256,30 @@ bool ResourceManager::prepareKTXFromMemory(const unsigned char *data, size_t len
 
     outPathTag = "native-ktx-vkformat";
 
+    const bool useSrgbForColorRole = (role == TextureSemanticRole::Color) &&
+                                     (textureColorSpaceModel == TextureColorSpaceModel::HardwareSrgb);
+
     if (ktxTexture2_NeedsTranscoding(ktx2)) {
         struct Candidate {
             ktx_transcode_fmt_e target;
             vk::Format format;
             const char *tag;
         };
-        const Candidate defaultCandidates[] = {
-            {KTX_TTF_BC7_RGBA, vk::Format::eBc7UnormBlock, "basisu->bc7"},
-            {KTX_TTF_BC3_RGBA, vk::Format::eBc3UnormBlock, "basisu->bc3"},
-            {KTX_TTF_BC1_RGB, vk::Format::eBc1RgbUnormBlock, "basisu->bc1"},
-            {KTX_TTF_RGBA32, vk::Format::eR8G8B8A8Unorm, "rgba-fallback"}
+        const Candidate colorCandidates[] = {
+            {KTX_TTF_BC7_RGBA, vk::Format::eBc7SrgbBlock, "basisu->bc7-srgb"},
+            {KTX_TTF_BC3_RGBA, vk::Format::eBc3SrgbBlock, "basisu->bc3-srgb"},
+            {KTX_TTF_BC1_RGB, vk::Format::eBc1RgbSrgbBlock, "basisu->bc1-srgb"},
+            {KTX_TTF_RGBA32, vk::Format::eR8G8B8A8Srgb, "rgba-fallback-srgb"}
         };
-        const Candidate *candidates = defaultCandidates;
-        const size_t candidateCount = sizeof(defaultCandidates) / sizeof(defaultCandidates[0]);
+        const Candidate linearCandidates[] = {
+            {KTX_TTF_BC7_RGBA, vk::Format::eBc7UnormBlock, "basisu->bc7-unorm"},
+            {KTX_TTF_BC3_RGBA, vk::Format::eBc3UnormBlock, "basisu->bc3-unorm"},
+            {KTX_TTF_BC1_RGB, vk::Format::eBc1RgbUnormBlock, "basisu->bc1-unorm"},
+            {KTX_TTF_RGBA32, vk::Format::eR8G8B8A8Unorm, "rgba-fallback-unorm"}
+        };
+        const Candidate *candidates = useSrgbForColorRole ? colorCandidates : linearCandidates;
+        const size_t candidateCount = useSrgbForColorRole ? (sizeof(colorCandidates) / sizeof(colorCandidates[0]))
+                                                          : (sizeof(linearCandidates) / sizeof(linearCandidates[0]));
 
         bool transcoded = false;
         for (size_t candidateIndex = 0; candidateIndex < candidateCount; ++candidateIndex) {
@@ -160,12 +301,20 @@ bool ResourceManager::prepareKTXFromMemory(const unsigned char *data, size_t len
 
     vk::Format vkFormat = static_cast<vk::Format>(ktx2->vkFormat);
     if (vkFormat == vk::Format::eUndefined) {
-        vkFormat = vk::Format::eR8G8B8A8Unorm;
+        vkFormat = useSrgbForColorRole ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
         outPathTag = "rgba-fallback";
     }
-    // Keep import behavior consistent with the RGBA path and existing shaders:
-    // shaders perform manual sRGB->linear for color textures, so avoid hardware sRGB decode here.
-    vkFormat = toUnormEquivalent(vkFormat);
+    const bool sourceIsSrgb = isSrgbFormat(vkFormat);
+    if (sourceIsSrgb != useSrgbForColorRole) {
+        const vk::Format twin = useSrgbForColorRole ? srgbTwin(vkFormat) : unormTwin(vkFormat);
+        if (twin == vk::Format::eUndefined) {
+            LOGW("Texture format %d mismatched for role; no SRGB/UNORM twin exists. Keeping original format.", static_cast<int>(vkFormat));
+        } else {
+            ++stats.forcedRemapCount;
+            LOGI("Texture format remapped for role: %d -> %d", static_cast<int>(vkFormat), static_cast<int>(twin));
+            vkFormat = twin;
+        }
+    }
 
     const uint32_t baseWidth = ktx2->baseWidth;
     const uint32_t baseHeight = ktx2->baseHeight;
@@ -219,6 +368,7 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
     if (textureSources.empty()) {
         return;
     }
+    const auto textureRoles = buildTextureRoles(gltf, stats.mixedUsageCount);
     LOGI("Texture import: %zu image(s) detected", textureSources.size());
 
     modelRes->textureImages.reserve(textureSources.size());
@@ -262,6 +412,10 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
     for (size_t i = 0; i < textureSources.size(); ++i) {
         const auto decodeStart = std::chrono::high_resolution_clock::now();
         const auto &source = textureSources[i];
+        const TextureSemanticRole role =
+            (i < textureRoles.size() && textureRoles[i] == ImportTextureRole::Color) ? TextureSemanticRole::Color : TextureSemanticRole::Linear;
+        const bool useSrgbForColorRole = (role == TextureSemanticRole::Color) &&
+                                         (textureColorSpaceModel == TextureColorSpaceModel::HardwareSrgb);
 
         VulkanUtils::VmaImage img{};
         VulkanUtils::TextureUploadPayload payload{};
@@ -276,7 +430,7 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
 				const auto bytes = readBinaryFile(source.uriPath);
 				if (!bytes.empty())
 				{
-					success = prepareKTXFromMemory(bytes.data(), bytes.size(), payload, decodePathTag);
+					success = prepareKTXFromMemory(bytes.data(), bytes.size(), role, payload, decodePathTag, stats);
 				}
 				if (!success)
 				{
@@ -288,9 +442,10 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
 				int w, h, c;
 				if (unsigned char *px = stbi_load(source.uriPath.string().c_str(), &w, &h, &c, STBI_rgb_alpha))
 				{
-					buildSingleMipRgbaPayload(px, static_cast<uint32_t>(w), static_cast<uint32_t>(h), payload);
+					buildSingleMipRgbaPayload(px, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+					                          useSrgbForColorRole ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm, payload);
 					success = true;
-					decodePathTag = "rgba-fallback";
+					decodePathTag = useSrgbForColorRole ? "rgba-fallback-srgb" : "rgba-fallback-unorm";
 					stbi_image_free(px);
 				}
 				else
@@ -303,12 +458,13 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
             const auto *data = source.bytesData;
             const size_t len = source.bytesLength;
 
-            if (!prepareKTXFromMemory(data, len, payload, decodePathTag)) {
+            if (!prepareKTXFromMemory(data, len, role, payload, decodePathTag, stats)) {
                 int w, h, c;
                 if (unsigned char *px = stbi_load_from_memory(data, static_cast<int>(len), &w, &h, &c, STBI_rgb_alpha)) {
-                    buildSingleMipRgbaPayload(px, static_cast<uint32_t>(w), static_cast<uint32_t>(h), payload);
+                    buildSingleMipRgbaPayload(px, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                                              useSrgbForColorRole ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm, payload);
                     success = true;
-                    decodePathTag = "rgba-fallback";
+                    decodePathTag = useSrgbForColorRole ? "rgba-fallback-srgb" : "rgba-fallback-unorm";
                     stbi_image_free(px);
                 } else {
                     LOGE("Failed to decode embedded texture (Index: %zu)", i);
@@ -323,20 +479,27 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
         if (!success) {
             LOGW("Texture invalid, using white placeholder.");
             static const unsigned char white[] = {255, 255, 255, 255};
-            buildSingleMipRgbaPayload(white, 1, 1, payload);
-            decodePathTag = "rgba-fallback";
+            buildSingleMipRgbaPayload(white, 1, 1,
+                                      useSrgbForColorRole ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm, payload);
+            decodePathTag = useSrgbForColorRole ? "rgba-fallback-srgb" : "rgba-fallback-unorm";
         }
 
-        if (decodePathTag == "basisu->bc7") {
+        if (decodePathTag.find("basisu->bc7") != std::string::npos) {
             ++stats.basisuBc7Count;
-        } else if (decodePathTag == "basisu->bc3") {
+        } else if (decodePathTag.find("basisu->bc3") != std::string::npos) {
             ++stats.basisuBc3Count;
-        } else if (decodePathTag == "basisu->bc1") {
+        } else if (decodePathTag.find("basisu->bc1") != std::string::npos) {
             ++stats.basisuBc1Count;
         } else if (decodePathTag == "native-ktx-vkformat") {
             ++stats.nativeKtxCount;
         } else {
             ++stats.rgbaFallbackCount;
+        }
+        if (role == TextureSemanticRole::Color && isSrgbFormat(payload.format)) {
+            ++stats.srgbColorCount;
+        }
+        if (role == TextureSemanticRole::Linear && !isSrgbFormat(payload.format)) {
+            ++stats.unormLinearCount;
         }
         LOGI("Texture path[%zu]: %s", i, decodePathTag.c_str());
 
@@ -388,6 +551,9 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
     LOGI("Texture decode path summary: bc7=%u bc3=%u bc1=%u nativeKtx=%u rgbaFallback=%u",
          stats.basisuBc7Count, stats.basisuBc3Count, stats.basisuBc1Count, stats.nativeKtxCount,
          stats.rgbaFallbackCount);
+    LOGI("Texture color-space summary: srgbColor=%u unormLinear=%u mixedUsage=%u forcedRemap=%u model=%s",
+         stats.srgbColorCount, stats.unormLinearCount, stats.mixedUsageCount, stats.forcedRemapCount,
+         textureColorSpaceModel == TextureColorSpaceModel::HardwareSrgb ? "HardwareSrgb" : "LegacyManual");
 }
 
 SceneNode::Ptr ResourceManager::loadGltfModel(const std::string &path, vk::DescriptorSetLayout layout) {
@@ -470,6 +636,13 @@ SceneNode::Ptr ResourceManager::loadGltfModel(const std::string &path, vk::Descr
     report.supportedFeatures.push_back("texture_decode_path_bc1:" + std::to_string(textureStats.basisuBc1Count));
     report.supportedFeatures.push_back("texture_decode_path_native_ktx:" + std::to_string(textureStats.nativeKtxCount));
     report.supportedFeatures.push_back("texture_decode_path_rgba_fallback:" + std::to_string(textureStats.rgbaFallbackCount));
+    report.supportedFeatures.push_back("texture_srgb_color_count:" + std::to_string(textureStats.srgbColorCount));
+    report.supportedFeatures.push_back("texture_unorm_linear_count:" + std::to_string(textureStats.unormLinearCount));
+    report.supportedFeatures.push_back("texture_mixed_usage_count:" + std::to_string(textureStats.mixedUsageCount));
+    report.supportedFeatures.push_back("texture_forced_remap_count:" + std::to_string(textureStats.forcedRemapCount));
+    report.supportedFeatures.push_back(
+        std::string("texture_color_space_model:") +
+        (textureColorSpaceModel == TextureColorSpaceModel::HardwareSrgb ? "HardwareSrgb" : "LegacyManual"));
 
     // 2. Materials
     gltfImporter->populateMaterials(gltf, *modelRes);

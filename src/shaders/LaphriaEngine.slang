@@ -70,7 +70,7 @@ float4 fragMain(VSOutput input) : SV_TARGET {
 
     if (material.baseColorIndex >= 0) {
         float4 sampled = textures[NonUniformResourceIndex(material.baseColorIndex)].Sample(input.texCoord);
-        baseColor.rgb *= sRGBToLinear(sampled.rgb);
+        baseColor.rgb *= decodeColorSample(sampled.rgb, ubo.textureColorSpaceModel);
         baseColor.a *= sampled.a;
     }
     
@@ -141,7 +141,7 @@ float4 fragMain(VSOutput input) : SV_TARGET {
 
     if (material.emissiveIndex >= 0) {
         float3 emissiveSample = textures[NonUniformResourceIndex(material.emissiveIndex)].Sample(input.texCoord).rgb;
-        emissive *= sRGBToLinear(emissiveSample);
+        emissive *= decodeColorSample(emissiveSample, ubo.textureColorSpaceModel);
     }
 
     // ========================================================================
