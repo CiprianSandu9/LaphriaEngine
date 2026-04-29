@@ -632,6 +632,8 @@ void FrameContext::createTLASResources(VulkanDevice &dev) {
 
     vk::AccelerationStructureBuildSizesInfoKHR sizeInfo = dev.logicalDevice.getAccelerationStructureBuildSizesKHR(
         vk::AccelerationStructureBuildTypeKHR::eDevice, buildInfo, primitiveCount);
+    const vk::DeviceSize scratchAlignment =
+        VulkanUtils::getAccelerationStructureScratchAlignment(dev.physicalDevice);
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         // --- TLAS Storage Buffer ---
@@ -649,11 +651,14 @@ void FrameContext::createTLASResources(VulkanDevice &dev) {
 
         // --- Scratch Buffer ---
         VulkanUtils::VmaBuffer scratchBuffer{};
-        VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, sizeInfo.buildScratchSize,
+        const vk::DeviceSize scratchBufferSize = sizeInfo.buildScratchSize + (scratchAlignment - 1);
+        VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, scratchBufferSize,
                                   vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
                                   vk::MemoryPropertyFlagBits::eDeviceLocal, scratchBuffer);
         tlasScratchBuffers.push_back(std::move(scratchBuffer));
-        tlasScratchAddresses.push_back(VulkanUtils::getBufferDeviceAddress(dev.logicalDevice, tlasScratchBuffers.back()));
+        const vk::DeviceAddress baseScratchAddress =
+            VulkanUtils::getBufferDeviceAddress(dev.logicalDevice, tlasScratchBuffers.back());
+        tlasScratchAddresses.push_back(VulkanUtils::alignDeviceAddress(baseScratchAddress, scratchAlignment));
 
         // --- Instance Buffer ---
         VulkanUtils::VmaBuffer instanceBuffer{};

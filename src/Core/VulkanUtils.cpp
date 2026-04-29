@@ -258,6 +258,27 @@ uint32_t alignUp(uint32_t size, uint32_t alignment)
 	return (size + alignment - 1) & ~(alignment - 1);
 }
 
+vk::DeviceAddress alignDeviceAddress(vk::DeviceAddress address, vk::DeviceSize alignment)
+{
+	if (alignment <= 1)
+	{
+		return address;
+	}
+	const vk::DeviceAddress remainder = address % alignment;
+	return (remainder == 0) ? address : (address + (alignment - remainder));
+}
+
+vk::DeviceSize getAccelerationStructureScratchAlignment(const vk::raii::PhysicalDevice &physicalDevice)
+{
+	const auto propsChain = physicalDevice.getProperties2<
+	    vk::PhysicalDeviceProperties2,
+	    vk::PhysicalDeviceAccelerationStructurePropertiesKHR>();
+	const vk::DeviceSize alignment = propsChain
+	                                     .get<vk::PhysicalDeviceAccelerationStructurePropertiesKHR>()
+	                                     .minAccelerationStructureScratchOffsetAlignment;
+	return std::max<vk::DeviceSize>(1, alignment);
+}
+
 void createBuffer(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,
                   vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties,
                   vk::raii::Buffer &buffer, vk::raii::DeviceMemory &bufferMemory)

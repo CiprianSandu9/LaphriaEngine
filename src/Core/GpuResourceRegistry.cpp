@@ -298,6 +298,7 @@ void GpuResourceRegistry::buildBLAS(ModelResource &modelResource, const std::vec
 
 	vk::DeviceAddress vertexAddress = Laphria::VulkanUtils::getBufferDeviceAddress(device, modelResource.vertexBuffer);
 	vk::DeviceAddress indexAddress = Laphria::VulkanUtils::getBufferDeviceAddress(device, modelResource.indexBuffer);
+	const vk::DeviceSize scratchAlignment = Laphria::VulkanUtils::getAccelerationStructureScratchAlignment(physicalDevice);
 
 	for (const auto &mesh : modelResource.meshes)
 	{
@@ -369,12 +370,14 @@ void GpuResourceRegistry::buildBLAS(ModelResource &modelResource, const std::vec
 
 		Laphria::VulkanUtils::VmaBuffer scratchBuffer{};
 		const vk::DeviceSize scratchSize = std::max(sizeInfo.buildScratchSize, sizeInfo.updateScratchSize);
-		Laphria::VulkanUtils::createBuffer(device, physicalDevice, scratchSize,
+		const vk::DeviceSize scratchBufferSize = scratchSize + (scratchAlignment - 1);
+		Laphria::VulkanUtils::createBuffer(device, physicalDevice, scratchBufferSize,
 		                                   vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
 		                                   vk::MemoryPropertyFlagBits::eDeviceLocal, scratchBuffer);
 
 		buildInfo.dstAccelerationStructure = *blas;
-		buildInfo.scratchData.deviceAddress = Laphria::VulkanUtils::getBufferDeviceAddress(device, scratchBuffer);
+		const vk::DeviceAddress baseScratchAddress = Laphria::VulkanUtils::getBufferDeviceAddress(device, scratchBuffer);
+		buildInfo.scratchData.deviceAddress = Laphria::VulkanUtils::alignDeviceAddress(baseScratchAddress, scratchAlignment);
 
 		auto cmd = Laphria::VulkanUtils::beginSingleTimeCommands(device, commandPool);
 		const vk::AccelerationStructureBuildRangeInfoKHR *pBuildRanges = buildRanges.data();

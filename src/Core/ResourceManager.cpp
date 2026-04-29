@@ -361,6 +361,9 @@ void ResourceManager::bindResources(const vk::raii::CommandBuffer &cmd, int mode
 }
 
 void ResourceManager::recordSkinnedBLASRefit(const vk::raii::CommandBuffer &cmd) const {
+    const vk::DeviceSize scratchAlignment =
+        VulkanUtils::getAccelerationStructureScratchAlignment(physicalDevice);
+
     for (auto &model : models) {
         if (!model || !model->hasRuntimeSkinning) {
             continue;
@@ -431,7 +434,10 @@ void ResourceManager::recordSkinnedBLASRefit(const vk::raii::CommandBuffer &cmd)
             buildInfo.dstAccelerationStructure = *model->blasElements[meshIndex];
             buildInfo.geometryCount = static_cast<uint32_t>(geometries.size());
             buildInfo.pGeometries = geometries.data();
-            buildInfo.scratchData.deviceAddress = VulkanUtils::getBufferDeviceAddress(device, model->blasScratchBuffers[meshIndex]);
+            const vk::DeviceAddress baseScratchAddress =
+                VulkanUtils::getBufferDeviceAddress(device, model->blasScratchBuffers[meshIndex]);
+            buildInfo.scratchData.deviceAddress =
+                VulkanUtils::alignDeviceAddress(baseScratchAddress, scratchAlignment);
 
             const vk::AccelerationStructureBuildRangeInfoKHR *pBuildRanges = buildRanges.data();
             cmd.buildAccelerationStructuresKHR(buildInfo, pBuildRanges);

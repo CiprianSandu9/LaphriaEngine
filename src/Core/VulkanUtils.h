@@ -72,6 +72,8 @@ void logTrackedVmaAllocationLeaks();
 // Memory Helper
 uint32_t findMemoryType(const vk::raii::PhysicalDevice &physicalDevice, uint32_t typeFilter, vk::MemoryPropertyFlags properties);
 uint32_t alignUp(uint32_t size, uint32_t alignment);
+vk::DeviceAddress alignDeviceAddress(vk::DeviceAddress address, vk::DeviceSize alignment);
+vk::DeviceSize getAccelerationStructureScratchAlignment(const vk::raii::PhysicalDevice &physicalDevice);
 
 // Buffer Helpers
 void createBuffer(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physicalDevice,

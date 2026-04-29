@@ -608,6 +608,12 @@ void EngineCore::createRayTracingDescriptorSets() {
 
 void EngineCore::createDenoiserDescriptorSets() {
     // One set per frame in flight. All 13 bindings are storage images.
+    // Free old sets before replacing the pool; each RAII DescriptorSet stores its parent pool handle.
+    denoiserDescriptorSets.clear();
+    if (*denoiserDescriptorPool) {
+        denoiserDescriptorPool = nullptr;
+    }
+
     std::vector<vk::DescriptorPoolSize> poolSizes = {
         {vk::DescriptorType::eStorageImage, 13 * MAX_FRAMES_IN_FLIGHT}
     };
@@ -625,7 +631,6 @@ void EngineCore::createDenoiserDescriptorSets() {
         .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
         .pSetLayouts = layouts.data()
     };
-    denoiserDescriptorSets.clear();
     denoiserDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
