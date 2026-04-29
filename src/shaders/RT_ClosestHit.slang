@@ -100,7 +100,7 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
         roughness *= mrSample.g;
         metallic  *= mrSample.b;
     }
-    roughness = clamp(roughness, MIN_ROUGHNESS, GAMEPLAY_MAX_ROUGHNESS);
+    roughness = clamp(roughness, MIN_ROUGHNESS, 1.0);
 
     // Normal Mapping
     float3 N = normalize(worldNormal);
@@ -134,7 +134,7 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
         float aoSample = globalTextures[NonUniformResourceIndex(mat.occlusionIndex + mat.globalTextureOffset)].SampleLevel(uv, 0.0).r;
         ao = 1.0 + mat.occlusionStrength * (aoSample - 1.0);
     }
-    calibrateGameplayMaterial(baseColor.rgb, roughness, ao);
+    ao = saturate(ao);
 
     // Emissive
     float3 emissive = mat.emissiveFactor;
@@ -170,11 +170,10 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
     TraceRay(topLevelAS, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
 
     float shadow = float(shadowPayload.isShadowed);
-
     // Sun light
     {
         float3 H       = normalize(V + L);
-        float3 radiance = gameplaySunRadiance(ubo.gameplayVisuals);
+        float3 radiance = SUN_RADIANCE;
         float  NdotL   = max(dot(N, L), 0.0);
         float  NdotV   = max(dot(N, V), 0.0);
         float  D       = distributionGGX(N, H, roughness);
@@ -183,38 +182,27 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
         float3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.0001);
         float3 kD      = (1.0 - F) * (1.0 - metallic);
         float3 diffuse = kD * baseColor.rgb / PI;
-        float sunVisibility = lerp(GAMEPLAY_SHADOW_FLOOR, 1.0, 1.0 - shadow);
+        float sunVisibility = 1.0 - shadow;
         Lo += (diffuse + specular) * radiance * NdotL * sunVisibility;
     }
 
-    // Fill light
-    {
-        float3 fillL   = normalize(GAMEPLAY_FILL_DIR);
-        float3 H       = normalize(V + fillL);
-        float3 radiance = gameplayFillRadiance(ubo.gameplayVisuals);
-        float  NdotL   = max(dot(N, fillL), 0.0);
-        float  NdotV   = max(dot(N, V), 0.0);
-        float  D       = distributionGGX(N, H, roughness);
-        float  G       = geometrySmith(N, V, fillL, roughness);
-        float3 F       = fresnelSchlick(max(dot(H, V), 0.0), F0);
-        float3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.0001);
-        float3 kD      = (1.0 - F) * (1.0 - metallic);
-        float3 diffuse = kD * baseColor.rgb / PI;
-        Lo += (diffuse + specular) * radiance * NdotL;
-    }
-
-    // Ambient — sky/ground colours driven by the same procedural sky model.
+    // Procedural sky/ground environment lighting.
     float3 sunDir3     = normalize(-ubo.lightDir.xyz);
-    float3 skyColor    = evalSkyColor(float3(0.0, 1.0, 0.0), sunDir3); // zenith sky sample
-    float3 groundColor = evalGroundColor(sunDir3);                      // earth-toned lower lobe
-    float3 ambientL    = lerp(groundColor, skyColor, N.y * 0.5 + 0.5) * gameplayAmbientBoost(ubo.gameplayVisuals);
+    float3 skyColor    = evalSkyColor(float3(0.0, 1.0, 0.0), sunDir3);
+    float3 groundColor = evalGroundColor(sunDir3);
+    float3 envDiffuse  = lerp(groundColor, skyColor, saturate(N.y * 0.5 + 0.5));
     float3 kS          = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
     float3 kD_amb      = (1.0 - kS) * (1.0 - metallic);
-    float3 ambientContribution = (kD_amb * baseColor.rgb * ambientL + kS * ambientL * (1.0 - roughness * 0.5)) * ao;
+    float3 ambientDiffuse = kD_amb * baseColor.rgb * envDiffuse * ao;
+    float3 R = reflect(-V, N);
+    float3 skySpec      = evalSkyColor(R, sunDir3);
+    float3 groundSpec   = evalGroundColor(sunDir3);
+    float3 envSpecular  = lerp(groundSpec, skySpec, saturate(R.y * 0.5 + 0.5));
+    float3 ambientSpecular = kS * envSpecular;
+    float3 ambientContribution = ambientDiffuse + ambientSpecular;
 
     float3 finalColor = ambientContribution + Lo + emissive;
-    finalColor = applyReadabilityTonemap(finalColor, gameplayExposure(ubo.gameplayVisuals));
+    finalColor = applyAcesTonemap(finalColor, ubo.exposure);
 
     payload.color = finalColor;
 }
-

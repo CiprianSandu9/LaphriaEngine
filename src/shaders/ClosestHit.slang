@@ -134,7 +134,7 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
         roughness *= mr.g;
         metallic  *= mr.b;
     }
-    roughness = clamp(roughness, MIN_ROUGHNESS, GAMEPLAY_MAX_ROUGHNESS);
+    roughness = clamp(roughness, MIN_ROUGHNESS, 1.0);
 
     // Emissive
     float3 emissive = mat.emissiveFactor;
@@ -149,7 +149,7 @@ void main(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes att
         float aoSample = globalTextures[NonUniformResourceIndex(mat.occlusionIndex + mat.globalTextureOffset)].SampleLevel(uv, 0.0).r;
         ao = 1.0 + mat.occlusionStrength * (aoSample - 1.0);
     }
-    calibrateGameplayMaterial(baseColor.rgb, roughness, ao);
+    ao = saturate(ao);
 
     // Fresnel base reflectance
     float dielectricSpec = mat.specularFactor;

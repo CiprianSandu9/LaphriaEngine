@@ -260,7 +260,7 @@ void FrameContext::createUniformBuffers(const VulkanDevice &dev) {
 }
 
 void FrameContext::updateUniformBuffer(uint32_t frameIdx, const Camera &camera, vk::Extent2D extent, glm::vec3 lightDirection,
-                                       const UISystem::VisualsV1Settings &visualsV1) {
+                                       float exposure) {
     Laphria::UniformBufferObject ubo{};
     ubo.view = camera.getViewMatrix();
 
@@ -380,11 +380,8 @@ void FrameContext::updateUniformBuffer(uint32_t frameIdx, const Camera &camera, 
     ubo.jitter_x = 0.0f; // Sub-pixel jitter disabled; set to halton values to enable TAA
     ubo.jitter_y = 0.0f;
     ubo._pad0 = 0;
-    ubo.gameplayVisuals = glm::vec4(
-        std::max(0.0f, visualsV1.sunIntensity),
-        std::max(0.0f, visualsV1.fillIntensity),
-        std::max(0.0f, visualsV1.ambientBoost),
-        std::max(0.0f, visualsV1.exposure));
+    ubo.exposure = std::max(0.0f, exposure);
+    ubo._padExposure = glm::vec3(0.0f);
 
     // Update persistent state for the next frame.
     prevViewProj = ubo.proj * ubo.view;

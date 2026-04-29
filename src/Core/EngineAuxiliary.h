@@ -121,7 +121,8 @@ struct UniformBufferObject
 	alignas(4)  float     jitter_x;       // sub-pixel x jitter in NDC (Halton sequence, zero when TAA disabled)
 	alignas(4)  float     jitter_y;       // sub-pixel y jitter in NDC
 	alignas(4)  uint32_t  _pad0;          // padding for 16-byte struct alignment
-	alignas(16) glm::vec4 gameplayVisuals = glm::vec4(1.0f); // x=sun, y=fill, z=ambient, w=exposure multipliers
+	alignas(4)  float     exposure = 1.0f; // global tone-mapping exposure scalar
+	alignas(16) glm::vec3 _padExposure = glm::vec3(0.0f);
 };
 
 struct DenoisePushConstants
@@ -130,7 +131,7 @@ struct DenoisePushConstants
 	int32_t isLastPass;  // 1 on the final A-Trous iteration: triggers tone mapping + history copy
 	float   phiColor;    // luminance edge-stopping weight (typical: 10.0)
 	float   phiNormal;   // normal edge-stopping exponent (typical: 128.0)
-	float   exposureScale; // gameplay exposure multiplier applied on final denoise pass
+	float   exposureScale; // global exposure multiplier applied on final denoise pass
 };
 
 struct SkinningPushConstants

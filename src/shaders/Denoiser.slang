@@ -98,7 +98,7 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
         // The swapchain is B8G8R8A8_SRGB, so the blit automatically applies the
         // sRGB transfer function. Do NOT call linearToSRGB here — that would apply
         // gamma twice and wash out all dark values to mid-grey.
-        float3 tonemapped = applyReadabilityTonemap(filtered, push.exposureScale);
+        float3 tonemapped = applyAcesTonemap(filtered, push.exposureScale);
         finalOutput[pixel] = float4(tonemapped, 1.0);
     } else {
         // Intermediate iteration: write to the OTHER ping-pong buffer.

@@ -16,22 +16,6 @@
 // Owns ImGui lifecycle, all editor draw calls, and UI-driven simulation state.
 class UISystem {
 public:
-    struct VisualsV1Settings
-    {
-        float sunIntensity = 1.0f;
-        float fillIntensity = 1.0f;
-        float ambientBoost = 1.0f;
-        float exposure = 1.0f;
-
-        void reset()
-        {
-            sunIntensity = 1.0f;
-            fillIntensity = 1.0f;
-            ambientBoost = 1.0f;
-            exposure = 1.0f;
-        }
-    };
-
     enum class PathTracerQualityMode
     {
         Manual = 0,
@@ -74,7 +58,7 @@ public:
     bool simulationRunning = false;
     float physicsTime = 0.0f; // updated by EngineCore after each tick
     glm::vec3 lightDirection = glm::vec3(-0.30f, -1.0f, -0.20f);
-    VisualsV1Settings visualsV1;
+    float exposure = 1.0f;
     PathTracerSettings pathTracerSettings;
     PathTracerPerfStats pathTracerPerfStats;
     bool showEditorPanels = true;

@@ -109,7 +109,7 @@ void main() {
                 RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
                 0xFF, 0, 0, 0, shadowRay, shadowPayload);
 
-            // Use a shadow floor instead of fully blacked-out direct sun for readability.
+            // Binary hard-shadow visibility for the direct sun sample.
             float3 H     = normalize(Ldir + V2);
             float  NdotV = max(dot(N2, V2),   0.0001);
             float  VdotH = max(dot(V2, H),    0.0001);
@@ -122,39 +122,11 @@ void main() {
             float3 diffuse  = kD * payload.albedo / PI;
             float3 specular = (D * Fs * G) / max(4.0 * NdotV * NdotL, 0.0001);
 
-            float3 sunRadiance = gameplaySunRadiance(ubo.gameplayVisuals);  // keep direct light aligned with raster/RT readability profile
-            radiance += throughput * (diffuse + specular) * NdotL * sunRadiance * ((shadowPayload.hitT < 0.0) ? 1.0 : GAMEPLAY_SHADOW_FLOOR);
+            float shadowVisibility = (shadowPayload.hitT < 0.0) ? 1.0 : 0.0;
+            radiance += throughput * (diffuse + specular) * NdotL * SUN_RADIANCE * shadowVisibility;
         }
 
         // ── Primary-ray G-Buffer write (bounce 0 only) ─────────────────────
-        // Keep readability fill + ambient on the primary hit only; applying these helper
-        // lights on every bounce over-amplifies color cast and drifts toward blue.
-        if (bounce == 0) {
-            float3 fillL = normalize(GAMEPLAY_FILL_DIR);
-            float  NdotFill = max(dot(N2, fillL), 0.0);
-            if (NdotFill > 0.0) {
-                float3 Hfill  = normalize(fillL + V2);
-                float  NdotVFill = max(dot(N2, V2), 0.0001);
-                float  VdotHFill = max(dot(V2, Hfill), 0.0001);
-                float3 FsFill = fresnelSchlick(VdotHFill, payload.F0);
-                float  Dfill  = distributionGGX(N2, Hfill, payload.roughness);
-                float  Gfill  = geometrySmith(N2, V2, fillL, payload.roughness);
-                float3 kDFill = (float3(1.0, 1.0, 1.0) - FsFill) * (1.0 - payload.metallic);
-                float3 diffuseFill  = kDFill * payload.albedo / PI;
-                float3 specularFill = (Dfill * FsFill * Gfill) / max(4.0 * NdotVFill * NdotFill, 0.0001);
-                radiance += throughput * (diffuseFill + specularFill) * NdotFill * gameplayFillRadiance(ubo.gameplayVisuals);
-            }
-
-            // Hemispherical ambient term for low-SPP readability stability.
-            float3 sunDir3     = normalize(-ubo.lightDir.xyz);
-            float3 skyColor    = evalSkyColor(float3(0.0, 1.0, 0.0), sunDir3);
-            float3 groundColor = evalGroundColor(sunDir3);
-            float3 ambientL    = lerp(groundColor, skyColor, N2.y * 0.5 + 0.5) * gameplayAmbientBoost(ubo.gameplayVisuals);
-            float3 kS_amb      = fresnelSchlickRoughness(max(dot(N2, V2), 0.0), payload.F0, payload.roughness);
-            float3 kD_amb      = (1.0 - kS_amb) * (1.0 - payload.metallic);
-            float3 ambientContribution = (kD_amb * payload.albedo * ambientL + kS_amb * ambientL * (1.0 - payload.roughness * 0.5)) * payload.ao;
-            radiance += throughput * ambientContribution;
-        }
 
         // Primary-ray G-Buffer write (bounce 0 only).
         if (bounce == 0) {
@@ -207,7 +179,7 @@ void main() {
             if (max(dot(N, newDir), 0.0) <= 0.0) break;
 
             float3 kD  = (float3(1.0, 1.0, 1.0) - F) * (1.0 - payload.metallic);
-            bsdfWeight = kD * payload.albedo * payload.ao;
+            bsdfWeight = kD * payload.albedo;
             pdf        = 1.0 - specProb;
         }
 

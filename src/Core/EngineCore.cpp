@@ -1036,7 +1036,7 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
         .isLastPass = 0,
         .phiColor = historyAlpha,
         .phiNormal = 128.0f,
-        .exposureScale = ui.visualsV1.exposure};
+        .exposureScale = ui.exposure};
     commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
                                                       vk::ShaderStageFlagBits::eCompute, 0, reproPush);
     if (*ptTimestampQueryPool) {
@@ -1073,7 +1073,7 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
             .isLastPass = isLastPass,
             .phiColor = 1.0f,
             .phiNormal = 128.0f,
-            .exposureScale = ui.visualsV1.exposure};
+            .exposureScale = ui.exposure};
         commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
                                                           vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
         commandBuffer.dispatch(gx, gy, 1);
@@ -1759,7 +1759,7 @@ void EngineCore::drawFrame() {
         }
     }
 
-    frames.updateUniformBuffer(frames.frameIndex, camera, swapchain.extent, ui.lightDirection, ui.visualsV1);
+    frames.updateUniformBuffer(frames.frameIndex, camera, swapchain.extent, ui.lightDirection, ui.exposure);
 
     // Detect camera movement for path tracer history reset.
     // Any translation or rotation invalidates the reprojected history.

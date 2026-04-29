@@ -3,16 +3,8 @@
 
 static const float PI          = 3.14159265359;
 static const float MIN_ROUGHNESS = 0.04;
-// V1.1 readability tuning defaults shared across raster / RT / PT paths.
-static const float3 GAMEPLAY_SUN_RADIANCE  = float3(1.0, 0.98, 0.95) * 2.80;
-static const float3 GAMEPLAY_FILL_RADIANCE = float3(0.62, 0.60, 0.56) * 0.36;
-static const float3 GAMEPLAY_FILL_DIR      = float3(-0.20, 0.65, -0.35);
-static const float  GAMEPLAY_AMBIENT_BOOST = 1.02;
-static const float  GAMEPLAY_EXPOSURE      = 1.02;
-static const float  GAMEPLAY_SHADOW_FLOOR  = 0.18;
-static const float  GAMEPLAY_MIN_AO        = 0.30;
-static const float  GAMEPLAY_MIN_ALBEDO    = 0.05;
-static const float  GAMEPLAY_MAX_ROUGHNESS = 0.95;
+// Physically based baseline: single directional sun radiance shared by all renderers.
+static const float3 SUN_RADIANCE = float3(1.0, 0.98, 0.95) * 2.80;
 
 // ============================================================================
 // NOTE: RayPayload is defined per-pipeline in each shader set:
@@ -40,7 +32,8 @@ struct UniformBuffer {
     float    jitter_x;       // Sub-pixel x jitter in NDC (zero when disabled)
     float    jitter_y;       // Sub-pixel y jitter in NDC
     uint     _pad0;
-    float4   gameplayVisuals; // x=sun, y=fill, z=ambient, w=exposure multipliers
+    float    exposure;       // global tone-mapping exposure scalar
+    float3   _padExposure;
 };
 
 // ============================================================================
@@ -179,13 +172,6 @@ float3 evalGroundColor(float3 sunDir) {
     return lerp(lerp(nightGround, sunsetGround, sunsetFactor), dayGround, dayFactor);
 }
 
-void calibrateGameplayMaterial(inout float3 baseColor, inout float roughness, inout float ao) {
-    // Keep graybox and player materials in a readability-friendly range.
-    baseColor = max(baseColor, float3(GAMEPLAY_MIN_ALBEDO, GAMEPLAY_MIN_ALBEDO, GAMEPLAY_MIN_ALBEDO));
-    roughness = clamp(roughness, MIN_ROUGHNESS, GAMEPLAY_MAX_ROUGHNESS);
-    ao = max(saturate(ao), GAMEPLAY_MIN_AO);
-}
-
 float3 acesTonemap(float3 x) {
     float a = 2.51;
     float b = 0.03;
@@ -195,28 +181,12 @@ float3 acesTonemap(float3 x) {
     return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
 }
 
-float3 gameplaySunRadiance(float4 gameplayVisuals) {
-    return GAMEPLAY_SUN_RADIANCE * max(gameplayVisuals.x, 0.0);
+float3 applyAcesTonemap(float3 hdr, float exposureScale) {
+    return acesTonemap(max(hdr, float3(0.0, 0.0, 0.0)) * max(exposureScale, 0.0));
 }
 
-float3 gameplayFillRadiance(float4 gameplayVisuals) {
-    return GAMEPLAY_FILL_RADIANCE * max(gameplayVisuals.y, 0.0);
-}
-
-float gameplayAmbientBoost(float4 gameplayVisuals) {
-    return GAMEPLAY_AMBIENT_BOOST * max(gameplayVisuals.z, 0.0);
-}
-
-float gameplayExposure(float4 gameplayVisuals) {
-    return GAMEPLAY_EXPOSURE * max(gameplayVisuals.w, 0.0);
-}
-
-float3 applyReadabilityTonemap(float3 hdr, float exposureScale) {
-    return acesTonemap(max(hdr, float3(0.0, 0.0, 0.0)) * GAMEPLAY_EXPOSURE * max(exposureScale, 0.0));
-}
-
-float3 applyReadabilityTonemap(float3 hdr) {
-    return applyReadabilityTonemap(hdr, 1.0);
+float3 applyAcesTonemap(float3 hdr) {
+    return applyAcesTonemap(hdr, 1.0);
 }
 
 // 3x3 matrix inverse via cofactor expansion (SPIRV has no built-in inverse).
