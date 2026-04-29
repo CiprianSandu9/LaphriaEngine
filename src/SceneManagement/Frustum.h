@@ -16,11 +16,13 @@ struct Frustum
 {
 	std::array<glm::vec4, 6> planes{};
 
-	[[nodiscard]] bool containsPoint(const glm::vec3 &point) const
+	[[nodiscard]] bool containsPoint(const glm::vec3 &point, float margin = 0.0f) const
 	{
 		for (const glm::vec4 &plane : planes)
 		{
-			if (glm::dot(glm::vec3(plane), point) + plane.w < 0.0f)
+			// Positive margin makes this test conservative, reducing close-range popping
+			// when object origins are just outside a frustum plane.
+			if (glm::dot(glm::vec3(plane), point) + plane.w < -margin)
 			{
 				return false;
 			}

@@ -573,7 +573,10 @@ void Scene::draw(const vk::raii::CommandBuffer &cmd, const vk::raii::PipelineLay
 
 	for (const auto &node : visibleNodes)
 	{
-		if (!frustum.containsPoint(node->getWorldPosition()))
+		// Keep frustum culling slightly conservative in raster mode so model origins
+		// near/behind the near plane do not pop entire meshes out.
+		constexpr float kFrustumCullMargin = 2.0f;
+		if (!frustum.containsPoint(node->getWorldPosition(), kFrustumCullMargin))
 		{
 			continue;
 		}

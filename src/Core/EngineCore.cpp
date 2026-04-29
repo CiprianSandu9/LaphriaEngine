@@ -1647,7 +1647,12 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
         const glm::mat4 invViewProjection = glm::inverse(viewProjection);
 
         const Laphria::Frustum frustum = Laphria::Frustum::fromViewProjection(viewProjection);
-        const Laphria::AABB cullBounds = Laphria::Frustum::computeAABB(invViewProjection);
+        Laphria::AABB cullBounds = Laphria::Frustum::computeAABB(invViewProjection);
+        // Expand query bounds so close-up objects whose origins are just outside
+        // the near plane are still submitted in raster mode.
+        constexpr float kRasterCullMargin = 2.0f;
+        cullBounds.min -= glm::vec3(kRasterCullMargin);
+        cullBounds.max += glm::vec3(kRasterCullMargin);
         scene->draw(commandBuffer, pipelines.graphicsPipelineLayout, *resourceManager, cullBounds, frustum);
     }
 

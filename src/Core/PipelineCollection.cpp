@@ -398,7 +398,9 @@ void PipelineCollection::createGraphicsPipeline(VulkanDevice &dev, vk::Format co
 	    .viewportCount = 1,
 	    .scissorCount  = 1};
 	vk::PipelineRasterizationStateCreateInfo rasterizer{
-	    .depthClampEnable        = vk::False,
+	    // Disable near/far depth clipping in the main raster path to avoid
+	    // close-range geometry slicing when the camera gets very close.
+	    .depthClampEnable        = vk::True,
 	    .rasterizerDiscardEnable = vk::False,
 	    .cullMode                = vk::CullModeFlagBits::eBack,
 	    .frontFace               = vk::FrontFace::eCounterClockwise,
