@@ -1067,6 +1067,12 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         pathTracerSettings.resolutionScale = std::clamp(pathTracerSettings.resolutionScale, 0.5f, 1.0f);
         pathTracerSettings.denoiserIterations = std::clamp(pathTracerSettings.denoiserIterations, 1, 5);
         pathTracerSettings.targetFrameMs = std::clamp(pathTracerSettings.targetFrameMs, 8.0f, 40.0f);
+        pathTracerSettings.motionAlphaMin = std::clamp(pathTracerSettings.motionAlphaMin, 0.05f, 0.40f);
+        pathTracerSettings.motionAlphaMax = std::clamp(pathTracerSettings.motionAlphaMax, 0.20f, 1.00f);
+        pathTracerSettings.historyResetMotionThreshold = std::clamp(pathTracerSettings.historyResetMotionThreshold, 0.25f, 10.0f);
+        if (pathTracerSettings.motionAlphaMax < pathTracerSettings.motionAlphaMin) {
+            pathTracerSettings.motionAlphaMax = pathTracerSettings.motionAlphaMin;
+        }
 
         ImGui::SliderFloat("Resolution Scale", &pathTracerSettings.resolutionScale, 0.5f, 1.0f, "%.2f");
         ImGui::SliderInt("Denoiser Iterations", &pathTracerSettings.denoiserIterations, 1, 5);
@@ -1082,6 +1088,10 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         ImGui::Text("Debug Toggles:");
         ImGui::Checkbox("Enable Reprojection", &pathTracerSettings.enableReprojection);
         ImGui::Checkbox("Enable Denoiser", &pathTracerSettings.enableDenoiser);
+        ImGui::Checkbox("Enable Motion-Aware Accumulation", &pathTracerSettings.enableMotionAwareAccumulation);
+        ImGui::SliderFloat("Motion Alpha Min", &pathTracerSettings.motionAlphaMin, 0.05f, 0.40f, "%.2f");
+        ImGui::SliderFloat("Motion Alpha Max", &pathTracerSettings.motionAlphaMax, 0.20f, 1.00f, "%.2f");
+        ImGui::SliderFloat("History Reset Motion Threshold", &pathTracerSettings.historyResetMotionThreshold, 0.25f, 10.0f, "%.2f");
 
         ImGui::Separator();
         ImGui::Text("PT Timings (GPU):");
@@ -1090,6 +1100,7 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         ImGui::Text("Reprojection: %.3f ms", pathTracerPerfStats.reprojectionMs);
         ImGui::Text("Denoiser: %.3f ms", pathTracerPerfStats.denoiserMs);
         ImGui::Text("Total: %.3f ms", pathTracerPerfStats.totalFrameMs);
+        ImGui::Text("Camera Motion Factor: %.3f", pathTracerPerfStats.cameraMotionFactor);
     }
 
     ImGui::Separator();

@@ -68,11 +68,13 @@ class EngineCore
 	std::unique_ptr<ResourceManager> resourceManager;
 	std::unique_ptr<PhysicsSystem>   physicsSystem;
 
-	// Path tracer camera movement detection (history reset on camera change)
+	// Path tracer camera motion tracking (for motion-aware accumulation and reset events).
 	glm::vec3 ptPrevCameraPos{0.f};
 	float     ptPrevPitch{0.f};
 	float     ptPrevYaw{0.f};
 	bool      ptCameraMoved{false};
+	float     ptSmoothedMotion{0.0f};
+	bool      ptForceHistoryReset{true};
 	RenderMode lastSubmittedRenderMode{RenderMode::Rasterizer};
 	bool       renderModeInitialized{false};
 	std::chrono::high_resolution_clock::time_point lastFrameTime{};
@@ -133,4 +135,3 @@ class EngineCore
 };
 
 #endif        // LAPHRIAENGINE_ENGINECORE_H
-

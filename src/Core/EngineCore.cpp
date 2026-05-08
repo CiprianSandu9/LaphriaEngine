@@ -377,6 +377,7 @@ void EngineCore::recreateSwapChain() {
     createComputeDescriptorSets();
     createRayTracingDescriptorSets();
     createDenoiserDescriptorSets();
+    ptForceHistoryReset = true;
 }
 
 void EngineCore::createPhysicsDescriptorSets() {
@@ -1039,7 +1040,23 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
         commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
                                          *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
 
-        float historyAlpha = ptCameraMoved ? 1.0f : 0.1f;
+        constexpr float kStaticAlpha = 0.08f;
+        float historyAlpha = kStaticAlpha;
+        if (ui.pathTracerSettings.enableMotionAwareAccumulation) {
+            const float motionAlphaMin = std::clamp(ui.pathTracerSettings.motionAlphaMin, 0.05f, 0.40f);
+            const float motionAlphaMax = std::clamp(ui.pathTracerSettings.motionAlphaMax, 0.20f, 1.00f);
+            const float minAlpha = std::min(motionAlphaMin, motionAlphaMax);
+            const float maxAlpha = std::max(motionAlphaMin, motionAlphaMax);
+
+            if (ptForceHistoryReset) {
+                historyAlpha = 1.0f;
+            } else if (ptCameraMoved) {
+                historyAlpha = glm::mix(minAlpha, maxAlpha, std::clamp(ptSmoothedMotion, 0.0f, 1.0f));
+            }
+        } else {
+            historyAlpha = ptCameraMoved ? 1.0f : 0.1f;
+        }
+
         DenoisePushConstants reproPush{
             .stepSize = 0,
             .isLastPass = 0,
@@ -1072,7 +1089,11 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
                                      *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
 
-    const int atrousIterations = ui.pathTracerSettings.enableDenoiser ? std::clamp(ui.pathTracerSettings.denoiserIterations, 1, 5) : 0;
+    int atrousIterations = ui.pathTracerSettings.enableDenoiser ? std::clamp(ui.pathTracerSettings.denoiserIterations, 1, 5) : 0;
+    if (ui.pathTracerSettings.enableMotionAwareAccumulation && atrousIterations > 0 &&
+        std::clamp(ptSmoothedMotion, 0.0f, 1.0f) > 0.35f) {
+        atrousIterations = std::min(5, atrousIterations + 1);
+    }
     const int useRawInput = ui.pathTracerSettings.enableReprojection ? 0 : 1;
     
     if (*ptTimestampQueryPool) {
@@ -1743,7 +1764,7 @@ void EngineCore::drawFrame() {
         // Renderer switches can otherwise overlap in-flight GPU work that uses different
         // pipeline/resource access patterns (especially PT denoiser scratch buffers).
         vulkan.logicalDevice.waitIdle();
-        ptCameraMoved = true; // force history reset on the first PT frame after a mode switch
+        ptForceHistoryReset = true;
         lastSubmittedRenderMode = ui.renderMode;
     }
 
@@ -1796,11 +1817,27 @@ void EngineCore::drawFrame() {
 
     frames.updateUniformBuffer(frames.frameIndex, camera, swapchain.extent, ui.lightDirection, ui.exposure, ui.textureColorSpaceModel);
 
-    // Detect camera movement for path tracer history reset.
-    // Any translation or rotation invalidates the reprojected history.
-    ptCameraMoved = (glm::distance(camera.position, ptPrevCameraPos) > 1e-5f ||
-                     std::abs(camera.pitch - ptPrevPitch) > 1e-5f ||
-                     std::abs(camera.yaw - ptPrevYaw) > 1e-5f);
+    // Camera motion metric for motion-aware temporal blending.
+    const float translationDelta = glm::distance(camera.position, ptPrevCameraPos);
+    const float pitchDelta = std::abs(camera.pitch - ptPrevPitch);
+    const float yawDelta = std::abs(camera.yaw - ptPrevYaw);
+    const float angularDelta = std::max(pitchDelta, yawDelta);
+
+    constexpr float kTranslationForFullMotion = 0.05f;
+    constexpr float kRotationForFullMotion = glm::radians(1.5f);
+    const float normalizedTranslation = translationDelta / kTranslationForFullMotion;
+    const float normalizedRotation = angularDelta / kRotationForFullMotion;
+    const float rawMotion = std::max(normalizedTranslation, normalizedRotation);
+    const float rawMotion01 = std::clamp(rawMotion, 0.0f, 1.0f);
+    ptSmoothedMotion = glm::mix(ptSmoothedMotion, rawMotion01, 0.2f);
+    ptCameraMoved = rawMotion01 > 1e-4f;
+
+    // Keep hard history reset only for large jumps/teleports and explicit reset events.
+    const bool largeJump = (translationDelta > std::max(0.25f, ui.pathTracerSettings.historyResetMotionThreshold)) ||
+                           (angularDelta > glm::radians(75.0f));
+    ptForceHistoryReset = ptForceHistoryReset || largeJump;
+    ui.pathTracerPerfStats.cameraMotionFactor = std::clamp(ptSmoothedMotion, 0.0f, 1.0f);
+
     ptPrevCameraPos = camera.position;
     ptPrevPitch = camera.pitch;
     ptPrevYaw = camera.yaw;
@@ -1814,6 +1851,9 @@ void EngineCore::drawFrame() {
 
     // 2. Main Pass
     recordCommandBuffer(imageIndex);
+    if (ui.renderMode == RenderMode::PathTracer) {
+        ptForceHistoryReset = false;
+    }
     submittedRenderModes[frames.frameIndex] = ui.renderMode;
     ptTimestampsValid[frames.frameIndex] = (ui.renderMode == RenderMode::PathTracer);
 

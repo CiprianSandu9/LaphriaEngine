@@ -32,6 +32,10 @@ public:
         float                 targetFrameMs = 16.6f;
         bool                  enableReprojection = true;
         bool                  enableDenoiser = true;
+        bool                  enableMotionAwareAccumulation = true;
+        float                 motionAlphaMin = 0.14f;
+        float                 motionAlphaMax = 0.55f;
+        float                 historyResetMotionThreshold = 1.5f;
     };
 
     struct PathTracerPerfStats
@@ -41,6 +45,7 @@ public:
         float reprojectionMs = 0.0f;
         float denoiserMs = 0.0f;
         float totalFrameMs = 0.0f;
+        float cameraMotionFactor = 0.0f;
     };
 
     // Call after the swapchain has been created (needs colorFormat / depthFormat).

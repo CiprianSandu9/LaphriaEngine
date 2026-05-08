@@ -75,9 +75,28 @@ void reprojectionMain(uint3 dispatchID : SV_DispatchThreadID)
 
         if (normalDot > 0.9 && depthRelErr < 0.1 && currentDepth > 0.0 && prevDepth > 0.0) {
             histColor = historyColorIn[prevPixel].rgb;
+            // Conservative neighborhood clamp on reprojected history to limit ghost trails.
+            float minLum = 1e20;
+            float maxLum = -1e20;
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    int2 samplePixel = clamp(int2(pixel) + int2(dx, dy), int2(0, 0), int2(dims) - int2(1, 1));
+                    float sampleLum = luminance(noisyColor[samplePixel].rgb);
+                    minLum = min(minLum, sampleLum);
+                    maxLum = max(maxLum, sampleLum);
+                }
+            }
+
+            float histLum = luminance(histColor);
+            float centerLum = 0.5 * (minLum + maxLum);
+            float halfRange = max(0.5 * (maxLum - minLum) * 1.1, 0.0001);
+            float clampedHistLum = clamp(histLum, centerLum - halfRange, centerLum + halfRange);
+            if (histLum > 0.0001) {
+                histColor *= clampedHistLum / histLum;
+            }
+
             // push.phiColor carries historyAlpha from C++:
-            //   0.1 when camera is static  → blend 10% current / 90% history for fast convergence
-            //   1.0 when camera moved      → discard history entirely to prevent ghosting bands
+            // lower alpha = stronger history reuse, higher alpha = more current-frame trust.
             alpha = push.phiColor;
         }
     }
