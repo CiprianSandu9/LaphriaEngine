@@ -13,6 +13,8 @@
 // bindings 9, 10 unused in this shader
 [[vk::binding(11, 0)]] RWTexture2D<float4> prevGBufferNormals;   // previous-frame G-Buffer normals
 [[vk::binding(12, 0)]] RWTexture2D<float>  prevGBufferDepth;     // previous-frame G-Buffer depth
+[[vk::binding(13, 0)]] RWTexture2D<float4> analysisReprojectionDebug; // R=valid, G=alpha, B=motion magnitude
+[[vk::binding(14, 0)]] RWByteAddressBuffer ptAnalysisCounters;
 
 // Push constants (shared layout with A-Trous; stepSize == 0 identifies this pass)
 struct DenoisePushConstants {
@@ -22,6 +24,8 @@ struct DenoisePushConstants {
     float phiNormal;
     float exposureScale;
     int   useRawInput;
+    int   debugAov;
+    int   debugAtrousIteration;
 };
 [[vk::push_constant]] DenoisePushConstants push;
 
@@ -39,6 +43,7 @@ void reprojectionMain(uint3 dispatchID : SV_DispatchThreadID)
     float3 currentColor  = noisyColor[pixel].rgb;
     float3 currentNormal = gBufferNormals[pixel].xyz;
     float  currentDepth  = gBufferDepth[pixel];
+    ptAnalysisCounters.InterlockedAdd(0, 1u); // pixel count
 
     // ── Firefly suppression: clamp outlier luminance before temporal blend ───
     float currentLum = luminance(currentColor);
@@ -48,7 +53,10 @@ void reprojectionMain(uint3 dispatchID : SV_DispatchThreadID)
     float  sigma          = sqrt(prevVar);
     float  clampMax       = prevMean + 4.0 * sigma;
     if (prevVar > 0.001 && currentLum > clampMax)
+    {
         currentColor *= clampMax / max(currentLum, 0.0001);
+        ptAnalysisCounters.InterlockedAdd(12, 1u); // firefly clamp hits
+    }
 
     // ── Temporal reprojection ────────────────────────────────────────────────
     // mv = currentCenterUV - prevCenterUV, where centerUV = (pixel + 0.5) / dims.
@@ -98,7 +106,12 @@ void reprojectionMain(uint3 dispatchID : SV_DispatchThreadID)
             // push.phiColor carries historyAlpha from C++:
             // lower alpha = stronger history reuse, higher alpha = more current-frame trust.
             alpha = push.phiColor;
+            ptAnalysisCounters.InterlockedAdd(4, 1u); // history accepted
+        } else {
+            ptAnalysisCounters.InterlockedAdd(8, 1u); // history rejected
         }
+    } else {
+        ptAnalysisCounters.InterlockedAdd(8, 1u); // history rejected
     }
 
     float3 blended = lerp(histColor, currentColor, alpha);
@@ -113,4 +126,5 @@ void reprojectionMain(uint3 dispatchID : SV_DispatchThreadID)
     atrousTempA[pixel]        = float4(blended, 1.0);   // A-Trous input for first iteration
     historyColorOut[pixel]    = float4(blended, 1.0);   // history for next frame
     historyMomentsOut[pixel]  = float2(newMean, newMean2);
+    analysisReprojectionDebug[pixel] = float4(valid ? 1.0 : 0.0, alpha, length(mv), 1.0);
 }

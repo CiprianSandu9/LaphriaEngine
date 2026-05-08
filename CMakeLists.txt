@@ -92,6 +92,8 @@ set(LAPHRIA_ENGINE_SOURCES
         src/Core/GpuResourceRegistry.h
         src/Core/InputSystem.cpp
         src/Core/InputSystem.h
+        src/Core/PathTracerAnalysis.cpp
+        src/Core/PathTracerAnalysis.h
         src/Core/PipelineCollection.cpp
         src/Core/PipelineCollection.h
         src/Core/ResourceManager.cpp
@@ -221,6 +223,8 @@ set_tests_properties(LaphriaValidationSceneInvalid PROPERTIES WILL_FAIL TRUE)
 
 add_executable(LaphriaEngineUnitTests
         tests/EngineUnitTestsMain.cpp
+        tests/PathTracerAnalysisTests.cpp
+        src/Core/PathTracerAnalysis.cpp
         src/SceneManagement/SceneNode.cpp
         src/Physics/Broadphase.cpp
 )

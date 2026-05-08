@@ -22,6 +22,7 @@ struct RayPayload {
 [[vk::binding(2, 0)]] RWTexture2D<float4> gBufferNormals;     // world-space normal (xyz), w unused
 [[vk::binding(3, 0)]] RWTexture2D<float>  gBufferDepth;       // linear ray hit distance (negative = sky)
 [[vk::binding(4, 0)]] RWTexture2D<float2> motionVectors;      // screen-space UV offset current→previous
+[[vk::binding(9, 0)]] RWByteAddressBuffer ptAnalysisCounters;
 
 // Set 1 — global UBO
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
@@ -53,7 +54,10 @@ void main() {
     ray.TMin      = 0.001;
     ray.TMax      = 10000.0;
 
-    static const int MAX_BOUNCES = 3;
+    // Keep a higher hard cap for enclosed/interior transport; Russian roulette below
+    // keeps the average path length bounded for performance.
+    static const int MAX_BOUNCES = 8;
+    static const int RR_START_BOUNCE = 2;
 
     for (int bounce = 0; bounce < MAX_BOUNCES; ++bounce)
     {
@@ -68,6 +72,7 @@ void main() {
             // Write sentinel G-Buffer values so sky pixels don't leave stale/garbage data
             // that would confuse the denoiser's edge-stopping functions.
             if (bounce == 0) {
+                ptAnalysisCounters.InterlockedAdd(16, 1u); // primary sky-hit count
                 gBufferNormals[launchID] = float4(0.0, 0.0, 0.0, 0.0);
                 gBufferDepth[launchID]   = -1.0;
                 motionVectors[launchID]  = float2(0.0, 0.0);
@@ -106,7 +111,7 @@ void main() {
             shadowRay.TMin      = 0.001;
             shadowRay.TMax      = 10000.0;
             TraceRay(tlas,
-                RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+                RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
                 0xFF, 0, 0, 0, shadowRay, shadowPayload);
 
             // Binary hard-shadow visibility for the direct sun sample.
@@ -185,10 +190,11 @@ void main() {
 
         throughput *= bsdfWeight / max(pdf, 0.0001);
 
-        // Russian roulette: stochastic early termination after first bounce.
-        if (bounce >= 1) {
+        // Russian roulette: allow a few guaranteed bounces so enclosed spaces can collect
+        // indirect light, then terminate stochastically based on path throughput.
+        if (bounce >= RR_START_BOUNCE) {
             float maxT  = max(throughput.r, max(throughput.g, throughput.b));
-            float rrProb = clamp(maxT, 0.01, 0.95); // clamp away from 0 to prevent 0/0 NaN
+            float rrProb = clamp(maxT, 0.05, 0.98); // clamp away from 0 to prevent 0/0 NaN
             if (randomFloat(rngState) > rrProb) break;
             throughput /= rrProb;
         }

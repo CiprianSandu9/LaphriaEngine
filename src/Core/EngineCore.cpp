@@ -6,7 +6,10 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cstring>
 #include <cstdio>
+#include <fstream>
+#include <filesystem>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
@@ -21,6 +24,7 @@
 #include "../SceneManagement/Scene.h"
 #include "EngineAuxiliary.h"
 #include "EngineConfig.h"
+#include "PathTracerAnalysis.h"
 #include "ResourceManager.h"
 
 using namespace Laphria;
@@ -29,6 +33,38 @@ namespace
 {
 constexpr uint32_t kPtTimestampQueryCountPerFrame = 8;
 constexpr double kWindowTitleUpdateIntervalSeconds = 0.5;
+constexpr const char *kPtBenchmarkCsvFileName = "path_tracer_benchmark_results.csv";
+constexpr const char *kPtBacklogCsvFileName = "path_tracer_backlog.csv";
+
+std::filesystem::path resolveProjectRootPath()
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path current = fs::current_path(ec);
+    if (ec) {
+        return fs::path(".");
+    }
+
+    for (int i = 0; i < 8; ++i) {
+        if (fs::exists(current / "CMakeLists.txt", ec) && !ec) {
+            return current;
+        }
+        if (!current.has_parent_path()) {
+            break;
+        }
+        current = current.parent_path();
+    }
+    return fs::current_path();
+}
+
+std::filesystem::path resolveAnalysisOutputPath(const char *fileName)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path outputDir = resolveProjectRootPath() / "build";
+    fs::create_directories(outputDir, ec);
+    return outputDir / fileName;
+}
 enum PtTimestampSlot : uint32_t
 {
     kPtTS_TlasStart = 0,
@@ -230,6 +266,9 @@ void EngineCore::mainLoop() {
         updatePerformanceWindowTitle(deltaTime);
 
         glfwPollEvents();
+        loadPathTracerBenchmarkSceneIfNeeded();
+        updatePathTracerBenchmark(deltaTime);
+        updatePathTracerPhysicalSanityChecks(deltaTime);
         camera.update(deltaTime);
 
         std::optional<EngineServices> services;
@@ -519,6 +558,14 @@ void EngineCore::createRayTracingDescriptorSets() {
         vk::WriteDescriptorSet mvWrite{
             .dstSet = *rtDescriptorSets[i], .dstBinding = 4, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &mvInfo
         };
+        vk::DescriptorBufferInfo analysisCounterInfo{
+            .buffer = *frames.ptAnalysisCounterBuffers[i],
+            .offset = 0,
+            .range = sizeof(Laphria::PathTracerAnalysisCounters)
+        };
+        vk::WriteDescriptorSet analysisCounterWrite{
+            .dstSet = *rtDescriptorSets[i], .dstBinding = 9, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &analysisCounterInfo
+        };
 
         std::vector<vk::WriteDescriptorSet> descriptorWrites;
         descriptorWrites.push_back(tlasWrite);
@@ -526,6 +573,7 @@ void EngineCore::createRayTracingDescriptorSets() {
         descriptorWrites.push_back(normalsWrite);
         descriptorWrites.push_back(depthWrite);
         descriptorWrites.push_back(mvWrite);
+        descriptorWrites.push_back(analysisCounterWrite);
 
         // Now we extract ALL global vertices, indices, materials, and textures
         // across all Scene Nodes that have been uploaded into VRAM by ResourceManager
@@ -611,7 +659,7 @@ void EngineCore::createRayTracingDescriptorSets() {
 }
 
 void EngineCore::createDenoiserDescriptorSets() {
-    // One set per frame in flight. All 13 bindings are storage images.
+    // One set per frame in flight. Bindings include storage images + one storage buffer.
     // Free old sets before replacing the pool; each RAII DescriptorSet stores its parent pool handle.
     denoiserDescriptorSets.clear();
     if (*denoiserDescriptorPool) {
@@ -619,7 +667,8 @@ void EngineCore::createDenoiserDescriptorSets() {
     }
 
     std::vector<vk::DescriptorPoolSize> poolSizes = {
-        {vk::DescriptorType::eStorageImage, 13 * MAX_FRAMES_IN_FLIGHT}
+        {vk::DescriptorType::eStorageImage, 14 * MAX_FRAMES_IN_FLIGHT},
+        {vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT}
     };
     vk::DescriptorPoolCreateInfo poolInfo{
         .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
@@ -641,8 +690,8 @@ void EngineCore::createDenoiserDescriptorSets() {
         size_t prevSlot = (i - 1 + MAX_FRAMES_IN_FLIGHT) % MAX_FRAMES_IN_FLIGHT;
         const size_t atrousBase = i * 2;
 
-        // Build the 13 image info structs in binding order.
-        vk::DescriptorImageInfo infos[13] = {
+        // Build image infos in binding order.
+        vk::DescriptorImageInfo infos[14] = {
             {.imageView = *frames.rayTracingOutputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 0: noisy colour
             {.imageView = *frames.rtGBufferNormalsViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 1: current normals
             {.imageView = *frames.rtGBufferDepthViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 2: current depth
@@ -656,11 +705,18 @@ void EngineCore::createDenoiserDescriptorSets() {
             {.imageView = *frames.rayTracingOutputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 10: final denoised output (reuses slot 0 image)
             {.imageView = *frames.rtGBufferNormalsViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral}, // 11: previous-frame normals
             {.imageView = *frames.rtGBufferDepthViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral}, // 12: previous-frame depth
+            {.imageView = *frames.ptReprojectionDebugViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 13: reprojection debug channels
+        };
+
+        vk::DescriptorBufferInfo analysisCounterInfo{
+            .buffer = *frames.ptAnalysisCounterBuffers[i],
+            .offset = 0,
+            .range = sizeof(Laphria::PathTracerAnalysisCounters)
         };
 
         std::vector<vk::WriteDescriptorSet> writes;
-        writes.reserve(13);
-        for (uint32_t b = 0; b < 13; ++b) {
+        writes.reserve(15);
+        for (uint32_t b = 0; b < 14; ++b) {
             writes.push_back(vk::WriteDescriptorSet{
                 .dstSet = *denoiserDescriptorSets[i],
                 .dstBinding = b,
@@ -670,6 +726,14 @@ void EngineCore::createDenoiserDescriptorSets() {
                 .pImageInfo = &infos[b]
             });
         }
+        writes.push_back(vk::WriteDescriptorSet{
+            .dstSet = *denoiserDescriptorSets[i],
+            .dstBinding = 14,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .pBufferInfo = &analysisCounterInfo
+        });
         vulkan.logicalDevice.updateDescriptorSets(writes, {});
     }
 }
@@ -985,6 +1049,12 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     const uint32_t rtHeight = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.height) * effectiveScale));
     const uint32_t gx = (rtWidth + 15) / 16;
     const uint32_t gy = (rtHeight + 15) / 16;
+    const bool analysisEnabled = ui.pathTracerAnalysisSettings.enableAnalysisMode;
+    const int debugAov = analysisEnabled ? static_cast<int>(ui.pathTracerAnalysisSettings.debugAov) : 0;
+    const int debugAtrousIteration = analysisEnabled ? std::clamp(ui.pathTracerAnalysisSettings.debugAtrousIteration, 0, 4) : 0;
+    if (fi < frames.ptAnalysisCounterMapped.size() && frames.ptAnalysisCounterMapped[fi]) {
+        std::memset(frames.ptAnalysisCounterMapped[fi], 0, sizeof(Laphria::PathTracerAnalysisCounters));
+    }
 
     // 1. Transition all PT images to general layout for writing.
     auto transitionToGeneral = [&](vk::Image img) {
@@ -999,6 +1069,7 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     transitionToGeneral(*frames.rtMotionVectors[fi]);
     transitionToGeneral(*frames.atrousTemp[atrousA]);
     transitionToGeneral(*frames.atrousTemp[atrousB]);
+    transitionToGeneral(*frames.ptReprojectionDebug[fi]);
 
     // 2. Ray tracing dispatch.
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.rayTracingPipeline);
@@ -1063,7 +1134,9 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
             .phiColor = historyAlpha,
             .phiNormal = 128.0f,
             .exposureScale = ui.exposure,
-            .useRawInput = 0};
+            .useRawInput = 0,
+            .debugAov = debugAov,
+            .debugAtrousIteration = debugAtrousIteration};
         commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
                                                           vk::ShaderStageFlagBits::eCompute, 0, reproPush);
         if (*ptTimestampQueryPool) {
@@ -1083,6 +1156,7 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     };
     barrierCompute(*frames.atrousTemp[atrousA]);
     barrierCompute(*frames.historyMoments[fi]);
+    barrierCompute(*frames.ptReprojectionDebug[fi]);
 
     // 5. A-Trous denoiser.
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.atrousPipeline);
@@ -1093,6 +1167,11 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     if (ui.pathTracerSettings.enableMotionAwareAccumulation && atrousIterations > 0 &&
         std::clamp(ptSmoothedMotion, 0.0f, 1.0f) > 0.35f) {
         atrousIterations = std::min(5, atrousIterations + 1);
+    }
+    if (analysisEnabled &&
+        ui.pathTracerAnalysisSettings.debugAov == UISystem::PathTracerDebugAov::AtrousIteration &&
+        atrousIterations > 0) {
+        atrousIterations = std::clamp(debugAtrousIteration + 1, 1, atrousIterations);
     }
     const int useRawInput = ui.pathTracerSettings.enableReprojection ? 0 : 1;
     
@@ -1108,7 +1187,9 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
             .phiColor = 1.0f,
             .phiNormal = 128.0f,
             .exposureScale = ui.exposure,
-            .useRawInput = useRawInput};
+            .useRawInput = useRawInput,
+            .debugAov = debugAov,
+            .debugAtrousIteration = debugAtrousIteration};
         commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
                                                           vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
         commandBuffer.dispatch(gx, gy, 1);
@@ -1122,7 +1203,9 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
                 .phiColor = 1.0f,
                 .phiNormal = 128.0f,
                 .exposureScale = ui.exposure,
-                .useRawInput = useRawInput};
+                .useRawInput = useRawInput,
+                .debugAov = debugAov,
+                .debugAtrousIteration = debugAtrousIteration};
             commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
                                                               vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
             commandBuffer.dispatch(gx, gy, 1);
@@ -1184,8 +1267,8 @@ void EngineCore::createDescriptorPool() {
         vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, 5 * poolScale},
         vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, poolScale},
         vk::DescriptorPoolSize{vk::DescriptorType::eSampler, poolScale},
-        // 1000 for materials + vertex and index buffers * MAX_FRAMES
-        vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 15 * poolScale},
+        // 1000 for materials + vertex/index arrays + PT analysis counter buffers.
+        vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 16 * poolScale},
         vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, poolScale},
         vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT}
     };
@@ -1319,9 +1402,502 @@ void EngineCore::collectPathTracerTimings(uint32_t frameSlot) {
     const uint64_t totalStart = (timestamps[kPtTS_TlasStart] != 0) ? timestamps[kPtTS_TlasStart] : timestamps[kPtTS_RayTraceStart];
     const uint64_t totalEnd = (timestamps[kPtTS_DenoiserEnd] != 0) ? timestamps[kPtTS_DenoiserEnd] : timestamps[kPtTS_RayTraceEnd];
     ui.pathTracerPerfStats.totalFrameMs = toMs(totalStart, totalEnd);
+
+    constexpr size_t kRollingWindow = 300;
+    ptRollingTotalMs.push_back(ui.pathTracerPerfStats.totalFrameMs);
+    ptRollingRayTraceMs.push_back(ui.pathTracerPerfStats.rayTraceMs);
+    ptRollingDenoiserMs.push_back(ui.pathTracerPerfStats.denoiserMs);
+    if (ptRollingTotalMs.size() > kRollingWindow) {
+        ptRollingTotalMs.erase(ptRollingTotalMs.begin());
+    }
+    if (ptRollingRayTraceMs.size() > kRollingWindow) {
+        ptRollingRayTraceMs.erase(ptRollingRayTraceMs.begin());
+    }
+    if (ptRollingDenoiserMs.size() > kRollingWindow) {
+        ptRollingDenoiserMs.erase(ptRollingDenoiserMs.begin());
+    }
+
+    updatePathTracerTimingPercentiles();
+}
+
+void EngineCore::updatePathTracerTimingPercentiles()
+{
+    const auto totalPct = computePercentiles(ptRollingTotalMs);
+    const auto rayPct = computePercentiles(ptRollingRayTraceMs);
+    const auto denoisePct = computePercentiles(ptRollingDenoiserMs);
+    ui.pathTracerPerfStats.totalFrameP50Ms = totalPct.p50;
+    ui.pathTracerPerfStats.totalFrameP95Ms = totalPct.p95;
+    ui.pathTracerPerfStats.totalFrameP99Ms = totalPct.p99;
+    ui.pathTracerPerfStats.rayTraceP95Ms = rayPct.p95;
+    ui.pathTracerPerfStats.denoiserP95Ms = denoisePct.p95;
+    ui.pathTracerPerfStats.analysisSampleCount = static_cast<uint32_t>(ptRollingTotalMs.size());
+}
+
+void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
+{
+    if (frameSlot >= frames.ptAnalysisCounterMapped.size() || !frames.ptAnalysisCounterMapped[frameSlot]) {
+        return;
+    }
+
+    const auto *counters = reinterpret_cast<const Laphria::PathTracerAnalysisCounters *>(frames.ptAnalysisCounterMapped[frameSlot]);
+    ui.pathTracerPerfStats.historyAcceptedCount = counters->historyAcceptedCount;
+    ui.pathTracerPerfStats.historyRejectedCount = counters->historyRejectedCount;
+    ui.pathTracerPerfStats.skyHitCount = counters->skyHitCount;
+    ui.pathTracerPerfStats.fireflyClampCount = counters->fireflyClampCount;
+    ui.pathTracerPerfStats.pixelSampleCount = counters->pixelCount;
+
+    const float historyTotal = static_cast<float>(counters->historyAcceptedCount + counters->historyRejectedCount);
+    ui.pathTracerPerfStats.historyAcceptanceRatio = (historyTotal > 0.0f) ? static_cast<float>(counters->historyAcceptedCount) / historyTotal : 0.0f;
+    ui.pathTracerPerfStats.historyRejectionRatio = (historyTotal > 0.0f) ? static_cast<float>(counters->historyRejectedCount) / historyTotal : 0.0f;
+
+    const float pixelTotal = static_cast<float>(std::max(counters->pixelCount, 1u));
+    ui.pathTracerPerfStats.skyHitRatio = static_cast<float>(counters->skyHitCount) / pixelTotal;
+    ui.pathTracerPerfStats.fireflyClampRatio = static_cast<float>(counters->fireflyClampCount) / pixelTotal;
+
+    auto &analysis = ui.pathTracerAnalysisSettings;
+    if (!(analysis.enableAnalysisMode && analysis.benchmarkActive && analysis.runBaselineSweep)) {
+        return;
+    }
+
+    if (ptSweepConfigs.empty()) {
+        ptSweepConfigs = buildPathTracerBaselineSweepMatrix();
+        ptSweepConfigIndex = 0;
+        ptSweepWarmupRemaining = analysis.warmupFrames;
+        ptSweepSampleRemaining = analysis.sampleFrames;
+        ptSweepScores.clear();
+        ptBacklogItems.clear();
+        ptSampleTotalMs.clear();
+        ptSampleRayTraceMs.clear();
+        ptSampleDenoiserMs.clear();
+        analysis.recommendationManual.clear();
+        analysis.recommendationAutoBalanced.clear();
+        analysis.recommendationAutoAggressive.clear();
+        analysis.backlogSummary.clear();
+        const auto benchmarkCsvPath = resolveAnalysisOutputPath(kPtBenchmarkCsvFileName);
+        ui.pathTracerAnalysisSettings.benchmarkCsvOutputPath = benchmarkCsvPath.string();
+        std::ofstream out(benchmarkCsvPath, std::ios::trunc);
+        if (out.is_open()) {
+            out << "config_index,resolution_scale,denoiser_iterations,reprojection,motion_aware,reduce_secondary,"
+                   "total_p50_ms,total_p95_ms,total_p99_ms,ray_p95_ms,denoiser_p95_ms,"
+                   "history_accept_ratio,history_reject_ratio,sky_hit_ratio,firefly_clamp_ratio,"
+                   "budget_pass,composite_score\n";
+        } else {
+            LOGE("Failed to open benchmark CSV for writing: %s", benchmarkCsvPath.string().c_str());
+        }
+    }
+
+    if (ptSweepConfigIndex >= ptSweepConfigs.size()) {
+        analysis.benchmarkActive = false;
+        analysis.runBaselineSweep = false;
+        return;
+    }
+
+    if (ptSweepWarmupRemaining > 0) {
+        --ptSweepWarmupRemaining;
+        return;
+    }
+
+    if (ptSweepSampleRemaining > 0) {
+        ptSampleTotalMs.push_back(ui.pathTracerPerfStats.totalFrameMs);
+        ptSampleRayTraceMs.push_back(ui.pathTracerPerfStats.rayTraceMs);
+        ptSampleDenoiserMs.push_back(ui.pathTracerPerfStats.denoiserMs);
+        --ptSweepSampleRemaining;
+
+        if (analysis.adaptiveSampling &&
+            static_cast<int>(ptSampleTotalMs.size()) >= analysis.minSampleFrames) {
+            const int window = std::min(analysis.convergenceWindowFrames,
+                                        static_cast<int>(ptSampleTotalMs.size()) / 2);
+            if (window >= 20) {
+                const auto beginPrev = ptSampleTotalMs.end() - (window * 2);
+                const auto endPrev = ptSampleTotalMs.end() - window;
+                const auto beginCurr = endPrev;
+                const auto endCurr = ptSampleTotalMs.end();
+
+                std::vector<float> prevWindow(beginPrev, endPrev);
+                std::vector<float> currWindow(beginCurr, endCurr);
+                const auto prevPct = computePercentiles(prevWindow);
+                const auto currPct = computePercentiles(currWindow);
+                const float denom = std::max(prevPct.p95, 0.001f);
+                const float relP95Delta = std::abs(currPct.p95 - prevPct.p95) / denom;
+                if (relP95Delta <= analysis.p95ConvergenceThreshold) {
+                    ptSweepSampleRemaining = 0;
+                }
+            }
+        }
+    }
+
+    if (ptSweepSampleRemaining == 0 && !ptSampleTotalMs.empty()) {
+        const auto totalPct = computePercentiles(ptSampleTotalMs);
+        const auto rayPct = computePercentiles(ptSampleRayTraceMs);
+        const auto denoisePct = computePercentiles(ptSampleDenoiserMs);
+        PathTracerScoreInput scoreInput{};
+        scoreInput.totalFrameMsP95 = totalPct.p95;
+        scoreInput.targetBudgetMs = 16.67f;
+        scoreInput.historyRejectionRatio = ui.pathTracerPerfStats.historyRejectionRatio;
+        scoreInput.skyHitRatio = ui.pathTracerPerfStats.skyHitRatio;
+        scoreInput.fireflyClampRatio = ui.pathTracerPerfStats.fireflyClampRatio;
+        scoreInput.visualFidelityScore = analysis.benchmarkVisualFidelityScore;
+        const auto runScore = scorePathTracerRun(scoreInput);
+        ptSweepScores.push_back(runScore);
+        const auto &cfg = ptSweepConfigs[ptSweepConfigIndex];
+
+        const auto benchmarkCsvPath = resolveAnalysisOutputPath(kPtBenchmarkCsvFileName);
+        ui.pathTracerAnalysisSettings.benchmarkCsvOutputPath = benchmarkCsvPath.string();
+        std::ofstream out(benchmarkCsvPath, std::ios::app);
+        if (out.is_open()) {
+            out << ptSweepConfigIndex << ','
+                << cfg.resolutionScale << ','
+                << cfg.denoiserIterations << ','
+                << (cfg.enableReprojection ? 1 : 0) << ','
+                << (cfg.enableMotionAwareAccumulation ? 1 : 0) << ','
+                << (cfg.reduceSecondaryEffects ? 1 : 0) << ','
+                << totalPct.p50 << ','
+                << totalPct.p95 << ','
+                << totalPct.p99 << ','
+                << rayPct.p95 << ','
+                << denoisePct.p95 << ','
+                << ui.pathTracerPerfStats.historyAcceptanceRatio << ','
+                << ui.pathTracerPerfStats.historyRejectionRatio << ','
+                << ui.pathTracerPerfStats.skyHitRatio << ','
+                << ui.pathTracerPerfStats.fireflyClampRatio << ','
+                << (runScore.budgetPass ? 1 : 0) << ','
+                << runScore.compositeScore << '\n';
+        } else {
+            LOGE("Failed to append benchmark CSV: %s", benchmarkCsvPath.string().c_str());
+        }
+
+        ++ptSweepConfigIndex;
+        ptSweepWarmupRemaining = analysis.warmupFrames;
+        ptSweepSampleRemaining = analysis.sampleFrames;
+        ptSampleTotalMs.clear();
+        ptSampleRayTraceMs.clear();
+        ptSampleDenoiserMs.clear();
+
+        if (ptSweepConfigIndex >= ptSweepConfigs.size()) {
+            analysis.benchmarkActive = false;
+            analysis.runBaselineSweep = false;
+            if (!ptSweepScores.empty() && ptSweepScores.size() == ptSweepConfigs.size()) {
+                size_t bestIndex = 0;
+                bool foundBudgetPass = false;
+                for (size_t i = 0; i < ptSweepScores.size(); ++i) {
+                    const auto &candidate = ptSweepScores[i];
+                    const auto &best = ptSweepScores[bestIndex];
+                    if (!foundBudgetPass && candidate.budgetPass) {
+                        bestIndex = i;
+                        foundBudgetPass = true;
+                        continue;
+                    }
+                    if (foundBudgetPass) {
+                        if (candidate.budgetPass && candidate.compositeScore > best.compositeScore) {
+                            bestIndex = i;
+                        }
+                    } else if (candidate.compositeScore > best.compositeScore) {
+                        bestIndex = i;
+                    }
+                }
+
+                const auto &bestCfg = ptSweepConfigs[bestIndex];
+                char manualPreset[256];
+                std::snprintf(manualPreset, sizeof(manualPreset),
+                              "scale=%.2f, denoise=%d, reproj=%s, motionAware=%s",
+                              bestCfg.resolutionScale,
+                              bestCfg.denoiserIterations,
+                              bestCfg.enableReprojection ? "on" : "off",
+                              bestCfg.enableMotionAwareAccumulation ? "on" : "off");
+                analysis.recommendationManual = manualPreset;
+
+                const float balancedScale = std::max(0.50f, bestCfg.resolutionScale - 0.05f);
+                const int balancedDenoise = std::max(1, bestCfg.denoiserIterations - 1);
+                char balancedPreset[256];
+                std::snprintf(balancedPreset, sizeof(balancedPreset),
+                              "scale=%.2f, denoise=%d, reproj=on, motionAware=on",
+                              balancedScale, balancedDenoise);
+                analysis.recommendationAutoBalanced = balancedPreset;
+
+                const float aggressiveScale = std::max(0.50f, bestCfg.resolutionScale - 0.10f);
+                const int aggressiveDenoise = std::max(1, bestCfg.denoiserIterations - 2);
+                char aggressivePreset[256];
+                std::snprintf(aggressivePreset, sizeof(aggressivePreset),
+                              "scale=%.2f, denoise=%d, reproj=on, motionAware=on, reduceSecondary=on",
+                              aggressiveScale, aggressiveDenoise);
+                analysis.recommendationAutoAggressive = aggressivePreset;
+
+                ptBacklogItems = buildDefaultFidelityBacklog(
+                    ui.pathTracerPerfStats.rayTraceP95Ms,
+                    ui.pathTracerPerfStats.reprojectionMs,
+                    ui.pathTracerPerfStats.denoiserP95Ms,
+                    ui.pathTracerPerfStats.totalFrameP95Ms,
+                    16.67f);
+                writePathTracerBacklogCsv();
+                if (!ptBacklogItems.empty()) {
+                    analysis.backlogSummary = ptBacklogItems[0].name;
+                    if (ptBacklogItems.size() > 1) {
+                        analysis.backlogSummary += "; ";
+                        analysis.backlogSummary += ptBacklogItems[1].name;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void EngineCore::resetPathTracerAnalysisCounters(uint32_t frameSlot)
+{
+    if (frameSlot >= frames.ptAnalysisCounterMapped.size() || !frames.ptAnalysisCounterMapped[frameSlot]) {
+        return;
+    }
+    std::memset(frames.ptAnalysisCounterMapped[frameSlot], 0, sizeof(Laphria::PathTracerAnalysisCounters));
+}
+
+void EngineCore::ensurePathTracerSanityScene()
+{
+    if (ptSanitySceneCreated || !scene || !resourceManager) {
+        return;
+    }
+
+    Laphria::MaterialData whiteDiffuse{};
+    whiteDiffuse.baseColorFactor = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
+    whiteDiffuse.metallicFactor = 0.0f;
+    whiteDiffuse.roughnessFactor = 0.75f;
+    whiteDiffuse.emissiveFactor = glm::vec3(0.0f);
+
+    Laphria::MaterialData roughMetal{};
+    roughMetal.baseColorFactor = glm::vec4(0.90f, 0.90f, 0.92f, 1.0f);
+    roughMetal.metallicFactor = 1.0f;
+    roughMetal.roughnessFactor = 0.80f;
+    roughMetal.emissiveFactor = glm::vec3(0.0f);
+
+    Laphria::MaterialData emissivePatch{};
+    emissivePatch.baseColorFactor = glm::vec4(0.25f, 0.25f, 0.25f, 1.0f);
+    emissivePatch.metallicFactor = 0.0f;
+    emissivePatch.roughnessFactor = 0.60f;
+    emissivePatch.emissiveFactor = glm::vec3(6.0f, 5.2f, 4.8f);
+
+    ptSanityWhiteDiffuseNode = resourceManager->createCubeModel(1.0f, *pipelines.descriptorSetLayoutMaterial, whiteDiffuse);
+    ptSanityRoughMetalNode = resourceManager->createCubeModel(1.0f, *pipelines.descriptorSetLayoutMaterial, roughMetal);
+    ptSanityEmissiveNode = resourceManager->createCubeModel(0.7f, *pipelines.descriptorSetLayoutMaterial, emissivePatch);
+
+    if (ptSanityWhiteDiffuseNode) {
+        ptSanityWhiteDiffuseNode->name = "PT_Sanity_WhiteDiffuse";
+        ptSanityWhiteDiffuseNode->setPosition(ptBenchmarkBasePosition + glm::vec3(-1.4f, -0.2f, -2.5f));
+        scene->addNode(ptSanityWhiteDiffuseNode, scene->getRoot());
+    }
+    if (ptSanityRoughMetalNode) {
+        ptSanityRoughMetalNode->name = "PT_Sanity_RoughMetal";
+        ptSanityRoughMetalNode->setPosition(ptBenchmarkBasePosition + glm::vec3(0.0f, -0.2f, -2.5f));
+        scene->addNode(ptSanityRoughMetalNode, scene->getRoot());
+    }
+    if (ptSanityEmissiveNode) {
+        ptSanityEmissiveNode->name = "PT_Sanity_Emissive";
+        ptSanityEmissiveNode->setPosition(ptBenchmarkBasePosition + glm::vec3(1.4f, -0.2f, -2.5f));
+        scene->addNode(ptSanityEmissiveNode, scene->getRoot());
+    }
+
+    ptSanitySceneCreated = true;
+}
+
+void EngineCore::updatePathTracerPhysicalSanityChecks(float /*deltaTimeSeconds*/)
+{
+    auto &analysis = ui.pathTracerAnalysisSettings;
+    if (!(analysis.enableAnalysisMode && analysis.runPhysicalSanityChecks)) {
+        analysis.physicalSanityActive = false;
+        return;
+    }
+
+    if (!analysis.physicalSanityActive && ptSanityPhase >= 2) {
+        ptSanityPhase = 0;
+        ptSanityFramesRemaining = 0;
+        ptSanityBaselineCaptured = false;
+        ptSanityDriftMetric = 0.0f;
+        analysis.physicalSanityDriftMetric = 0.0f;
+        analysis.physicalSanityPassed = false;
+    }
+
+    ensurePathTracerSanityScene();
+    analysis.physicalSanityActive = true;
+
+    // Use two controlled exposure phases and compare temporal stability counters.
+    if (!ptSanityBaselineCaptured && ptSanityPhase == 0) {
+        ui.exposure = ptSanityBaselineExposure;
+        if (ptSanityFramesRemaining <= 0) {
+            ptSanityFramesRemaining = 90;
+        }
+        --ptSanityFramesRemaining;
+        if (ptSanityFramesRemaining <= 0) {
+            ptSanityBaselineRejectRatio = ui.pathTracerPerfStats.historyRejectionRatio;
+            ptSanityBaselineFireflyRatio = ui.pathTracerPerfStats.fireflyClampRatio;
+            ptSanityBaselineSkyRatio = ui.pathTracerPerfStats.skyHitRatio;
+            ptSanityBaselineCaptured = true;
+            ptSanityPhase = 1;
+            ptSanityFramesRemaining = 90;
+        }
+        return;
+    }
+
+    if (ptSanityPhase == 1) {
+        ui.exposure = 2.0f;
+        --ptSanityFramesRemaining;
+        if (ptSanityFramesRemaining <= 0) {
+            const float rejectDrift = std::abs(ui.pathTracerPerfStats.historyRejectionRatio - ptSanityBaselineRejectRatio);
+            const float fireflyDrift = std::abs(ui.pathTracerPerfStats.fireflyClampRatio - ptSanityBaselineFireflyRatio);
+            const float skyDrift = std::abs(ui.pathTracerPerfStats.skyHitRatio - ptSanityBaselineSkyRatio);
+            ptSanityDriftMetric = rejectDrift + fireflyDrift + 0.5f * skyDrift;
+            analysis.physicalSanityDriftMetric = ptSanityDriftMetric;
+            analysis.physicalSanityPassed = (ptSanityDriftMetric < 0.20f);
+            analysis.physicalSanityActive = false;
+            analysis.runPhysicalSanityChecks = false;
+            ptSanityPhase = 2;
+            ui.exposure = 1.0f;
+        }
+    }
+}
+
+void EngineCore::writePathTracerBacklogCsv()
+{
+    const auto backlogCsvPath = resolveAnalysisOutputPath(kPtBacklogCsvFileName);
+    ui.pathTracerAnalysisSettings.backlogCsvOutputPath = backlogCsvPath.string();
+    std::ofstream out(backlogCsvPath, std::ios::trunc);
+    if (!out.is_open()) {
+        LOGE("Failed to open backlog CSV for writing: %s", backlogCsvPath.string().c_str());
+        return;
+    }
+
+    out << "priority,name,expected_impact,estimated_ms,measured_ms,budget_pass\n";
+    for (const auto &item : ptBacklogItems) {
+        const char *priority = "Medium";
+        if (item.priority == Laphria::PathTracerBacklogPriority::High) {
+            priority = "High";
+        } else if (item.priority == Laphria::PathTracerBacklogPriority::Low) {
+            priority = "Low";
+        }
+        out << priority << ','
+            << '"' << item.name << '"' << ','
+            << '"' << item.expectedArtifactImpact << '"' << ','
+            << item.estimatedMsCost << ','
+            << item.measuredMsCost << ','
+            << (item.budgetPass ? 1 : 0) << '\n';
+    }
+}
+
+void EngineCore::loadPathTracerBenchmarkSceneIfNeeded()
+{
+    auto &analysis = ui.pathTracerAnalysisSettings;
+    if (!(analysis.enableAnalysisMode && analysis.lockBenchmarkScene && scene && resourceManager)) {
+        return;
+    }
+    if (ptBenchmarkSceneLoaded) {
+        return;
+    }
+    namespace fs = std::filesystem;
+    const fs::path directPath = fs::path("Assets") / "sponza_runtime.glb";
+    const std::array<fs::path, 4> candidates = {
+        directPath,
+        fs::path("..") / directPath,
+        fs::path("..") / fs::path("..") / directPath,
+        fs::path("..") / fs::path("..") / fs::path("..") / directPath
+    };
+
+    std::string resolvedPath = directPath.generic_string();
+    for (const auto &candidate : candidates) {
+        std::error_code ec;
+        if (fs::exists(candidate, ec) && !ec) {
+            resolvedPath = candidate.generic_string();
+            break;
+        }
+    }
+
+    scene->loadModel(resolvedPath, *resourceManager, *pipelines.descriptorSetLayoutMaterial, scene->getRoot());
+    ptBenchmarkSceneLoaded = true;
+}
+
+void EngineCore::updatePathTracerBenchmark(float deltaTimeSeconds)
+{
+    auto &analysis = ui.pathTracerAnalysisSettings;
+    if (!(analysis.enableAnalysisMode && analysis.benchmarkActive)) {
+        return;
+    }
+
+    if (analysis.runBaselineSweep) {
+        if (ptSweepConfigs.empty()) {
+            ptSweepConfigs = buildPathTracerBaselineSweepMatrix();
+            ptSweepConfigIndex = 0;
+            ptSweepWarmupRemaining = analysis.warmupFrames;
+            ptSweepSampleRemaining = analysis.sampleFrames;
+            ptSweepScores.clear();
+            ptBacklogItems.clear();
+            ptSampleTotalMs.clear();
+            ptSampleRayTraceMs.clear();
+            ptSampleDenoiserMs.clear();
+            analysis.recommendationManual.clear();
+            analysis.recommendationAutoBalanced.clear();
+            analysis.recommendationAutoAggressive.clear();
+            analysis.backlogSummary.clear();
+            const auto benchmarkCsvPath = resolveAnalysisOutputPath(kPtBenchmarkCsvFileName);
+            ui.pathTracerAnalysisSettings.benchmarkCsvOutputPath = benchmarkCsvPath.string();
+            std::ofstream out(benchmarkCsvPath, std::ios::trunc);
+            if (out.is_open()) {
+                out << "config_index,resolution_scale,denoiser_iterations,reprojection,motion_aware,reduce_secondary,"
+                       "total_p50_ms,total_p95_ms,total_p99_ms,ray_p95_ms,denoiser_p95_ms,"
+                       "history_accept_ratio,history_reject_ratio,sky_hit_ratio,firefly_clamp_ratio,"
+                       "budget_pass,composite_score\n";
+            } else {
+                LOGE("Failed to open benchmark CSV for writing: %s", benchmarkCsvPath.string().c_str());
+            }
+        }
+        if (ptSweepConfigIndex < ptSweepConfigs.size()) {
+            const auto &cfg = ptSweepConfigs[ptSweepConfigIndex];
+            ui.pathTracerSettings.resolutionScale = cfg.resolutionScale;
+            ui.pathTracerSettings.denoiserIterations = cfg.denoiserIterations;
+            ui.pathTracerSettings.enableReprojection = cfg.enableReprojection;
+            ui.pathTracerSettings.enableMotionAwareAccumulation = cfg.enableMotionAwareAccumulation;
+            ui.pathTracerSettings.reduceSecondaryEffects = cfg.reduceSecondaryEffects;
+        }
+    }
+
+    if (analysis.freezeCameraInputDuringBenchmark) {
+        camera.processInput(0.0f, 0.0f, 0.0f);
+    }
+
+    ptBenchmarkClockSeconds += std::max(0.0f, deltaTimeSeconds);
+    ptBenchmarkTeleportClockSeconds += std::max(0.0f, deltaTimeSeconds);
+
+    switch (analysis.cameraPath) {
+    case UISystem::PathTracerBenchmarkCameraPath::Static:
+        camera.position = ptBenchmarkBasePosition;
+        camera.pitch = ptBenchmarkBasePitch;
+        camera.yaw = ptBenchmarkBaseYaw;
+        break;
+    case UISystem::PathTracerBenchmarkCameraPath::SlowPan:
+        camera.position = ptBenchmarkBasePosition;
+        camera.pitch = ptBenchmarkBasePitch;
+        camera.yaw = ptBenchmarkBaseYaw + glm::radians(8.0f) * ptBenchmarkClockSeconds;
+        break;
+    case UISystem::PathTracerBenchmarkCameraPath::FastPan:
+        camera.position = ptBenchmarkBasePosition;
+        camera.pitch = ptBenchmarkBasePitch;
+        camera.yaw = ptBenchmarkBaseYaw + glm::radians(36.0f) * ptBenchmarkClockSeconds;
+        break;
+    case UISystem::PathTracerBenchmarkCameraPath::Teleport:
+        if (ptBenchmarkTeleportClockSeconds >= 1.5f) {
+            ptBenchmarkTeleportClockSeconds = 0.0f;
+        }
+        if (ptBenchmarkTeleportClockSeconds < 0.75f) {
+            camera.position = ptBenchmarkBasePosition;
+            camera.pitch = ptBenchmarkBasePitch;
+            camera.yaw = ptBenchmarkBaseYaw;
+        } else {
+            camera.position = ptBenchmarkBasePosition + glm::vec3(3.5f, 0.4f, -2.5f);
+            camera.pitch = ptBenchmarkBasePitch + glm::radians(6.0f);
+            camera.yaw = ptBenchmarkBaseYaw + glm::radians(45.0f);
+        }
+        break;
+    }
 }
 
 void EngineCore::updateAdaptivePathTracerSettings() {
+    if (ui.pathTracerAnalysisSettings.enableAnalysisMode && ui.pathTracerAnalysisSettings.benchmarkActive) {
+        return;
+    }
     if (ui.pathTracerSettings.qualityMode == UISystem::PathTracerQualityMode::Manual) {
         return;
     }
@@ -1791,6 +2367,7 @@ void EngineCore::drawFrame() {
 
     if (submittedRenderModes[frames.frameIndex] == RenderMode::PathTracer) {
         collectPathTracerTimings(frames.frameIndex);
+        collectPathTracerAnalysisCounters(frames.frameIndex);
         updateAdaptivePathTracerSettings();
     }
 

@@ -87,6 +87,15 @@ class FrameContext
 	std::vector<Laphria::VulkanUtils::VmaImage> atrousTemp;              // MAX_FRAMES_IN_FLIGHT * 2 × R16G16B16A16_SFLOAT
 	std::vector<vk::raii::ImageView>            atrousTempViews;
 
+	// ── Path tracer analysis debug image (per frame slot) ──────────────────
+	// Stores reprojection debug channels: validity, history alpha, motion magnitude.
+	std::vector<Laphria::VulkanUtils::VmaImage> ptReprojectionDebug;
+	std::vector<vk::raii::ImageView>            ptReprojectionDebugViews;
+
+	// ── Path tracer analysis counters (per frame slot) ─────────────────────
+	std::vector<Laphria::VulkanUtils::VmaBuffer> ptAnalysisCounterBuffers;
+	std::vector<void *>                          ptAnalysisCounterMapped;
+
 	// ── Temporal tracking (updated each frame by updateUniformBuffer) ────────
 	glm::mat4 prevViewProj{1.0f};   // VP matrix of the last submitted frame
 	uint32_t  frameCount = 0;       // monotonically increasing, seeds per-pixel RNG
@@ -117,6 +126,8 @@ class FrameContext
 	void createGBufferResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
 	void createHistoryResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
 	void createAtrousResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
+	void createPathTracerAnalysisResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
+	void createPathTracerAnalysisBuffers(const VulkanDevice &dev);
 
 	void createUniformBuffers(const VulkanDevice &dev);
 	void createTLASResources(VulkanDevice &dev);

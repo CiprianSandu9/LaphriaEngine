@@ -3,6 +3,7 @@
 
 #include <random>
 #include <string>
+#include <cstdint>
 #include <vector>
 
 #include "../Physics/PhysicsSystem.h"
@@ -16,6 +17,24 @@
 // Owns ImGui lifecycle, all editor draw calls, and UI-driven simulation state.
 class UISystem {
 public:
+    enum class PathTracerBenchmarkCameraPath
+    {
+        Static = 0,
+        SlowPan = 1,
+        FastPan = 2,
+        Teleport = 3
+    };
+
+    enum class PathTracerDebugAov
+    {
+        FinalColor = 0,
+        ReprojectionValidity = 1,
+        HistoryAlpha = 2,
+        MotionMagnitude = 3,
+        TemporalVariance = 4,
+        AtrousIteration = 5
+    };
+
     enum class PathTracerQualityMode
     {
         Manual = 0,
@@ -45,7 +64,51 @@ public:
         float reprojectionMs = 0.0f;
         float denoiserMs = 0.0f;
         float totalFrameMs = 0.0f;
+        float totalFrameP50Ms = 0.0f;
+        float totalFrameP95Ms = 0.0f;
+        float totalFrameP99Ms = 0.0f;
+        float rayTraceP95Ms = 0.0f;
+        float denoiserP95Ms = 0.0f;
+        uint32_t analysisSampleCount = 0;
+        float historyAcceptanceRatio = 0.0f;
+        float historyRejectionRatio = 0.0f;
+        float skyHitRatio = 0.0f;
+        float fireflyClampRatio = 0.0f;
+        uint32_t historyAcceptedCount = 0;
+        uint32_t historyRejectedCount = 0;
+        uint32_t skyHitCount = 0;
+        uint32_t fireflyClampCount = 0;
+        uint32_t pixelSampleCount = 0;
         float cameraMotionFactor = 0.0f;
+    };
+
+    struct PathTracerAnalysisSettings
+    {
+        bool                         enableAnalysisMode = false;
+        bool                         lockBenchmarkScene = true;
+        bool                         benchmarkActive = false;
+        bool                         runBaselineSweep = false;
+        bool                         freezeCameraInputDuringBenchmark = true;
+        PathTracerBenchmarkCameraPath cameraPath = PathTracerBenchmarkCameraPath::SlowPan;
+        bool                         adaptiveSampling = true;
+        int                          minSampleFrames = 120;
+        int                          convergenceWindowFrames = 60;
+        float                        p95ConvergenceThreshold = 0.02f;
+        PathTracerDebugAov           debugAov = PathTracerDebugAov::FinalColor;
+        int                          debugAtrousIteration = 0;
+        int                          warmupFrames = 60;
+        int                          sampleFrames = 240;
+        float                        benchmarkVisualFidelityScore = 0.80f;
+        bool                         runPhysicalSanityChecks = false;
+        bool                         physicalSanityActive = false;
+        bool                         physicalSanityPassed = false;
+        float                        physicalSanityDriftMetric = 0.0f;
+        std::string                  recommendationManual;
+        std::string                  recommendationAutoBalanced;
+        std::string                  recommendationAutoAggressive;
+        std::string                  backlogSummary;
+        std::string                  benchmarkCsvOutputPath;
+        std::string                  backlogCsvOutputPath;
     };
 
     // Call after the swapchain has been created (needs colorFormat / depthFormat).
@@ -68,6 +131,7 @@ public:
     glm::vec3 lightDirection = glm::vec3(-0.30f, -1.0f, -0.20f);
     float exposure = 1.0f;
     PathTracerSettings pathTracerSettings;
+    PathTracerAnalysisSettings pathTracerAnalysisSettings;
     PathTracerPerfStats pathTracerPerfStats;
     bool showEditorPanels = true;
 

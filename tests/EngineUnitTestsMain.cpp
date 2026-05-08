@@ -1,6 +1,7 @@
 #include "../src/Physics/Broadphase.h"
 #include "../src/SceneManagement/Frustum.h"
 #include "../src/SceneManagement/SceneNode.h"
+#include "PathTracerAnalysisTests.h"
 
 #include <algorithm>
 #include <cmath>
@@ -131,5 +132,8 @@ int main()
 	const bool okTransform = testWorldTransformCaching();
 	const bool okFrustum = testFrustumClassification();
 	const bool okBroadphase = testBroadphaseCoverage();
-	return (okTransform && okFrustum && okBroadphase) ? 0 : 1;
+	const bool okPtSweep = testPathTracerBaselineSweepMatrix();
+	const bool okPtPercentiles = testPathTracerPercentiles();
+	const bool okPtScore = testPathTracerScoreBudgetGate();
+	return (okTransform && okFrustum && okBroadphase && okPtSweep && okPtPercentiles && okPtScore) ? 0 : 1;
 }

@@ -8,6 +8,8 @@
 [[vk::binding(8,  0)]] RWTexture2D<float4> atrousTempA;        // A-Trous ping-pong buffer A
 [[vk::binding(9,  0)]] RWTexture2D<float4> atrousTempB;        // A-Trous ping-pong buffer B
 [[vk::binding(10, 0)]] RWTexture2D<float4> finalOutput;        // final denoised output (last pass only)
+[[vk::binding(13, 0)]] RWTexture2D<float4> analysisReprojectionDebug;
+[[vk::binding(14, 0)]] RWByteAddressBuffer ptAnalysisCounters;
 
 struct DenoisePushConstants {
     int   stepSize;    // 1, 2, 4, 8, 16 for iterations 0-4
@@ -16,6 +18,8 @@ struct DenoisePushConstants {
     float phiNormal;   // normal edge-stopping exponent  (typical: 128.0)
     float exposureScale;
     int   useRawInput; // 1 if Reprojection was skipped
+    int   debugAov;
+    int   debugAtrousIteration;
 };
 [[vk::push_constant]] DenoisePushConstants push;
 
@@ -123,12 +127,25 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
     float3 filtered = colorSum / max(weightSum, 0.0001);
 
     if (push.isLastPass != 0) {
-        // Final iteration: apply tone mapping and write to the denoised output image.
-        // The swapchain is B8G8R8A8_SRGB, so the blit automatically applies the
-        // sRGB transfer function. Do NOT call linearToSRGB here — that would apply
-        // gamma twice and wash out all dark values to mid-grey.
-        float3 tonemapped = applyAcesTonemap(filtered, push.exposureScale);
-        finalOutput[pixel] = float4(tonemapped, 1.0);
+        float3 outColor = applyAcesTonemap(filtered, push.exposureScale);
+        if (push.debugAov == 1) {
+            float validity = analysisReprojectionDebug[pixel].r;
+            outColor = float3(validity, validity, validity);
+        } else if (push.debugAov == 2) {
+            float alpha = analysisReprojectionDebug[pixel].g;
+            outColor = float3(alpha, alpha, alpha);
+        } else if (push.debugAov == 3) {
+            float motionMag = saturate(analysisReprojectionDebug[pixel].b * 20.0);
+            outColor = float3(motionMag, motionMag, motionMag);
+        } else if (push.debugAov == 4) {
+            float2 moments = historyMomentsOut[pixel];
+            float variance = max(moments.y - moments.x * moments.x, 0.0);
+            float v = saturate(variance * 8.0);
+            outColor = float3(v, v, v);
+        } else if (push.debugAov == 5) {
+            outColor = applyAcesTonemap(filtered, push.exposureScale);
+        }
+        finalOutput[pixel] = float4(outColor, 1.0);
     } else {
         // Intermediate iteration: write to the OTHER ping-pong buffer.
         if (readA)

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
 
 using namespace Laphria;
@@ -40,8 +41,10 @@ FrameContext::~FrameContext()
 	destroyImagesAndReleaseAllocations(historyColor);
 	destroyImagesAndReleaseAllocations(historyMoments);
 	destroyImagesAndReleaseAllocations(atrousTemp);
+	destroyImagesAndReleaseAllocations(ptReprojectionDebug);
 
 	destroyBuffersAndReleaseAllocations(uniformBuffers);
+	destroyBuffersAndReleaseAllocations(ptAnalysisCounterBuffers);
 	destroyBuffersAndReleaseAllocations(tlasBuffers);
 	destroyBuffersAndReleaseAllocations(tlasScratchBuffers);
 	destroyBuffersAndReleaseAllocations(tlasInstanceBuffers);
@@ -57,6 +60,8 @@ void FrameContext::init(VulkanDevice &dev, SwapchainManager &swapchain) {
     createGBufferResources(dev, swapchain);
     createHistoryResources(dev, swapchain);
     createAtrousResources(dev, swapchain);
+    createPathTracerAnalysisResources(dev, swapchain);
+    createPathTracerAnalysisBuffers(dev);
     // Shadow resources are extent-independent and live for the engine's full lifetime.
     createShadowResources(dev);
 
@@ -75,6 +80,7 @@ void FrameContext::cleanupSwapChainDependents() {
     destroyImagesAndReleaseAllocations(historyColor);
     destroyImagesAndReleaseAllocations(historyMoments);
     destroyImagesAndReleaseAllocations(atrousTemp);
+    destroyImagesAndReleaseAllocations(ptReprojectionDebug);
 
     storageImageViews.clear();
     storageImages.clear();
@@ -98,6 +104,8 @@ void FrameContext::cleanupSwapChainDependents() {
     historyMoments.clear();
     atrousTempViews.clear();
     atrousTemp.clear();
+    ptReprojectionDebugViews.clear();
+    ptReprojectionDebug.clear();
 }
 
 void FrameContext::recreate(VulkanDevice &dev, SwapchainManager &swapchain) {
@@ -108,6 +116,7 @@ void FrameContext::recreate(VulkanDevice &dev, SwapchainManager &swapchain) {
     createGBufferResources(dev, swapchain);
     createHistoryResources(dev, swapchain);
     createAtrousResources(dev, swapchain);
+    createPathTracerAnalysisResources(dev, swapchain);
 }
 
 void FrameContext::createCommandPool(const VulkanDevice &dev) {
@@ -611,6 +620,57 @@ void FrameContext::createAtrousResources(const VulkanDevice &dev, const Swapchai
             VulkanUtils::recordImageLayoutTransition(cmd, *img,
                                                      vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
         VulkanUtils::endSingleTimeCommands(dev.logicalDevice, dev.queue, commandPool, cmd);
+    }
+}
+
+void FrameContext::createPathTracerAnalysisResources(const VulkanDevice &dev, const SwapchainManager &swapchain)
+{
+    ptReprojectionDebug.clear();
+    ptReprojectionDebugViews.clear();
+    ptReprojectionDebug.reserve(MAX_FRAMES_IN_FLIGHT);
+    ptReprojectionDebugViews.reserve(MAX_FRAMES_IN_FLIGHT);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VulkanUtils::VmaImage img{};
+        VulkanUtils::createImage(dev.logicalDevice, dev.physicalDevice,
+                                 swapchain.extent.width, swapchain.extent.height,
+                                 vk::Format::eR16G16B16A16Sfloat, vk::ImageTiling::eOptimal,
+                                 vk::ImageUsageFlagBits::eStorage,
+                                 vk::MemoryPropertyFlagBits::eDeviceLocal, img);
+        ptReprojectionDebug.push_back(std::move(img));
+        ptReprojectionDebugViews.push_back(VulkanUtils::createImageView(dev.logicalDevice,
+                                                                        *ptReprojectionDebug.back(),
+                                                                        vk::Format::eR16G16B16A16Sfloat,
+                                                                        vk::ImageAspectFlagBits::eColor));
+    }
+
+    {
+        auto cmd = VulkanUtils::beginSingleTimeCommands(dev.logicalDevice, commandPool);
+        for (auto &img : ptReprojectionDebug) {
+            VulkanUtils::recordImageLayoutTransition(cmd, *img,
+                                                     vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
+        }
+        VulkanUtils::endSingleTimeCommands(dev.logicalDevice, dev.queue, commandPool, cmd);
+    }
+}
+
+void FrameContext::createPathTracerAnalysisBuffers(const VulkanDevice &dev)
+{
+    ptAnalysisCounterBuffers.clear();
+    ptAnalysisCounterMapped.clear();
+    ptAnalysisCounterBuffers.reserve(MAX_FRAMES_IN_FLIGHT);
+    ptAnalysisCounterMapped.reserve(MAX_FRAMES_IN_FLIGHT);
+
+    const vk::DeviceSize counterBufferSize = sizeof(Laphria::PathTracerAnalysisCounters);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VulkanUtils::VmaBuffer buffer{};
+        VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, counterBufferSize,
+                                  vk::BufferUsageFlagBits::eStorageBuffer,
+                                  vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                                  buffer);
+        ptAnalysisCounterMapped.push_back(buffer.memory.mapMemory(0, counterBufferSize));
+        std::memset(ptAnalysisCounterMapped.back(), 0, static_cast<size_t>(counterBufferSize));
+        ptAnalysisCounterBuffers.push_back(std::move(buffer));
     }
 }
 
