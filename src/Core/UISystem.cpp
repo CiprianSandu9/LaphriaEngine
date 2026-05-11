@@ -1123,7 +1123,19 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
                 pathTracerAnalysisSettings.cameraPath = static_cast<PathTracerBenchmarkCameraPath>(cameraPathIdx);
             }
 
-            const char *debugAovs[] = {"Final Color", "Reprojection Validity", "History Alpha", "Motion Magnitude", "Temporal Variance", "A-Trous Iteration"};
+            const char *debugAovs[] = {
+                "Final Color",
+                "Reprojection Validity",
+                "History Alpha",
+                "Motion Magnitude",
+                "Temporal Variance",
+                "A-Trous Iteration",
+                "Direct Lighting",
+                "Indirect Lighting",
+                "Sky Contribution",
+                "Throughput",
+                "Bounce Count",
+                "Shadow Visibility"};
             int debugAovIdx = static_cast<int>(pathTracerAnalysisSettings.debugAov);
             if (ImGui::Combo("Debug AOV", &debugAovIdx, debugAovs, IM_ARRAYSIZE(debugAovs))) {
                 pathTracerAnalysisSettings.debugAov = static_cast<PathTracerDebugAov>(debugAovIdx);

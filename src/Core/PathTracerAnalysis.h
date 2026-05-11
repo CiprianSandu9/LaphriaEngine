@@ -42,6 +42,21 @@ struct PathTracerRunScore
     std::string budgetResult;
 };
 
+struct PathTracerHistoryClampInput
+{
+    float neighborhoodMinLum = 0.0f;
+    float neighborhoodMaxLum = 0.0f;
+    float historyLum = 0.0f;
+    float previousMeanLum = 0.0f;
+    float previousVariance = 0.0f;
+};
+
+struct PathTracerHistoryClampResult
+{
+    float clampedHistoryLum = 0.0f;
+    float halfRange = 0.0f;
+};
+
 enum class PathTracerBacklogPriority
 {
     High = 0,
@@ -62,6 +77,7 @@ struct PathTracerBacklogItem
 std::vector<PathTracerSweepConfig> buildPathTracerBaselineSweepMatrix();
 PercentileTriplet                  computePercentiles(const std::vector<float> &samples);
 PathTracerRunScore                 scorePathTracerRun(const PathTracerScoreInput &input);
+PathTracerHistoryClampResult       computePathTracerHistoryClamp(const PathTracerHistoryClampInput &input);
 std::vector<PathTracerBacklogItem> buildDefaultFidelityBacklog(float rayTraceP95Ms,
                                                                float reprojectionP95Ms,
                                                                float denoiserP95Ms,

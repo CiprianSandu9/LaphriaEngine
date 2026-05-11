@@ -1079,6 +1079,7 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 
     ScenePushConstants rtPush{};
     rtPush.modelMatrix = glm::mat4(1.0f);
+    rtPush.padding2 = debugAov;
     commandBuffer.pushConstants<ScenePushConstants>(*pipelines.rayTracingPipelineLayout,
                                                     vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
                                                     0, rtPush);

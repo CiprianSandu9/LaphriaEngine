@@ -135,5 +135,7 @@ int main()
 	const bool okPtSweep = testPathTracerBaselineSweepMatrix();
 	const bool okPtPercentiles = testPathTracerPercentiles();
 	const bool okPtScore = testPathTracerScoreBudgetGate();
-	return (okTransform && okFrustum && okBroadphase && okPtSweep && okPtPercentiles && okPtScore) ? 0 : 1;
+	const bool okPtAovContract = testPathTracerDebugAovContract();
+	const bool okPtHistoryClamp = testPathTracerHistoryClampPreservesDimIndirectHistory();
+	return (okTransform && okFrustum && okBroadphase && okPtSweep && okPtPercentiles && okPtScore && okPtAovContract && okPtHistoryClamp) ? 0 : 1;
 }

@@ -23,6 +23,13 @@ struct DenoisePushConstants {
 };
 [[vk::push_constant]] DenoisePushConstants push;
 
+static const int DEBUG_AOV_PATH_DIRECT_LIGHTING   = 6;
+static const int DEBUG_AOV_PATH_INDIRECT_LIGHTING = 7;
+static const int DEBUG_AOV_PATH_SKY_CONTRIBUTION  = 8;
+static const int DEBUG_AOV_PATH_THROUGHPUT        = 9;
+static const int DEBUG_AOV_PATH_BOUNCE_COUNT      = 10;
+static const int DEBUG_AOV_PATH_SHADOW_VISIBILITY = 11;
+
 float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
 // A-Trous 5×5 kernel weights (separable gaussian approximation used in SVGF).
@@ -144,6 +151,15 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
             outColor = float3(v, v, v);
         } else if (push.debugAov == 5) {
             outColor = applyAcesTonemap(filtered, push.exposureScale);
+        } else if (push.debugAov == DEBUG_AOV_PATH_DIRECT_LIGHTING ||
+                   push.debugAov == DEBUG_AOV_PATH_INDIRECT_LIGHTING ||
+                   push.debugAov == DEBUG_AOV_PATH_SKY_CONTRIBUTION) {
+            float3 debugRaw = noisyColor[pixel].rgb;
+            outColor = applyAcesTonemap(debugRaw, push.exposureScale);
+        } else if (push.debugAov == DEBUG_AOV_PATH_THROUGHPUT ||
+                   push.debugAov == DEBUG_AOV_PATH_BOUNCE_COUNT ||
+                   push.debugAov == DEBUG_AOV_PATH_SHADOW_VISIBILITY) {
+            outColor = saturate(noisyColor[pixel].rgb);
         }
         finalOutput[pixel] = float4(outColor, 1.0);
     } else {

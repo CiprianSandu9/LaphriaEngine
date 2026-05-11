@@ -4,5 +4,7 @@
 bool testPathTracerBaselineSweepMatrix();
 bool testPathTracerPercentiles();
 bool testPathTracerScoreBudgetGate();
+bool testPathTracerDebugAovContract();
+bool testPathTracerHistoryClampPreservesDimIndirectHistory();
 
 #endif

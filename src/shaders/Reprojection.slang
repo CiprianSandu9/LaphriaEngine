@@ -97,7 +97,9 @@ void reprojectionMain(uint3 dispatchID : SV_DispatchThreadID)
 
             float histLum = luminance(histColor);
             float centerLum = 0.5 * (minLum + maxLum);
-            float halfRange = max(0.5 * (maxLum - minLum) * 1.1, 0.0001);
+            float baseHalfRange = max(0.5 * (maxLum - minLum) * 1.1, 0.0001);
+            float temporalHalfRange = min(max(prevMean, 0.0) + 2.0 * sigma, 0.08);
+            float halfRange = max(baseHalfRange, temporalHalfRange);
             float clampedHistLum = clamp(histLum, centerLum - halfRange, centerLum + halfRange);
             if (histLum > 0.0001) {
                 histColor *= clampedHistLum / histLum;

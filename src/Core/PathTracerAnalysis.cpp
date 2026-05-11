@@ -32,7 +32,7 @@ std::vector<PathTracerSweepConfig> buildPathTracerBaselineSweepMatrix()
 {
 	constexpr std::array<float, 3>     resolutionScales = {0.80f, 0.90f, 1.00f};
 	std::vector<PathTracerSweepConfig> matrix;
-	// 6 scales * 1 denoiser iterations * 3 unique temporal modes:
+	// 3 scales * 1 denoiser iteration * 3 unique temporal modes:
 	// - reprojection OFF (motion-aware flag is irrelevant)
 	// - reprojection ON + motion-aware OFF
 	// - reprojection ON + motion-aware ON
@@ -110,6 +110,25 @@ PathTracerRunScore scorePathTracerRun(const PathTracerScoreInput &input)
 	    .fidelityScore    = fidelityScore,
 	    .compositeScore   = compositeScore,
 	    .budgetResult     = budgetPass ? "PASS" : "FAIL"};
+}
+
+PathTracerHistoryClampResult computePathTracerHistoryClamp(const PathTracerHistoryClampInput &input)
+{
+	const float minLum = std::min(input.neighborhoodMinLum, input.neighborhoodMaxLum);
+	const float maxLum = std::max(input.neighborhoodMinLum, input.neighborhoodMaxLum);
+	const float centerLum = 0.5f * (minLum + maxLum);
+	const float baseHalfRange = std::max(0.5f * (maxLum - minLum) * 1.1f, 0.0001f);
+
+	const float previousMean = std::max(input.previousMeanLum, 0.0f);
+	const float sigma = std::sqrt(std::max(input.previousVariance, 0.0f));
+	const float temporalHalfRange = std::min(previousMean + 2.0f * sigma, 0.08f);
+	const float halfRange = std::max(baseHalfRange, temporalHalfRange);
+
+	const float lower = std::max(centerLum - halfRange, 0.0f);
+	const float upper = centerLum + halfRange;
+	return PathTracerHistoryClampResult{
+	    .clampedHistoryLum = std::clamp(std::max(input.historyLum, 0.0f), lower, upper),
+	    .halfRange = halfRange};
 }
 
 std::vector<PathTracerBacklogItem> buildDefaultFidelityBacklog(float rayTraceP95Ms,

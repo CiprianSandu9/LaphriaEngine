@@ -27,6 +27,15 @@ struct RayPayload {
 // Set 1 — global UBO
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 
+[[vk::push_constant]] ScenePushConstants push;
+
+static const int DEBUG_AOV_PATH_DIRECT_LIGHTING   = 6;
+static const int DEBUG_AOV_PATH_INDIRECT_LIGHTING = 7;
+static const int DEBUG_AOV_PATH_SKY_CONTRIBUTION  = 8;
+static const int DEBUG_AOV_PATH_THROUGHPUT        = 9;
+static const int DEBUG_AOV_PATH_BOUNCE_COUNT      = 10;
+static const int DEBUG_AOV_PATH_SHADOW_VISIBILITY = 11;
+
 [shader("raygeneration")]
 void main() {
     uint2  launchID   = DispatchRaysIndex().xy;
@@ -47,6 +56,12 @@ void main() {
     // ── Path tracing loop ──────────────────────────────────────────────────
     float3 radiance   = float3(0.0, 0.0, 0.0);
     float3 throughput = float3(1.0, 1.0, 1.0);
+    float3 debugDirectLighting = float3(0.0, 0.0, 0.0);
+    float3 debugIndirectLighting = float3(0.0, 0.0, 0.0);
+    float3 debugSkyContribution = float3(0.0, 0.0, 0.0);
+    float3 debugThroughput = float3(1.0, 1.0, 1.0);
+    float  debugShadowVisibility = 0.0;
+    int    debugBounceCount = 0;
 
     RayDesc ray;
     ray.Origin    = origin;
@@ -68,7 +83,12 @@ void main() {
 
         // Sky miss: accumulate background emission and terminate.
         if (payload.hitT < 0.0) {
-            radiance += throughput * payload.emission;
+            float3 skyContribution = throughput * payload.emission;
+            radiance += skyContribution;
+            debugSkyContribution += skyContribution;
+            if (bounce > 0) {
+                debugIndirectLighting += skyContribution;
+            }
             // Write sentinel G-Buffer values so sky pixels don't leave stale/garbage data
             // that would confuse the denoiser's edge-stopping functions.
             if (bounce == 0) {
@@ -81,7 +101,14 @@ void main() {
         }
 
         // Accumulate emissive contribution from the surface.
-        radiance += throughput * payload.emission;
+        float3 emissiveContribution = throughput * payload.emission;
+        radiance += emissiveContribution;
+        if (bounce == 0) {
+            debugDirectLighting += emissiveContribution;
+        } else {
+            debugIndirectLighting += emissiveContribution;
+        }
+        debugBounceCount = bounce + 1;
 
         float3 N2 = payload.worldNormal;
         float3 V2 = -ray.Direction;
@@ -128,7 +155,14 @@ void main() {
             float3 specular = (D * Fs * G) / max(4.0 * NdotV * NdotL, 0.0001);
 
             float shadowVisibility = (shadowPayload.hitT < 0.0) ? 1.0 : 0.0;
-            radiance += throughput * (diffuse + specular) * NdotL * SUN_RADIANCE * shadowVisibility;
+            float3 directContribution = throughput * (diffuse + specular) * NdotL * SUN_RADIANCE * shadowVisibility;
+            radiance += directContribution;
+            if (bounce == 0) {
+                debugDirectLighting += directContribution;
+                debugShadowVisibility = shadowVisibility;
+            } else {
+                debugIndirectLighting += directContribution;
+            }
         }
 
         // ── Primary-ray G-Buffer write (bounce 0 only) ─────────────────────
@@ -189,6 +223,7 @@ void main() {
         }
 
         throughput *= bsdfWeight / max(pdf, 0.0001);
+        debugThroughput = throughput;
 
         // Russian roulette: allow a few guaranteed bounces so enclosed spaces can collect
         // indirect light, then terminate stochastically based on path throughput.
@@ -207,5 +242,21 @@ void main() {
     }
 
     // Write noisy 1-SPP result — linear HDR, tone mapping is applied in the final A-Trous pass.
-    noisyColorOutput[launchID] = float4(radiance, 1.0);
+    float3 outputColor = radiance;
+    if (push.padding2 == DEBUG_AOV_PATH_DIRECT_LIGHTING) {
+        outputColor = debugDirectLighting;
+    } else if (push.padding2 == DEBUG_AOV_PATH_INDIRECT_LIGHTING) {
+        outputColor = debugIndirectLighting;
+    } else if (push.padding2 == DEBUG_AOV_PATH_SKY_CONTRIBUTION) {
+        outputColor = debugSkyContribution;
+    } else if (push.padding2 == DEBUG_AOV_PATH_THROUGHPUT) {
+        float throughputLum = dot(debugThroughput, float3(0.2126, 0.7152, 0.0722));
+        outputColor = float3(throughputLum, throughputLum, throughputLum);
+    } else if (push.padding2 == DEBUG_AOV_PATH_BOUNCE_COUNT) {
+        float bounceFraction = float(debugBounceCount) / float(MAX_BOUNCES);
+        outputColor = float3(bounceFraction, bounceFraction, bounceFraction);
+    } else if (push.padding2 == DEBUG_AOV_PATH_SHADOW_VISIBILITY) {
+        outputColor = float3(debugShadowVisibility, debugShadowVisibility, debugShadowVisibility);
+    }
+    noisyColorOutput[launchID] = float4(outputColor, 1.0);
 }

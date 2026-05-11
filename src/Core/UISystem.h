@@ -32,7 +32,13 @@ public:
         HistoryAlpha = 2,
         MotionMagnitude = 3,
         TemporalVariance = 4,
-        AtrousIteration = 5
+        AtrousIteration = 5,
+        PathDirectLighting = 6,
+        PathIndirectLighting = 7,
+        PathSkyContribution = 8,
+        PathThroughput = 9,
+        PathBounceCount = 10,
+        PathShadowVisibility = 11
     };
 
     enum class PathTracerQualityMode

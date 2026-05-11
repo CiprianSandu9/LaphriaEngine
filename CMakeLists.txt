@@ -234,6 +234,7 @@ target_compile_definitions(LaphriaEngineUnitTests PRIVATE
         GLM_FORCE_RADIANS
         GLM_ENABLE_EXPERIMENTAL
         GLM_FORCE_CXX11
+        LAPHRIA_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 target_link_libraries(LaphriaEngineUnitTests PRIVATE
         glm::glm
