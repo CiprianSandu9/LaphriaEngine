@@ -59,6 +59,12 @@ public:
         SkyBiased = 1
     };
 
+    enum class FirstHitProbeSamplingMode
+    {
+        CosineHemisphere = 0,
+        SunBounceGuided = 1
+    };
+
     struct PathTracerSettings
     {
         float                 resolutionScale = 1.0f;
@@ -69,6 +75,7 @@ public:
         bool                  blackEnvironment = false;
         bool                  applyFirstHitProbesToFinal = false;
         EnvironmentNeeSamplingMode environmentNeeSamplingMode = EnvironmentNeeSamplingMode::SkyBiased;
+        FirstHitProbeSamplingMode firstHitProbeSamplingMode = FirstHitProbeSamplingMode::CosineHemisphere;
         int                   firstHitDiffuseSamples = 1;
         float                 targetFrameMs = 16.6f;
         bool                  enableReprojection = true;
@@ -103,6 +110,13 @@ public:
         uint32_t pixelSampleCount = 0;
         uint32_t targetWallSampleCount = 0;
         float targetWallLuminanceAverage = 0.0f;
+        uint32_t firstHitProbeCount = 0;
+        uint32_t firstHitProbeSurfaceHitCount = 0;
+        uint32_t firstHitProbeSunVisibleCount = 0;
+        float firstHitProbeSurfaceHitRatio = 0.0f;
+        float firstHitProbeSunVisibleRatio = 0.0f;
+        float firstHitProbeContributionAverage = 0.0f;
+        float firstHitProbeSunVisibleContributionAverage = 0.0f;
         float cameraMotionFactor = 0.0f;
     };
 
@@ -211,6 +225,10 @@ private:
 
     void drawAssetBrowser(Scene &scene, ResourceManager &rm, vk::DescriptorSetLayout matLayout);
     void drawValidationPanel();
+    void drawPathTracerMainControls();
+    void drawPathTracerDebugLab();
+    void drawPathTracerBenchmarkControls();
+    void drawPathTracerStats();
 
     void refreshAssetCache();
 

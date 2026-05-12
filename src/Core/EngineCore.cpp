@@ -1087,6 +1087,7 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     rtPush.padding3 = (ui.pathTracerSettings.enableEnvironmentNEE ? 1 : 0) |
                       ((static_cast<int>(ui.pathTracerSettings.environmentNeeSamplingMode) & 0xFF) << 8) |
                       ((std::clamp(ui.pathTracerSettings.firstHitDiffuseSamples, 1, 8) & 0xFF) << 16) |
+                      ((static_cast<int>(ui.pathTracerSettings.firstHitProbeSamplingMode) & 0x3) << 26) |
                       (ui.pathTracerSettings.blackEnvironment ? PATH_TRACER_BLACK_ENVIRONMENT_BIT : 0) |
                       (ui.pathTracerSettings.applyFirstHitProbesToFinal ? PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT : 0);
     commandBuffer.pushConstants<ScenePushConstants>(*pipelines.rayTracingPipelineLayout,
@@ -1461,6 +1462,19 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
             ? static_cast<float>(counters->targetWallLuminanceSum) /
                   (static_cast<float>(counters->targetWallSampleCount) * 64.0f)
             : 0.0f;
+    ui.pathTracerPerfStats.firstHitProbeCount = counters->firstHitProbeCount;
+    ui.pathTracerPerfStats.firstHitProbeSurfaceHitCount = counters->firstHitProbeSurfaceHitCount;
+    ui.pathTracerPerfStats.firstHitProbeSunVisibleCount = counters->firstHitProbeSunVisibleCount;
+    ui.pathTracerPerfStats.firstHitProbeContributionAverage =
+        (counters->firstHitProbeCount > 0)
+            ? static_cast<float>(counters->firstHitProbeContributionSum) /
+                  (static_cast<float>(counters->firstHitProbeCount) * 64.0f)
+            : 0.0f;
+    ui.pathTracerPerfStats.firstHitProbeSunVisibleContributionAverage =
+        (counters->firstHitProbeSunVisibleCount > 0)
+            ? static_cast<float>(counters->firstHitProbeSunVisibleContributionSum) /
+                  (static_cast<float>(counters->firstHitProbeSunVisibleCount) * 64.0f)
+            : 0.0f;
 
     const float historyTotal = static_cast<float>(counters->historyAcceptedCount + counters->historyRejectedCount);
     ui.pathTracerPerfStats.historyAcceptanceRatio = (historyTotal > 0.0f) ? static_cast<float>(counters->historyAcceptedCount) / historyTotal : 0.0f;
@@ -1469,6 +1483,11 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
     const float pixelTotal = static_cast<float>(std::max(counters->pixelCount, 1u));
     ui.pathTracerPerfStats.skyHitRatio = static_cast<float>(counters->skyHitCount) / pixelTotal;
     ui.pathTracerPerfStats.fireflyClampRatio = static_cast<float>(counters->fireflyClampCount) / pixelTotal;
+    const float firstHitProbeTotal = static_cast<float>(std::max(counters->firstHitProbeCount, 1u));
+    ui.pathTracerPerfStats.firstHitProbeSurfaceHitRatio =
+        static_cast<float>(counters->firstHitProbeSurfaceHitCount) / firstHitProbeTotal;
+    ui.pathTracerPerfStats.firstHitProbeSunVisibleRatio =
+        static_cast<float>(counters->firstHitProbeSunVisibleCount) / firstHitProbeTotal;
 
     auto &analysis = ui.pathTracerAnalysisSettings;
     if (!(analysis.enableAnalysisMode && analysis.benchmarkActive && analysis.runBaselineSweep)) {

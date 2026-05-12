@@ -155,6 +155,12 @@ struct PathTracerAnalysisCounters
 	uint32_t targetWallSampleCount = 0;
 	uint32_t targetWallLuminanceSum = 0;
 	uint32_t _pad2 = 0;
+	uint32_t firstHitProbeCount = 0;
+	uint32_t firstHitProbeSurfaceHitCount = 0;
+	uint32_t firstHitProbeSunVisibleCount = 0;
+	uint32_t firstHitProbeContributionSum = 0;
+	uint32_t firstHitProbeSunVisibleContributionSum = 0;
+	uint32_t _pad3[3] = {};
 };
 
 struct SkinningPushConstants

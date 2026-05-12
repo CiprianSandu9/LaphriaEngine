@@ -1044,6 +1044,174 @@ bool UISystem::isDescendant(const SceneNode::Ptr &node, const SceneNode::Ptr &ca
     return false;
 }
 
+void UISystem::drawPathTracerMainControls() {
+    ImGui::SliderFloat("Resolution Scale", &pathTracerSettings.resolutionScale, 0.5f, 1.0f, "%.2f");
+    ImGui::SliderInt("Denoiser Iterations", &pathTracerSettings.denoiserIterations, 1, 5);
+
+    const char *qualityModes[] = {"Manual", "Auto Balanced", "Auto Aggressive"};
+    int qualityMode = static_cast<int>(pathTracerSettings.qualityMode);
+    if (ImGui::Combo("Quality Mode", &qualityMode, qualityModes, IM_ARRAYSIZE(qualityModes))) {
+        pathTracerSettings.qualityMode = static_cast<PathTracerQualityMode>(qualityMode);
+    }
+
+    ImGui::Checkbox("Reduce Secondary Effects", &pathTracerSettings.reduceSecondaryEffects);
+    ImGui::DragFloat("Target Frame (ms)", &pathTracerSettings.targetFrameMs, 0.1f, 8.0f, 40.0f, "%.2f");
+
+    ImGui::Separator();
+    ImGui::Text("Temporal Filtering:");
+    ImGui::Checkbox("Enable Reprojection", &pathTracerSettings.enableReprojection);
+    ImGui::Checkbox("Enable Denoiser", &pathTracerSettings.enableDenoiser);
+    ImGui::Checkbox("Enable Motion-Aware Accumulation", &pathTracerSettings.enableMotionAwareAccumulation);
+    ImGui::SliderFloat("Motion Alpha Min", &pathTracerSettings.motionAlphaMin, 0.05f, 0.40f, "%.2f");
+    ImGui::SliderFloat("Motion Alpha Max", &pathTracerSettings.motionAlphaMax, 0.20f, 1.00f, "%.2f");
+    ImGui::SliderFloat("History Reset Motion Threshold", &pathTracerSettings.historyResetMotionThreshold, 0.25f, 10.0f, "%.2f");
+}
+
+void UISystem::drawPathTracerDebugLab() {
+    if (!ImGui::CollapsingHeader("Path Tracer Debug Lab", ImGuiTreeNodeFlags_DefaultOpen)) {
+        return;
+    }
+
+    ImGui::Checkbox("Enable Analysis Mode", &pathTracerAnalysisSettings.enableAnalysisMode);
+    ImGui::Checkbox("Environment NEE", &pathTracerSettings.enableEnvironmentNEE);
+    ImGui::Checkbox("Black Environment", &pathTracerSettings.blackEnvironment);
+    ImGui::Checkbox("Apply First-Hit Probes", &pathTracerSettings.applyFirstHitProbesToFinal);
+
+    const char *envNeeSamplingModes[] = {"Cosine Hemisphere", "Sky Biased"};
+    int envNeeSamplingMode = static_cast<int>(pathTracerSettings.environmentNeeSamplingMode);
+    if (ImGui::Combo("Env NEE Sampling", &envNeeSamplingMode, envNeeSamplingModes, IM_ARRAYSIZE(envNeeSamplingModes))) {
+        pathTracerSettings.environmentNeeSamplingMode = static_cast<EnvironmentNeeSamplingMode>(envNeeSamplingMode);
+    }
+    const char *firstHitProbeSamplingModes[] = {"Cosine Hemisphere", "Sun-Bounce Guided"};
+    int firstHitProbeSamplingMode = static_cast<int>(pathTracerSettings.firstHitProbeSamplingMode);
+    if (ImGui::Combo("First-Hit Probe Sampling", &firstHitProbeSamplingMode,
+                     firstHitProbeSamplingModes, IM_ARRAYSIZE(firstHitProbeSamplingModes))) {
+        pathTracerSettings.firstHitProbeSamplingMode =
+            static_cast<FirstHitProbeSamplingMode>(firstHitProbeSamplingMode);
+    }
+    ImGui::SliderInt("First-Hit Diffuse Samples", &pathTracerSettings.firstHitDiffuseSamples, 1, 8);
+
+    if (ImGui::Button("Load Indirect Bounce Test Scene")) {
+        pathTracerAnalysisSettings.loadIndirectBounceTestScene = true;
+        pathTracerAnalysisSettings.enableAnalysisMode = true;
+    }
+
+    const char *debugAovs[] = {
+        "Final Color",
+        "Reprojection Validity",
+        "History Alpha",
+        "Motion Magnitude",
+        "Temporal Variance",
+        "A-Trous Iteration",
+        "Raw Final Color",
+        "Direct Lighting",
+        "Indirect Lighting",
+        "Sky Contribution",
+        "Throughput",
+        "Bounce Count",
+        "Shadow Visibility",
+        "Environment NEE Contribution",
+        "First-Hit Bounce Contribution",
+        "Secondary Direct Sun Contribution",
+        "Baseline Continuation Contribution"};
+    int debugAovIdx = static_cast<int>(pathTracerAnalysisSettings.debugAov);
+    if (ImGui::Combo("Debug AOV", &debugAovIdx, debugAovs, IM_ARRAYSIZE(debugAovs))) {
+        pathTracerAnalysisSettings.debugAov = static_cast<PathTracerDebugAov>(debugAovIdx);
+    }
+
+    ImGui::SliderInt("Debug A-Trous Iteration", &pathTracerAnalysisSettings.debugAtrousIteration, 0, 4);
+    ImGui::Text("Target Wall Avg Luma: %.5f (%u px)",
+                pathTracerPerfStats.targetWallLuminanceAverage,
+                pathTracerPerfStats.targetWallSampleCount);
+    ImGui::Text("First-Hit Probe Rays: %u", pathTracerPerfStats.firstHitProbeCount);
+    ImGui::Text("First-Hit Probe Surface Hits: %u (%.2f%%)",
+                pathTracerPerfStats.firstHitProbeSurfaceHitCount,
+                pathTracerPerfStats.firstHitProbeSurfaceHitRatio * 100.0f);
+    ImGui::Text("First-Hit Probe Sun Visible: %u (%.2f%%)",
+                pathTracerPerfStats.firstHitProbeSunVisibleCount,
+                pathTracerPerfStats.firstHitProbeSunVisibleRatio * 100.0f);
+    ImGui::Text("First-Hit Probe Avg Luma: %.5f",
+                pathTracerPerfStats.firstHitProbeContributionAverage);
+    ImGui::Text("First-Hit Probe Sun-Visible Avg Luma: %.5f",
+                pathTracerPerfStats.firstHitProbeSunVisibleContributionAverage);
+}
+
+void UISystem::drawPathTracerBenchmarkControls() {
+    if (!ImGui::CollapsingHeader("PT Benchmark")) {
+        return;
+    }
+
+    ImGui::Checkbox("Lock Benchmark Scene (sponza_runtime.glb)", &pathTracerAnalysisSettings.lockBenchmarkScene);
+    ImGui::Checkbox("Benchmark Active", &pathTracerAnalysisSettings.benchmarkActive);
+    ImGui::Checkbox("Run Baseline Sweep", &pathTracerAnalysisSettings.runBaselineSweep);
+    ImGui::Checkbox("Run Physical Sanity Checks", &pathTracerAnalysisSettings.runPhysicalSanityChecks);
+    ImGui::Checkbox("Freeze Camera Input During Benchmark", &pathTracerAnalysisSettings.freezeCameraInputDuringBenchmark);
+    ImGui::Checkbox("Adaptive Sampling", &pathTracerAnalysisSettings.adaptiveSampling);
+    ImGui::SliderInt("Warmup Frames", &pathTracerAnalysisSettings.warmupFrames, 30, 600);
+    ImGui::SliderInt("Sample Frames", &pathTracerAnalysisSettings.sampleFrames, 60, 1200);
+    ImGui::SliderInt("Min Sample Frames", &pathTracerAnalysisSettings.minSampleFrames, 60, 600);
+    ImGui::SliderInt("Convergence Window", &pathTracerAnalysisSettings.convergenceWindowFrames, 20, 240);
+    ImGui::SliderFloat("P95 Convergence", &pathTracerAnalysisSettings.p95ConvergenceThreshold, 0.005f, 0.10f, "%.3f");
+    ImGui::SliderFloat("Visual Fidelity Score", &pathTracerAnalysisSettings.benchmarkVisualFidelityScore, 0.0f, 1.0f, "%.2f");
+
+    const char *cameraPaths[] = {"Static", "SlowPan", "FastPan", "Teleport"};
+    int cameraPathIdx = static_cast<int>(pathTracerAnalysisSettings.cameraPath);
+    if (ImGui::Combo("Camera Path", &cameraPathIdx, cameraPaths, IM_ARRAYSIZE(cameraPaths))) {
+        pathTracerAnalysisSettings.cameraPath = static_cast<PathTracerBenchmarkCameraPath>(cameraPathIdx);
+    }
+
+    ImGui::Text("Physical Sanity: %s",
+                pathTracerAnalysisSettings.physicalSanityPassed ? "PASS" :
+                (pathTracerAnalysisSettings.physicalSanityActive ? "RUNNING" : "IDLE"));
+    ImGui::Text("Sanity Drift Metric: %.4f", pathTracerAnalysisSettings.physicalSanityDriftMetric);
+    if (!pathTracerAnalysisSettings.recommendationManual.empty()) {
+        ImGui::Separator();
+        ImGui::TextWrapped("Recommended Manual: %s", pathTracerAnalysisSettings.recommendationManual.c_str());
+        ImGui::TextWrapped("Recommended Auto Balanced: %s", pathTracerAnalysisSettings.recommendationAutoBalanced.c_str());
+        ImGui::TextWrapped("Recommended Auto Aggressive: %s", pathTracerAnalysisSettings.recommendationAutoAggressive.c_str());
+        if (!pathTracerAnalysisSettings.backlogSummary.empty()) {
+            ImGui::TextWrapped("Backlog: %s", pathTracerAnalysisSettings.backlogSummary.c_str());
+        }
+    }
+    if (!pathTracerAnalysisSettings.benchmarkCsvOutputPath.empty()) {
+        ImGui::Separator();
+        ImGui::TextWrapped("Benchmark CSV: %s", pathTracerAnalysisSettings.benchmarkCsvOutputPath.c_str());
+    }
+    if (!pathTracerAnalysisSettings.backlogCsvOutputPath.empty()) {
+        ImGui::TextWrapped("Backlog CSV: %s", pathTracerAnalysisSettings.backlogCsvOutputPath.c_str());
+    }
+}
+
+void UISystem::drawPathTracerStats() {
+    if (!ImGui::CollapsingHeader("PT Stats", ImGuiTreeNodeFlags_DefaultOpen)) {
+        return;
+    }
+
+    ImGui::Text("TLAS: %.3f ms", pathTracerPerfStats.tlasBuildMs);
+    ImGui::Text("Ray Trace: %.3f ms", pathTracerPerfStats.rayTraceMs);
+    ImGui::Text("Reprojection: %.3f ms", pathTracerPerfStats.reprojectionMs);
+    ImGui::Text("Denoiser: %.3f ms", pathTracerPerfStats.denoiserMs);
+    ImGui::Text("Total: %.3f ms", pathTracerPerfStats.totalFrameMs);
+    ImGui::Text("Total P50/P95/P99: %.3f / %.3f / %.3f ms",
+                pathTracerPerfStats.totalFrameP50Ms,
+                pathTracerPerfStats.totalFrameP95Ms,
+                pathTracerPerfStats.totalFrameP99Ms);
+    ImGui::Text("RayTrace P95: %.3f ms | Denoiser P95: %.3f ms",
+                pathTracerPerfStats.rayTraceP95Ms,
+                pathTracerPerfStats.denoiserP95Ms);
+    ImGui::Text("Analysis Samples: %u", pathTracerPerfStats.analysisSampleCount);
+    ImGui::Text("History Accept/Reject: %.2f%% / %.2f%%",
+                pathTracerPerfStats.historyAcceptanceRatio * 100.0f,
+                pathTracerPerfStats.historyRejectionRatio * 100.0f);
+    ImGui::Text("Sky Hit Ratio: %.2f%% | Firefly Clamp Ratio: %.2f%%",
+                pathTracerPerfStats.skyHitRatio * 100.0f,
+                pathTracerPerfStats.fireflyClampRatio * 100.0f);
+    ImGui::Text("Target Wall Avg Luma: %.5f (%u px)",
+                pathTracerPerfStats.targetWallLuminanceAverage,
+                pathTracerPerfStats.targetWallSampleCount);
+    ImGui::Text("Camera Motion Factor: %.3f", pathTracerPerfStats.cameraMotionFactor);
+}
+
 void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
                              ResourceManager &rm, vk::DescriptorSetLayout matLayout) {
     ImGui::Begin("Engine Controls");
@@ -1082,130 +1250,13 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
             pathTracerSettings.motionAlphaMax = pathTracerSettings.motionAlphaMin;
         }
 
-        ImGui::SliderFloat("Resolution Scale", &pathTracerSettings.resolutionScale, 0.5f, 1.0f, "%.2f");
-        ImGui::SliderInt("Denoiser Iterations", &pathTracerSettings.denoiserIterations, 1, 5);
-        const char *qualityModes[] = {"Manual", "Auto Balanced", "Auto Aggressive"};
-        int qualityMode = static_cast<int>(pathTracerSettings.qualityMode);
-        if (ImGui::Combo("Quality Mode", &qualityMode, qualityModes, IM_ARRAYSIZE(qualityModes))) {
-            pathTracerSettings.qualityMode = static_cast<PathTracerQualityMode>(qualityMode);
-        }
-        ImGui::Checkbox("Reduce Secondary Effects", &pathTracerSettings.reduceSecondaryEffects);
-        ImGui::Checkbox("Environment NEE", &pathTracerSettings.enableEnvironmentNEE);
-        ImGui::Checkbox("Black Environment", &pathTracerSettings.blackEnvironment);
-        ImGui::Checkbox("Apply First-Hit Probes", &pathTracerSettings.applyFirstHitProbesToFinal);
-        const char *envNeeSamplingModes[] = {"Cosine Hemisphere", "Sky Biased"};
-        int envNeeSamplingMode = static_cast<int>(pathTracerSettings.environmentNeeSamplingMode);
-        if (ImGui::Combo("Env NEE Sampling", &envNeeSamplingMode, envNeeSamplingModes, IM_ARRAYSIZE(envNeeSamplingModes))) {
-            pathTracerSettings.environmentNeeSamplingMode = static_cast<EnvironmentNeeSamplingMode>(envNeeSamplingMode);
-        }
-        ImGui::SliderInt("First-Hit Diffuse Samples", &pathTracerSettings.firstHitDiffuseSamples, 1, 8);
-        ImGui::DragFloat("Target Frame (ms)", &pathTracerSettings.targetFrameMs, 0.1f, 8.0f, 40.0f, "%.2f");
-        
+        drawPathTracerMainControls();
         ImGui::Separator();
-        ImGui::Text("Debug Toggles:");
-        ImGui::Checkbox("Enable Reprojection", &pathTracerSettings.enableReprojection);
-        ImGui::Checkbox("Enable Denoiser", &pathTracerSettings.enableDenoiser);
-        ImGui::Checkbox("Enable Motion-Aware Accumulation", &pathTracerSettings.enableMotionAwareAccumulation);
-        ImGui::SliderFloat("Motion Alpha Min", &pathTracerSettings.motionAlphaMin, 0.05f, 0.40f, "%.2f");
-        ImGui::SliderFloat("Motion Alpha Max", &pathTracerSettings.motionAlphaMax, 0.20f, 1.00f, "%.2f");
-        ImGui::SliderFloat("History Reset Motion Threshold", &pathTracerSettings.historyResetMotionThreshold, 0.25f, 10.0f, "%.2f");
-
+        drawPathTracerDebugLab();
         ImGui::Separator();
-        ImGui::Text("PT Analysis:");
-        ImGui::Checkbox("Enable Analysis Mode", &pathTracerAnalysisSettings.enableAnalysisMode);
-        if (pathTracerAnalysisSettings.enableAnalysisMode) {
-            ImGui::Checkbox("Lock Benchmark Scene (sponza_runtime.glb)", &pathTracerAnalysisSettings.lockBenchmarkScene);
-            ImGui::Checkbox("Benchmark Active", &pathTracerAnalysisSettings.benchmarkActive);
-            ImGui::Checkbox("Run Baseline Sweep", &pathTracerAnalysisSettings.runBaselineSweep);
-            ImGui::Checkbox("Run Physical Sanity Checks", &pathTracerAnalysisSettings.runPhysicalSanityChecks);
-            if (ImGui::Button("Load Indirect Bounce Test Scene")) {
-                pathTracerAnalysisSettings.loadIndirectBounceTestScene = true;
-            }
-            ImGui::Checkbox("Freeze Camera Input During Benchmark", &pathTracerAnalysisSettings.freezeCameraInputDuringBenchmark);
-            ImGui::Checkbox("Adaptive Sampling", &pathTracerAnalysisSettings.adaptiveSampling);
-            ImGui::SliderInt("Warmup Frames", &pathTracerAnalysisSettings.warmupFrames, 30, 600);
-            ImGui::SliderInt("Sample Frames", &pathTracerAnalysisSettings.sampleFrames, 60, 1200);
-            ImGui::SliderInt("Min Sample Frames", &pathTracerAnalysisSettings.minSampleFrames, 60, 600);
-            ImGui::SliderInt("Convergence Window", &pathTracerAnalysisSettings.convergenceWindowFrames, 20, 240);
-            ImGui::SliderFloat("P95 Convergence", &pathTracerAnalysisSettings.p95ConvergenceThreshold, 0.005f, 0.10f, "%.3f");
-            ImGui::SliderFloat("Visual Fidelity Score", &pathTracerAnalysisSettings.benchmarkVisualFidelityScore, 0.0f, 1.0f, "%.2f");
-
-            const char *cameraPaths[] = {"Static", "SlowPan", "FastPan", "Teleport"};
-            int cameraPathIdx = static_cast<int>(pathTracerAnalysisSettings.cameraPath);
-            if (ImGui::Combo("Camera Path", &cameraPathIdx, cameraPaths, IM_ARRAYSIZE(cameraPaths))) {
-                pathTracerAnalysisSettings.cameraPath = static_cast<PathTracerBenchmarkCameraPath>(cameraPathIdx);
-            }
-
-            const char *debugAovs[] = {
-                "Final Color",
-                "Reprojection Validity",
-                "History Alpha",
-                "Motion Magnitude",
-                "Temporal Variance",
-                "A-Trous Iteration",
-                "Raw Final Color",
-                "Direct Lighting",
-                "Indirect Lighting",
-                "Sky Contribution",
-                "Throughput",
-                "Bounce Count",
-                "Shadow Visibility",
-                "Environment NEE Contribution",
-                "First-Hit Bounce Contribution",
-                "Secondary Direct Sun Contribution",
-                "Baseline Continuation Contribution"};
-            int debugAovIdx = static_cast<int>(pathTracerAnalysisSettings.debugAov);
-            if (ImGui::Combo("Debug AOV", &debugAovIdx, debugAovs, IM_ARRAYSIZE(debugAovs))) {
-                pathTracerAnalysisSettings.debugAov = static_cast<PathTracerDebugAov>(debugAovIdx);
-            }
-            ImGui::SliderInt("Debug A-Trous Iteration", &pathTracerAnalysisSettings.debugAtrousIteration, 0, 4);
-            ImGui::Text("Physical Sanity: %s",
-                        pathTracerAnalysisSettings.physicalSanityPassed ? "PASS" :
-                        (pathTracerAnalysisSettings.physicalSanityActive ? "RUNNING" : "IDLE"));
-            ImGui::Text("Sanity Drift Metric: %.4f", pathTracerAnalysisSettings.physicalSanityDriftMetric);
-            if (!pathTracerAnalysisSettings.recommendationManual.empty()) {
-                ImGui::Separator();
-                ImGui::TextWrapped("Recommended Manual: %s", pathTracerAnalysisSettings.recommendationManual.c_str());
-                ImGui::TextWrapped("Recommended Auto Balanced: %s", pathTracerAnalysisSettings.recommendationAutoBalanced.c_str());
-                ImGui::TextWrapped("Recommended Auto Aggressive: %s", pathTracerAnalysisSettings.recommendationAutoAggressive.c_str());
-                if (!pathTracerAnalysisSettings.backlogSummary.empty()) {
-                    ImGui::TextWrapped("Backlog: %s", pathTracerAnalysisSettings.backlogSummary.c_str());
-                }
-            }
-            if (!pathTracerAnalysisSettings.benchmarkCsvOutputPath.empty()) {
-                ImGui::Separator();
-                ImGui::TextWrapped("Benchmark CSV: %s", pathTracerAnalysisSettings.benchmarkCsvOutputPath.c_str());
-            }
-            if (!pathTracerAnalysisSettings.backlogCsvOutputPath.empty()) {
-                ImGui::TextWrapped("Backlog CSV: %s", pathTracerAnalysisSettings.backlogCsvOutputPath.c_str());
-            }
-        }
-
+        drawPathTracerBenchmarkControls();
         ImGui::Separator();
-        ImGui::Text("PT Timings (GPU):");
-        ImGui::Text("TLAS: %.3f ms", pathTracerPerfStats.tlasBuildMs);
-        ImGui::Text("Ray Trace: %.3f ms", pathTracerPerfStats.rayTraceMs);
-        ImGui::Text("Reprojection: %.3f ms", pathTracerPerfStats.reprojectionMs);
-        ImGui::Text("Denoiser: %.3f ms", pathTracerPerfStats.denoiserMs);
-        ImGui::Text("Total: %.3f ms", pathTracerPerfStats.totalFrameMs);
-        ImGui::Text("Total P50/P95/P99: %.3f / %.3f / %.3f ms",
-                    pathTracerPerfStats.totalFrameP50Ms,
-                    pathTracerPerfStats.totalFrameP95Ms,
-                    pathTracerPerfStats.totalFrameP99Ms);
-        ImGui::Text("RayTrace P95: %.3f ms | Denoiser P95: %.3f ms",
-                    pathTracerPerfStats.rayTraceP95Ms,
-                    pathTracerPerfStats.denoiserP95Ms);
-        ImGui::Text("Analysis Samples: %u", pathTracerPerfStats.analysisSampleCount);
-        ImGui::Text("History Accept/Reject: %.2f%% / %.2f%%",
-                    pathTracerPerfStats.historyAcceptanceRatio * 100.0f,
-                    pathTracerPerfStats.historyRejectionRatio * 100.0f);
-        ImGui::Text("Sky Hit Ratio: %.2f%% | Firefly Clamp Ratio: %.2f%%",
-                    pathTracerPerfStats.skyHitRatio * 100.0f,
-                    pathTracerPerfStats.fireflyClampRatio * 100.0f);
-        ImGui::Text("Target Wall Avg Luma: %.5f (%u px)",
-                    pathTracerPerfStats.targetWallLuminanceAverage,
-                    pathTracerPerfStats.targetWallSampleCount);
-        ImGui::Text("Camera Motion Factor: %.3f", pathTracerPerfStats.cameraMotionFactor);
+        drawPathTracerStats();
     }
 
     ImGui::Separator();
