@@ -131,6 +131,16 @@ PathTracerHistoryClampResult computePathTracerHistoryClamp(const PathTracerHisto
 	    .halfRange = halfRange};
 }
 
+float computePowerHeuristic(float sampleCountA, float pdfA, float sampleCountB, float pdfB)
+{
+	const float a = std::max(sampleCountA, 0.0f) * std::max(pdfA, 0.0f);
+	const float b = std::max(sampleCountB, 0.0f) * std::max(pdfB, 0.0f);
+	const float a2 = a * a;
+	const float b2 = b * b;
+	const float denom = a2 + b2;
+	return (denom > 0.0f) ? (a2 / denom) : 0.0f;
+}
+
 std::vector<PathTracerBacklogItem> buildDefaultFidelityBacklog(float rayTraceP95Ms,
                                                                float reprojectionP95Ms,
                                                                float denoiserP95Ms,

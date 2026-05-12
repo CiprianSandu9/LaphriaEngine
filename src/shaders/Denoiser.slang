@@ -23,12 +23,17 @@ struct DenoisePushConstants {
 };
 [[vk::push_constant]] DenoisePushConstants push;
 
-static const int DEBUG_AOV_PATH_DIRECT_LIGHTING   = 6;
-static const int DEBUG_AOV_PATH_INDIRECT_LIGHTING = 7;
-static const int DEBUG_AOV_PATH_SKY_CONTRIBUTION  = 8;
-static const int DEBUG_AOV_PATH_THROUGHPUT        = 9;
-static const int DEBUG_AOV_PATH_BOUNCE_COUNT      = 10;
-static const int DEBUG_AOV_PATH_SHADOW_VISIBILITY = 11;
+static const int DEBUG_AOV_PATH_RAW_FINAL_COLOR   = 6;
+static const int DEBUG_AOV_PATH_DIRECT_LIGHTING   = 7;
+static const int DEBUG_AOV_PATH_INDIRECT_LIGHTING = 8;
+static const int DEBUG_AOV_PATH_SKY_CONTRIBUTION  = 9;
+static const int DEBUG_AOV_PATH_THROUGHPUT        = 10;
+static const int DEBUG_AOV_PATH_BOUNCE_COUNT      = 11;
+static const int DEBUG_AOV_PATH_SHADOW_VISIBILITY = 12;
+static const int DEBUG_AOV_PATH_ENVIRONMENT_NEE   = 13;
+static const int DEBUG_AOV_PATH_FIRST_HIT_BOUNCE  = 14;
+static const int DEBUG_AOV_PATH_SECONDARY_SUN     = 15;
+static const int DEBUG_AOV_PATH_BASELINE_CONTINUATION = 16;
 
 float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
@@ -151,9 +156,14 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
             outColor = float3(v, v, v);
         } else if (push.debugAov == 5) {
             outColor = applyAcesTonemap(filtered, push.exposureScale);
-        } else if (push.debugAov == DEBUG_AOV_PATH_DIRECT_LIGHTING ||
+        } else if (push.debugAov == DEBUG_AOV_PATH_RAW_FINAL_COLOR ||
+                   push.debugAov == DEBUG_AOV_PATH_DIRECT_LIGHTING ||
                    push.debugAov == DEBUG_AOV_PATH_INDIRECT_LIGHTING ||
-                   push.debugAov == DEBUG_AOV_PATH_SKY_CONTRIBUTION) {
+                   push.debugAov == DEBUG_AOV_PATH_SKY_CONTRIBUTION ||
+                   push.debugAov == DEBUG_AOV_PATH_ENVIRONMENT_NEE ||
+                   push.debugAov == DEBUG_AOV_PATH_FIRST_HIT_BOUNCE ||
+                   push.debugAov == DEBUG_AOV_PATH_SECONDARY_SUN ||
+                   push.debugAov == DEBUG_AOV_PATH_BASELINE_CONTINUATION) {
             float3 debugRaw = noisyColor[pixel].rgb;
             outColor = applyAcesTonemap(debugRaw, push.exposureScale);
         } else if (push.debugAov == DEBUG_AOV_PATH_THROUGHPUT ||

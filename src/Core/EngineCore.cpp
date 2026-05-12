@@ -32,6 +32,8 @@ using namespace Laphria;
 namespace
 {
 constexpr uint32_t kPtTimestampQueryCountPerFrame = 8;
+constexpr int PATH_TRACER_BLACK_ENVIRONMENT_BIT = 1 << 24;
+constexpr int PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = 1 << 25;
 constexpr double kWindowTitleUpdateIntervalSeconds = 0.5;
 constexpr const char *kPtBenchmarkCsvFileName = "path_tracer_benchmark_results.csv";
 constexpr const char *kPtBacklogCsvFileName = "path_tracer_backlog.csv";
@@ -266,6 +268,7 @@ void EngineCore::mainLoop() {
         updatePerformanceWindowTitle(deltaTime);
 
         glfwPollEvents();
+        loadPathTracerIndirectBounceTestSceneIfRequested();
         loadPathTracerBenchmarkSceneIfNeeded();
         updatePathTracerBenchmark(deltaTime);
         updatePathTracerPhysicalSanityChecks(deltaTime);
@@ -1079,7 +1082,13 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 
     ScenePushConstants rtPush{};
     rtPush.modelMatrix = glm::mat4(1.0f);
+    rtPush.cascadeIndex = ptIndirectBounceTargetWallModelId;
     rtPush.padding2 = debugAov;
+    rtPush.padding3 = (ui.pathTracerSettings.enableEnvironmentNEE ? 1 : 0) |
+                      ((static_cast<int>(ui.pathTracerSettings.environmentNeeSamplingMode) & 0xFF) << 8) |
+                      ((std::clamp(ui.pathTracerSettings.firstHitDiffuseSamples, 1, 8) & 0xFF) << 16) |
+                      (ui.pathTracerSettings.blackEnvironment ? PATH_TRACER_BLACK_ENVIRONMENT_BIT : 0) |
+                      (ui.pathTracerSettings.applyFirstHitProbesToFinal ? PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT : 0);
     commandBuffer.pushConstants<ScenePushConstants>(*pipelines.rayTracingPipelineLayout,
                                                     vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
                                                     0, rtPush);
@@ -1446,6 +1455,12 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
     ui.pathTracerPerfStats.skyHitCount = counters->skyHitCount;
     ui.pathTracerPerfStats.fireflyClampCount = counters->fireflyClampCount;
     ui.pathTracerPerfStats.pixelSampleCount = counters->pixelCount;
+    ui.pathTracerPerfStats.targetWallSampleCount = counters->targetWallSampleCount;
+    ui.pathTracerPerfStats.targetWallLuminanceAverage =
+        (counters->targetWallSampleCount > 0)
+            ? static_cast<float>(counters->targetWallLuminanceSum) /
+                  (static_cast<float>(counters->targetWallSampleCount) * 64.0f)
+            : 0.0f;
 
     const float historyTotal = static_cast<float>(counters->historyAcceptedCount + counters->historyRejectedCount);
     ui.pathTracerPerfStats.historyAcceptanceRatio = (historyTotal > 0.0f) ? static_cast<float>(counters->historyAcceptedCount) / historyTotal : 0.0f;
@@ -1751,6 +1766,83 @@ void EngineCore::updatePathTracerPhysicalSanityChecks(float /*deltaTimeSeconds*/
             ui.exposure = 1.0f;
         }
     }
+}
+
+void EngineCore::loadPathTracerIndirectBounceTestSceneIfRequested()
+{
+    auto &analysis = ui.pathTracerAnalysisSettings;
+    if (!analysis.loadIndirectBounceTestScene) {
+        return;
+    }
+    analysis.loadIndirectBounceTestScene = false;
+
+    if (!scene || !resourceManager) {
+        return;
+    }
+
+    analysis.lockBenchmarkScene = false;
+    analysis.benchmarkActive = false;
+    analysis.runBaselineSweep = false;
+    analysis.runPhysicalSanityChecks = false;
+    analysis.physicalSanityActive = false;
+    ptBenchmarkSceneLoaded = false;
+    ptSanitySceneCreated = false;
+
+    scene->clearScene();
+    ptIndirectBounceTargetWallModelId = -1;
+
+    Laphria::MaterialData whiteDiffuse{};
+    whiteDiffuse.baseColorFactor = glm::vec4(0.92f, 0.92f, 0.90f, 1.0f);
+    whiteDiffuse.metallicFactor = 0.0f;
+    whiteDiffuse.roughnessFactor = 0.85f;
+    whiteDiffuse.emissiveFactor = glm::vec3(0.0f);
+
+    Laphria::MaterialData darkDiffuse{};
+    darkDiffuse.baseColorFactor = glm::vec4(0.22f, 0.22f, 0.22f, 1.0f);
+    darkDiffuse.metallicFactor = 0.0f;
+    darkDiffuse.roughnessFactor = 0.90f;
+    darkDiffuse.emissiveFactor = glm::vec3(0.0f);
+
+    auto addCube = [this](const char *name,
+                          const Laphria::MaterialData &material,
+                          const glm::vec3 &position,
+                          const glm::vec3 &scale) -> SceneNode::Ptr {
+        SceneNode::Ptr node = resourceManager->createCubeModel(1.0f, *pipelines.descriptorSetLayoutMaterial, material);
+        if (!node) {
+            return nullptr;
+        }
+        node->name = name;
+        node->setPosition(position);
+        node->setScale(scale);
+        scene->addNode(node, scene->getRoot());
+        return node;
+    };
+
+    addCube("PT_IndirectBounce_Floor", whiteDiffuse, glm::vec3(0.0f, -0.05f, -0.8f), glm::vec3(6.0f, 0.10f, 4.6f));
+    if (SceneNode::Ptr wall = addCube("PT_IndirectBounce_Wall", whiteDiffuse, glm::vec3(0.0f, 1.45f, -3.1f), glm::vec3(6.0f, 3.0f, 0.10f))) {
+        ptIndirectBounceTargetWallModelId = wall->modelId;
+    }
+    addCube("PT_IndirectBounce_Blocker", darkDiffuse, glm::vec3(-2.35f, 1.15f, -1.0f), glm::vec3(0.16f, 2.4f, 3.4f));
+    addCube("PT_IndirectBounce_Ceiling", whiteDiffuse, glm::vec3(0.0f, 2.55f, -1.55f), glm::vec3(6.0f, 0.12f, 3.1f));
+    addCube("PT_IndirectBounce_LeftWall", whiteDiffuse, glm::vec3(-3.05f, 1.25f, -1.55f), glm::vec3(0.12f, 2.6f, 3.1f));
+    addCube("PT_IndirectBounce_RightWall", whiteDiffuse, glm::vec3(3.05f, 1.25f, -1.55f), glm::vec3(0.12f, 2.6f, 3.1f));
+
+    ui.renderMode = RenderMode::PathTracer;
+    ui.exposure = 0.75f;
+    ui.lightDirection = glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f));
+    ui.pathTracerSettings.enableEnvironmentNEE = true;
+    ui.pathTracerSettings.blackEnvironment = true;
+    ui.pathTracerSettings.firstHitDiffuseSamples = 1;
+    ui.pathTracerAnalysisSettings.debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor;
+
+    camera.position = glm::vec3(0.0f, 1.05f, 2.25f);
+    camera.pitch = glm::radians(6.0f);
+    camera.yaw = 0.0f;
+    camera.processInput(0.0f, 0.0f, 0.0f);
+    ptPrevCameraPos = camera.position;
+    ptPrevPitch = camera.pitch;
+    ptPrevYaw = camera.yaw;
+    ptForceHistoryReset = true;
 }
 
 void EngineCore::writePathTracerBacklogCsv()

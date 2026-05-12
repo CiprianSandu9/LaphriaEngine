@@ -33,12 +33,17 @@ public:
         MotionMagnitude = 3,
         TemporalVariance = 4,
         AtrousIteration = 5,
-        PathDirectLighting = 6,
-        PathIndirectLighting = 7,
-        PathSkyContribution = 8,
-        PathThroughput = 9,
-        PathBounceCount = 10,
-        PathShadowVisibility = 11
+        PathRawFinalColor = 6,
+        PathDirectLighting = 7,
+        PathIndirectLighting = 8,
+        PathSkyContribution = 9,
+        PathThroughput = 10,
+        PathBounceCount = 11,
+        PathShadowVisibility = 12,
+        PathEnvironmentNeeContribution = 13,
+        PathFirstHitBounceContribution = 14,
+        PathSecondaryDirectSunContribution = 15,
+        PathBaselineContinuationContribution = 16
     };
 
     enum class PathTracerQualityMode
@@ -48,12 +53,23 @@ public:
         AutoAggressive = 2
     };
 
+    enum class EnvironmentNeeSamplingMode
+    {
+        CosineHemisphere = 0,
+        SkyBiased = 1
+    };
+
     struct PathTracerSettings
     {
         float                 resolutionScale = 1.0f;
         int                   denoiserIterations = 1;
         PathTracerQualityMode qualityMode = PathTracerQualityMode::Manual;
         bool                  reduceSecondaryEffects = false;
+        bool                  enableEnvironmentNEE = true;
+        bool                  blackEnvironment = false;
+        bool                  applyFirstHitProbesToFinal = false;
+        EnvironmentNeeSamplingMode environmentNeeSamplingMode = EnvironmentNeeSamplingMode::SkyBiased;
+        int                   firstHitDiffuseSamples = 1;
         float                 targetFrameMs = 16.6f;
         bool                  enableReprojection = true;
         bool                  enableDenoiser = true;
@@ -85,15 +101,18 @@ public:
         uint32_t skyHitCount = 0;
         uint32_t fireflyClampCount = 0;
         uint32_t pixelSampleCount = 0;
+        uint32_t targetWallSampleCount = 0;
+        float targetWallLuminanceAverage = 0.0f;
         float cameraMotionFactor = 0.0f;
     };
 
     struct PathTracerAnalysisSettings
     {
         bool                         enableAnalysisMode = false;
-        bool                         lockBenchmarkScene = true;
+        bool                         lockBenchmarkScene = false;
         bool                         benchmarkActive = false;
         bool                         runBaselineSweep = false;
+        bool                         loadIndirectBounceTestScene = false;
         bool                         freezeCameraInputDuringBenchmark = true;
         PathTracerBenchmarkCameraPath cameraPath = PathTracerBenchmarkCameraPath::SlowPan;
         bool                         adaptiveSampling = true;

@@ -78,6 +78,8 @@ std::vector<PathTracerSweepConfig> buildPathTracerBaselineSweepMatrix();
 PercentileTriplet                  computePercentiles(const std::vector<float> &samples);
 PathTracerRunScore                 scorePathTracerRun(const PathTracerScoreInput &input);
 PathTracerHistoryClampResult       computePathTracerHistoryClamp(const PathTracerHistoryClampInput &input);
+float                              computePowerHeuristic(float sampleCountA, float pdfA,
+                                                         float sampleCountB, float pdfB);
 std::vector<PathTracerBacklogItem> buildDefaultFidelityBacklog(float rayTraceP95Ms,
                                                                float reprojectionP95Ms,
                                                                float denoiserP95Ms,

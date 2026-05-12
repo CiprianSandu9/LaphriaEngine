@@ -136,6 +136,29 @@ bool testPathTracerHistoryClampPreservesDimIndirectHistory()
     return true;
 }
 
+bool testPathTracerPowerHeuristic()
+{
+    const float equal = Laphria::computePowerHeuristic(1.0f, 0.5f, 1.0f, 0.5f);
+    if (std::abs(equal - 0.5f) > 0.0001f) {
+        std::cerr << "equal MIS PDFs should produce 0.5 weight, got " << equal << "\n";
+        return false;
+    }
+
+    const float dominant = Laphria::computePowerHeuristic(1.0f, 0.8f, 1.0f, 0.2f);
+    if (std::abs(dominant - 0.9411765f) > 0.0001f) {
+        std::cerr << "dominant MIS PDF mismatch: " << dominant << "\n";
+        return false;
+    }
+
+    const float zeroOther = Laphria::computePowerHeuristic(1.0f, 0.5f, 1.0f, 0.0f);
+    if (std::abs(zeroOther - 1.0f) > 0.0001f) {
+        std::cerr << "zero competing PDF should produce full weight, got " << zeroOther << "\n";
+        return false;
+    }
+
+    return true;
+}
+
 bool testPathTracerDebugAovContract()
 {
     const std::filesystem::path sourceRoot =
@@ -147,21 +170,37 @@ bool testPathTracerDebugAovContract()
 
     const std::string uiHeader = readTextFile(sourceRoot / "src" / "Core" / "UISystem.h");
     const std::string uiSource = readTextFile(sourceRoot / "src" / "Core" / "UISystem.cpp");
+    const std::string engineHeader = readTextFile(sourceRoot / "src" / "Core" / "EngineCore.h");
+    const std::string engineSource = readTextFile(sourceRoot / "src" / "Core" / "EngineCore.cpp");
     const std::string raygen = readTextFile(sourceRoot / "src" / "shaders" / "Raygen.slang");
+    const std::string miss = readTextFile(sourceRoot / "src" / "shaders" / "Miss.slang");
     const std::string denoiser = readTextFile(sourceRoot / "src" / "shaders" / "Denoiser.slang");
 
-    if (uiHeader.empty() || uiSource.empty() || raygen.empty() || denoiser.empty()) {
+    if (uiHeader.empty() || uiSource.empty() || engineHeader.empty() || engineSource.empty() ||
+        raygen.empty() || miss.empty() || denoiser.empty()) {
         std::cerr << "failed to load path tracer debug AOV contract files\n";
         return false;
     }
 
     const char *requiredLabels[] = {
+        "Raw Final Color",
         "Direct Lighting",
         "Indirect Lighting",
         "Sky Contribution",
         "Throughput",
         "Bounce Count",
-        "Shadow Visibility"};
+        "Shadow Visibility",
+        "Environment NEE Contribution",
+        "First-Hit Bounce Contribution",
+        "Secondary Direct Sun Contribution",
+        "Baseline Continuation Contribution",
+        "Environment NEE",
+        "First-Hit Diffuse Samples",
+        "Env NEE Sampling",
+        "Black Environment",
+        "Apply First-Hit Probes",
+        "Target Wall Avg Luma",
+        "Load Indirect Bounce Test Scene"};
     for (const char *label : requiredLabels) {
         if (!containsText(uiSource, label)) {
             std::cerr << "missing path tracer debug AOV UI label: " << label << "\n";
@@ -170,12 +209,17 @@ bool testPathTracerDebugAovContract()
     }
 
     const char *requiredEnumValues[] = {
+        "PathRawFinalColor",
         "PathDirectLighting",
         "PathIndirectLighting",
         "PathSkyContribution",
         "PathThroughput",
         "PathBounceCount",
-        "PathShadowVisibility"};
+        "PathShadowVisibility",
+        "PathEnvironmentNeeContribution",
+        "PathFirstHitBounceContribution",
+        "PathSecondaryDirectSunContribution",
+        "PathBaselineContinuationContribution"};
     for (const char *enumValue : requiredEnumValues) {
         if (!containsText(uiHeader, enumValue)) {
             std::cerr << "missing path tracer debug AOV enum value: " << enumValue << "\n";
@@ -189,10 +233,50 @@ bool testPathTracerDebugAovContract()
         "debugSkyContribution",
         "debugThroughput",
         "debugBounceCount",
-        "debugShadowVisibility"};
+        "debugShadowVisibility",
+        "sampleEnvironmentNEE",
+        "debugEnvironmentNeeContribution",
+        "powerHeuristic",
+        "environmentSamplePdf",
+        "bsdfPdfForEnvironmentDirection",
+        "sampleSkyBiasedEnvironmentDirection",
+        "environmentNeeEnabledForBounce",
+        "ENV_NEE_SAMPLING_SKY_BIASED",
+        "firstHitDiffuseSampleCount",
+        "sampleFirstHitDiffuseBounce",
+        "debugFirstHitBounceContribution",
+        "debugSecondaryDirectSunContribution",
+        "debugBaselineContinuationContribution",
+        "recordTargetWallLuminance",
+        "PATH_TRACER_BLACK_ENVIRONMENT_BIT",
+        "PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT",
+        "applyFirstHitProbesToFinal",
+        "blackEnvironmentEnabled"};
     for (const char *symbol : requiredShaderSymbols) {
-        if (!containsText(raygen, symbol) && !containsText(denoiser, symbol)) {
+        if (!containsText(raygen, symbol) && !containsText(miss, symbol) && !containsText(denoiser, symbol)) {
             std::cerr << "missing path tracer debug AOV shader symbol: " << symbol << "\n";
+            return false;
+        }
+    }
+
+    const char *requiredEngineSymbols[] = {
+        "blackEnvironment",
+        "applyFirstHitProbesToFinal",
+        "targetWallLuminanceAverage",
+        "targetWallSampleCount",
+        "ptIndirectBounceTargetWallModelId",
+        "loadIndirectBounceTestScene",
+        "loadPathTracerIndirectBounceTestSceneIfRequested",
+        "PT_IndirectBounce_Floor",
+        "PT_IndirectBounce_Wall",
+        "PT_IndirectBounce_Blocker",
+        "PT_IndirectBounce_Ceiling",
+        "PT_IndirectBounce_LeftWall",
+        "PT_IndirectBounce_RightWall"};
+    for (const char *symbol : requiredEngineSymbols) {
+        if (!containsText(uiHeader, symbol) && !containsText(engineHeader, symbol) &&
+            !containsText(engineSource, symbol)) {
+            std::cerr << "missing path tracer indirect bounce scene symbol: " << symbol << "\n";
             return false;
         }
     }

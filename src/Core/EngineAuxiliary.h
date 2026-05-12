@@ -152,8 +152,8 @@ struct PathTracerAnalysisCounters
 	uint32_t historyRejectedCount = 0;
 	uint32_t fireflyClampCount = 0;
 	uint32_t skyHitCount = 0;
-	uint32_t _pad0 = 0;
-	uint32_t _pad1 = 0;
+	uint32_t targetWallSampleCount = 0;
+	uint32_t targetWallLuminanceSum = 0;
 	uint32_t _pad2 = 0;
 };
 

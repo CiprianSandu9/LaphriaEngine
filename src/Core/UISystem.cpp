@@ -1070,6 +1070,7 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         pathTracerSettings.motionAlphaMin = std::clamp(pathTracerSettings.motionAlphaMin, 0.05f, 0.40f);
         pathTracerSettings.motionAlphaMax = std::clamp(pathTracerSettings.motionAlphaMax, 0.20f, 1.00f);
         pathTracerSettings.historyResetMotionThreshold = std::clamp(pathTracerSettings.historyResetMotionThreshold, 0.25f, 10.0f);
+        pathTracerSettings.firstHitDiffuseSamples = std::clamp(pathTracerSettings.firstHitDiffuseSamples, 1, 8);
         pathTracerAnalysisSettings.warmupFrames = std::clamp(pathTracerAnalysisSettings.warmupFrames, 30, 600);
         pathTracerAnalysisSettings.sampleFrames = std::clamp(pathTracerAnalysisSettings.sampleFrames, 60, 1200);
         pathTracerAnalysisSettings.minSampleFrames = std::clamp(pathTracerAnalysisSettings.minSampleFrames, 60, pathTracerAnalysisSettings.sampleFrames);
@@ -1089,6 +1090,15 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
             pathTracerSettings.qualityMode = static_cast<PathTracerQualityMode>(qualityMode);
         }
         ImGui::Checkbox("Reduce Secondary Effects", &pathTracerSettings.reduceSecondaryEffects);
+        ImGui::Checkbox("Environment NEE", &pathTracerSettings.enableEnvironmentNEE);
+        ImGui::Checkbox("Black Environment", &pathTracerSettings.blackEnvironment);
+        ImGui::Checkbox("Apply First-Hit Probes", &pathTracerSettings.applyFirstHitProbesToFinal);
+        const char *envNeeSamplingModes[] = {"Cosine Hemisphere", "Sky Biased"};
+        int envNeeSamplingMode = static_cast<int>(pathTracerSettings.environmentNeeSamplingMode);
+        if (ImGui::Combo("Env NEE Sampling", &envNeeSamplingMode, envNeeSamplingModes, IM_ARRAYSIZE(envNeeSamplingModes))) {
+            pathTracerSettings.environmentNeeSamplingMode = static_cast<EnvironmentNeeSamplingMode>(envNeeSamplingMode);
+        }
+        ImGui::SliderInt("First-Hit Diffuse Samples", &pathTracerSettings.firstHitDiffuseSamples, 1, 8);
         ImGui::DragFloat("Target Frame (ms)", &pathTracerSettings.targetFrameMs, 0.1f, 8.0f, 40.0f, "%.2f");
         
         ImGui::Separator();
@@ -1108,6 +1118,9 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
             ImGui::Checkbox("Benchmark Active", &pathTracerAnalysisSettings.benchmarkActive);
             ImGui::Checkbox("Run Baseline Sweep", &pathTracerAnalysisSettings.runBaselineSweep);
             ImGui::Checkbox("Run Physical Sanity Checks", &pathTracerAnalysisSettings.runPhysicalSanityChecks);
+            if (ImGui::Button("Load Indirect Bounce Test Scene")) {
+                pathTracerAnalysisSettings.loadIndirectBounceTestScene = true;
+            }
             ImGui::Checkbox("Freeze Camera Input During Benchmark", &pathTracerAnalysisSettings.freezeCameraInputDuringBenchmark);
             ImGui::Checkbox("Adaptive Sampling", &pathTracerAnalysisSettings.adaptiveSampling);
             ImGui::SliderInt("Warmup Frames", &pathTracerAnalysisSettings.warmupFrames, 30, 600);
@@ -1130,12 +1143,17 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
                 "Motion Magnitude",
                 "Temporal Variance",
                 "A-Trous Iteration",
+                "Raw Final Color",
                 "Direct Lighting",
                 "Indirect Lighting",
                 "Sky Contribution",
                 "Throughput",
                 "Bounce Count",
-                "Shadow Visibility"};
+                "Shadow Visibility",
+                "Environment NEE Contribution",
+                "First-Hit Bounce Contribution",
+                "Secondary Direct Sun Contribution",
+                "Baseline Continuation Contribution"};
             int debugAovIdx = static_cast<int>(pathTracerAnalysisSettings.debugAov);
             if (ImGui::Combo("Debug AOV", &debugAovIdx, debugAovs, IM_ARRAYSIZE(debugAovs))) {
                 pathTracerAnalysisSettings.debugAov = static_cast<PathTracerDebugAov>(debugAovIdx);
@@ -1184,6 +1202,9 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         ImGui::Text("Sky Hit Ratio: %.2f%% | Firefly Clamp Ratio: %.2f%%",
                     pathTracerPerfStats.skyHitRatio * 100.0f,
                     pathTracerPerfStats.fireflyClampRatio * 100.0f);
+        ImGui::Text("Target Wall Avg Luma: %.5f (%u px)",
+                    pathTracerPerfStats.targetWallLuminanceAverage,
+                    pathTracerPerfStats.targetWallSampleCount);
         ImGui::Text("Camera Motion Factor: %.3f", pathTracerPerfStats.cameraMotionFactor);
     }
 

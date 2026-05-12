@@ -107,6 +107,7 @@ class EngineCore
 	SceneNode::Ptr ptSanityWhiteDiffuseNode;
 	SceneNode::Ptr ptSanityRoughMetalNode;
 	SceneNode::Ptr ptSanityEmissiveNode;
+	int            ptIndirectBounceTargetWallModelId{-1};
 	RenderMode lastSubmittedRenderMode{RenderMode::Rasterizer};
 	bool       renderModeInitialized{false};
 	std::chrono::high_resolution_clock::time_point lastFrameTime{};
@@ -158,6 +159,7 @@ class EngineCore
 	void resetPathTracerAnalysisCounters(uint32_t frameSlot);
 	void collectPathTracerAnalysisCounters(uint32_t frameSlot);
 	void ensurePathTracerSanityScene();
+	void loadPathTracerIndirectBounceTestSceneIfRequested();
 	void updatePathTracerPhysicalSanityChecks(float deltaTimeSeconds);
 	void writePathTracerBacklogCsv();
 	void updatePathTracerBenchmark(float deltaTimeSeconds);

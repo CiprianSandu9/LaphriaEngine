@@ -29,12 +29,227 @@ struct RayPayload {
 
 [[vk::push_constant]] ScenePushConstants push;
 
-static const int DEBUG_AOV_PATH_DIRECT_LIGHTING   = 6;
-static const int DEBUG_AOV_PATH_INDIRECT_LIGHTING = 7;
-static const int DEBUG_AOV_PATH_SKY_CONTRIBUTION  = 8;
-static const int DEBUG_AOV_PATH_THROUGHPUT        = 9;
-static const int DEBUG_AOV_PATH_BOUNCE_COUNT      = 10;
-static const int DEBUG_AOV_PATH_SHADOW_VISIBILITY = 11;
+static const int DEBUG_AOV_PATH_RAW_FINAL_COLOR   = 6;
+static const int DEBUG_AOV_PATH_DIRECT_LIGHTING   = 7;
+static const int DEBUG_AOV_PATH_INDIRECT_LIGHTING = 8;
+static const int DEBUG_AOV_PATH_SKY_CONTRIBUTION  = 9;
+static const int DEBUG_AOV_PATH_THROUGHPUT        = 10;
+static const int DEBUG_AOV_PATH_BOUNCE_COUNT      = 11;
+static const int DEBUG_AOV_PATH_SHADOW_VISIBILITY = 12;
+static const int DEBUG_AOV_PATH_ENVIRONMENT_NEE   = 13;
+static const int DEBUG_AOV_PATH_FIRST_HIT_BOUNCE  = 14;
+static const int DEBUG_AOV_PATH_SECONDARY_SUN     = 15;
+static const int DEBUG_AOV_PATH_BASELINE_CONTINUATION = 16;
+static const int ENV_NEE_SAMPLING_COSINE_HEMISPHERE = 0;
+static const int ENV_NEE_SAMPLING_SKY_BIASED = 1;
+static const int PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = 1 << 25;
+
+struct FirstHitDiffuseBounceResult {
+    float3 totalContribution;
+    float3 secondaryDirectSunContribution;
+};
+
+RayPayload makeVisibilityPayload()
+{
+    RayPayload payload;
+    payload.hitT        = 1.0;
+    payload.albedo      = float3(0.0, 0.0, 0.0);
+    payload.emission    = float3(0.0, 0.0, 0.0);
+    payload.worldNormal = float3(0.0, 1.0, 0.0);
+    payload.hitPos      = float3(0.0, 0.0, 0.0);
+    payload.roughness   = 1.0;
+    payload.metallic    = 0.0;
+    payload.F0          = float3(0.0, 0.0, 0.0);
+    payload.ao          = 1.0;
+    payload.instanceID  = 0;
+    return payload;
+}
+
+float powerHeuristic(float sampleCountA, float pdfA, float sampleCountB, float pdfB)
+{
+    float a = max(sampleCountA, 0.0) * max(pdfA, 0.0);
+    float b = max(sampleCountB, 0.0) * max(pdfB, 0.0);
+    float a2 = a * a;
+    float b2 = b * b;
+    float denom = a2 + b2;
+    return (denom > 0.0) ? (a2 / denom) : 0.0;
+}
+
+float environmentSamplePdf(float3 envDir, float3 N)
+{
+    return max(dot(N, envDir), 0.0) / PI;
+}
+
+float skyBiasedEnvironmentPdf(float3 envDir)
+{
+    return max(envDir.y, 0.0) / PI;
+}
+
+float environmentSamplePdf(float3 envDir, float3 N, int samplingMode)
+{
+    if (samplingMode == ENV_NEE_SAMPLING_SKY_BIASED) {
+        return skyBiasedEnvironmentPdf(envDir);
+    }
+    return environmentSamplePdf(envDir, N);
+}
+
+float bsdfPdfForEnvironmentDirection(float3 envDir, float3 N, float diffuseSelectionProbability)
+{
+    return max(diffuseSelectionProbability, 0.0) * environmentSamplePdf(envDir, N);
+}
+
+float3 sampleSkyBiasedEnvironmentDirection(float2 xi)
+{
+    return cosineSampleHemisphere(xi, float3(0.0, 1.0, 0.0));
+}
+
+bool environmentNeeEnabledForBounce(int bounce)
+{
+    return bounce == 0;
+}
+
+float pathTracerLuminance(float3 c)
+{
+    return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+
+void recordTargetWallLuminance(float3 color, uint primaryInstanceID, bool primarySurfaceHit)
+{
+    if (!primarySurfaceHit || push.cascadeIndex < 0) {
+        return;
+    }
+
+    uint primaryModelId = primaryInstanceID >> 14;
+    if (primaryModelId != uint(push.cascadeIndex)) {
+        return;
+    }
+
+    float luma = clamp(pathTracerLuminance(color), 0.0, 8.0);
+    uint scaledLuma = uint(luma * 64.0 + 0.5);
+    ptAnalysisCounters.InterlockedAdd(20, 1u);
+    ptAnalysisCounters.InterlockedAdd(24, scaledLuma);
+}
+
+float3 evaluateDirectSunContribution(float3 hitPos, float3 N, float3 V, float3 throughput, RayPayload payload)
+{
+    float3 Ldir = normalize(-ubo.lightDir.xyz);
+    float NdotL = max(dot(N, Ldir), 0.0);
+    if (NdotL <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    RayPayload shadowPayload = makeVisibilityPayload();
+    RayDesc shadowRay;
+    shadowRay.Origin    = hitPos + N * 0.002;
+    shadowRay.Direction = Ldir;
+    shadowRay.TMin      = 0.001;
+    shadowRay.TMax      = 10000.0;
+    TraceRay(tlas,
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+        0xFF, 0, 0, 0, shadowRay, shadowPayload);
+
+    float shadowVisibility = (shadowPayload.hitT < 0.0) ? 1.0 : 0.0;
+    if (shadowVisibility <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float3 H = normalize(Ldir + V);
+    float NdotV = max(dot(N, V), 0.0001);
+    float VdotH = max(dot(V, H), 0.0001);
+    float3 Fs = fresnelSchlick(VdotH, payload.F0);
+    float D = distributionGGX(N, H, payload.roughness);
+    float G = geometrySmith(N, V, Ldir, payload.roughness);
+    float3 kD = (float3(1.0, 1.0, 1.0) - Fs) * (1.0 - payload.metallic);
+    float3 diffuse = kD * payload.albedo / PI;
+    float3 specular = (D * Fs * G) / max(4.0 * NdotV * NdotL, 0.0001);
+    return throughput * (diffuse + specular) * NdotL * SUN_RADIANCE * shadowVisibility;
+}
+
+FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N, float3 V, RayPayload payload,
+                                                        int firstHitDiffuseSampleCount, inout uint rngState)
+{
+    FirstHitDiffuseBounceResult result;
+    result.totalContribution = float3(0.0, 0.0, 0.0);
+    result.secondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
+
+    int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
+    if (extraSampleCount <= 0) {
+        return result;
+    }
+
+    float3 F = fresnelSchlick(max(dot(N, V), 0.0), payload.F0);
+    float3 kD = (float3(1.0, 1.0, 1.0) - F) * (1.0 - payload.metallic);
+    float3 firstLegThroughput = kD * payload.albedo;
+
+    for (int i = 0; i < extraSampleCount; ++i) {
+        float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
+        float3 bounceDir = cosineSampleHemisphere(xi, N);
+
+        RayPayload bouncePayload;
+        bouncePayload.hitT = -1.0;
+        RayDesc bounceRay;
+        bounceRay.Origin    = hitPos + N * 0.002;
+        bounceRay.Direction = bounceDir;
+        bounceRay.TMin      = 0.001;
+        bounceRay.TMax      = 10000.0;
+        TraceRay(tlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, bounceRay, bouncePayload);
+
+        if (bouncePayload.hitT < 0.0) {
+            result.totalContribution += firstLegThroughput * bouncePayload.emission;
+        } else {
+            float3 secondaryV = -bounceDir;
+            float3 emissiveContribution = firstLegThroughput * bouncePayload.emission;
+            float3 secondaryDirect = evaluateDirectSunContribution(bouncePayload.hitPos,
+                                                                   bouncePayload.worldNormal,
+                                                                   secondaryV,
+                                                                   firstLegThroughput,
+                                                                   bouncePayload);
+            result.secondaryDirectSunContribution += secondaryDirect;
+            result.totalContribution += emissiveContribution + secondaryDirect;
+        }
+    }
+
+    result.totalContribution /= float(firstHitDiffuseSampleCount);
+    result.secondaryDirectSunContribution /= float(firstHitDiffuseSampleCount);
+    return result;
+}
+
+float3 sampleEnvironmentNEE(float3 hitPos, float3 N, float3 V, float3 throughput, RayPayload payload, float diffuseSelectionProbability, int samplingMode, inout uint rngState)
+{
+    float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
+    float3 envDir = (samplingMode == ENV_NEE_SAMPLING_SKY_BIASED)
+        ? sampleSkyBiasedEnvironmentDirection(xi)
+        : cosineSampleHemisphere(xi, N);
+    float envPdf = environmentSamplePdf(envDir, N, samplingMode);
+    float NdotEnv = max(dot(N, envDir), 0.0);
+    if (envPdf <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    if (NdotEnv <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    RayPayload envPayload = makeVisibilityPayload();
+    RayDesc envRay;
+    envRay.Origin    = hitPos + N * 0.002;
+    envRay.Direction = envDir;
+    envRay.TMin      = 0.001;
+    envRay.TMax      = 10000.0;
+    TraceRay(tlas,
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+        0xFF, 0, 0, 0, envRay, envPayload);
+
+    if (envPayload.hitT >= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float3 F = fresnelSchlick(max(dot(N, V), 0.0), payload.F0);
+    float3 kD = (float3(1.0, 1.0, 1.0) - F) * (1.0 - payload.metallic);
+    float3 diffuseBsdf = kD * payload.albedo / PI;
+    float bsdfPdf = bsdfPdfForEnvironmentDirection(envDir, N, diffuseSelectionProbability);
+    float misWeight = powerHeuristic(1.0, envPdf, 1.0, bsdfPdf);
+    return throughput * diffuseBsdf * envPayload.emission * NdotEnv * misWeight / max(envPdf, 0.0001);
+}
 
 [shader("raygeneration")]
 void main() {
@@ -60,8 +275,19 @@ void main() {
     float3 debugIndirectLighting = float3(0.0, 0.0, 0.0);
     float3 debugSkyContribution = float3(0.0, 0.0, 0.0);
     float3 debugThroughput = float3(1.0, 1.0, 1.0);
+    float3 debugEnvironmentNeeContribution = float3(0.0, 0.0, 0.0);
+    float3 debugFirstHitBounceContribution = float3(0.0, 0.0, 0.0);
+    float3 debugSecondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
+    float3 debugBaselineContinuationContribution = float3(0.0, 0.0, 0.0);
     float  debugShadowVisibility = 0.0;
     int    debugBounceCount = 0;
+    uint   primaryInstanceID = 0;
+    bool   primarySurfaceHit = false;
+    float  pendingSkyMissMisWeight = 1.0;
+    bool   environmentNeeEnabled = (push.padding3 & 0xFF) != 0;
+    bool   applyFirstHitProbesToFinal = (push.padding3 & PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT) != 0;
+    int    environmentNeeSamplingMode = (push.padding3 >> 8) & 0xFF;
+    int    firstHitDiffuseSampleCount = clamp((push.padding3 >> 16) & 0xFF, 1, 8);
 
     RayDesc ray;
     ray.Origin    = origin;
@@ -83,11 +309,12 @@ void main() {
 
         // Sky miss: accumulate background emission and terminate.
         if (payload.hitT < 0.0) {
-            float3 skyContribution = throughput * payload.emission;
+            float3 skyContribution = throughput * payload.emission * pendingSkyMissMisWeight;
             radiance += skyContribution;
             debugSkyContribution += skyContribution;
             if (bounce > 0) {
                 debugIndirectLighting += skyContribution;
+                debugBaselineContinuationContribution += skyContribution;
             }
             // Write sentinel G-Buffer values so sky pixels don't leave stale/garbage data
             // that would confuse the denoiser's edge-stopping functions.
@@ -107,11 +334,27 @@ void main() {
             debugDirectLighting += emissiveContribution;
         } else {
             debugIndirectLighting += emissiveContribution;
+            debugBaselineContinuationContribution += emissiveContribution;
         }
         debugBounceCount = bounce + 1;
+        if (bounce == 0) {
+            primarySurfaceHit = true;
+            primaryInstanceID = payload.instanceID;
+        }
 
         float3 N2 = payload.worldNormal;
         float3 V2 = -ray.Direction;
+
+        if (bounce == 0 && firstHitDiffuseSampleCount > 1) {
+            FirstHitDiffuseBounceResult firstHitBounce =
+                sampleFirstHitDiffuseBounce(payload.hitPos, N2, V2, payload, firstHitDiffuseSampleCount, rngState);
+            if (applyFirstHitProbesToFinal) {
+                radiance += firstHitBounce.totalContribution;
+                debugIndirectLighting += firstHitBounce.totalContribution;
+            }
+            debugFirstHitBounceContribution += firstHitBounce.totalContribution;
+            debugSecondaryDirectSunContribution += firstHitBounce.secondaryDirectSunContribution;
+        }
 
         // ── NEE: direct lighting from directional sun light ────────────────
         // ubo.lightDir points FROM the light TOWARD the scene, so negate for surface-to-light.
@@ -162,6 +405,7 @@ void main() {
                 debugShadowVisibility = shadowVisibility;
             } else {
                 debugIndirectLighting += directContribution;
+                debugBaselineContinuationContribution += directContribution;
             }
         }
 
@@ -193,6 +437,19 @@ void main() {
         float3 F       = fresnelSchlick(max(dot(N, V), 0.0), payload.F0);
         float  fAvg    = (F.r + F.g + F.b) / 3.0;
         float  specProb = clamp(fAvg + payload.metallic * 0.5, 0.1, 0.9);
+        float  diffuseSelectionProbability = 1.0 - specProb;
+
+        bool useEnvironmentNeeOnThisBounce = environmentNeeEnabled && environmentNeeEnabledForBounce(bounce);
+        if (useEnvironmentNeeOnThisBounce) {
+            float3 envNeeContribution = sampleEnvironmentNEE(payload.hitPos, N, V, throughput, payload,
+                                                             diffuseSelectionProbability, environmentNeeSamplingMode, rngState);
+            radiance += envNeeContribution;
+            debugIndirectLighting += envNeeContribution;
+            debugEnvironmentNeeContribution += envNeeContribution;
+            if (bounce > 0) {
+                debugBaselineContinuationContribution += envNeeContribution;
+            }
+        }
 
         float3 newDir;
         float  pdf;
@@ -203,6 +460,7 @@ void main() {
             newDir = ggxSampleDirection(xi, N, V, payload.roughness);
             float NdotL = max(dot(N, newDir), 0.0);
             if (NdotL <= 0.0) break;
+            pendingSkyMissMisWeight = 1.0;
 
             float3 H    = normalize(V + newDir);
             float  G    = geometrySmith(N, V, newDir, payload.roughness);
@@ -216,10 +474,13 @@ void main() {
             // Diffuse (cosine hemisphere) lobe — cosine factor cancels with PDF.
             newDir = cosineSampleHemisphere(xi, N);
             if (max(dot(N, newDir), 0.0) <= 0.0) break;
+            float bsdfEnvPdf = bsdfPdfForEnvironmentDirection(newDir, N, diffuseSelectionProbability);
+            float envPdf = environmentSamplePdf(newDir, N, environmentNeeSamplingMode);
+            pendingSkyMissMisWeight = useEnvironmentNeeOnThisBounce ? powerHeuristic(1.0, bsdfEnvPdf, 1.0, envPdf) : 1.0;
 
             float3 kD  = (float3(1.0, 1.0, 1.0) - F) * (1.0 - payload.metallic);
             bsdfWeight = kD * payload.albedo;
-            pdf        = 1.0 - specProb;
+            pdf        = diffuseSelectionProbability;
         }
 
         throughput *= bsdfWeight / max(pdf, 0.0001);
@@ -243,7 +504,9 @@ void main() {
 
     // Write noisy 1-SPP result — linear HDR, tone mapping is applied in the final A-Trous pass.
     float3 outputColor = radiance;
-    if (push.padding2 == DEBUG_AOV_PATH_DIRECT_LIGHTING) {
+    if (push.padding2 == DEBUG_AOV_PATH_RAW_FINAL_COLOR) {
+        outputColor = radiance;
+    } else if (push.padding2 == DEBUG_AOV_PATH_DIRECT_LIGHTING) {
         outputColor = debugDirectLighting;
     } else if (push.padding2 == DEBUG_AOV_PATH_INDIRECT_LIGHTING) {
         outputColor = debugIndirectLighting;
@@ -257,6 +520,15 @@ void main() {
         outputColor = float3(bounceFraction, bounceFraction, bounceFraction);
     } else if (push.padding2 == DEBUG_AOV_PATH_SHADOW_VISIBILITY) {
         outputColor = float3(debugShadowVisibility, debugShadowVisibility, debugShadowVisibility);
+    } else if (push.padding2 == DEBUG_AOV_PATH_ENVIRONMENT_NEE) {
+        outputColor = debugEnvironmentNeeContribution;
+    } else if (push.padding2 == DEBUG_AOV_PATH_FIRST_HIT_BOUNCE) {
+        outputColor = debugFirstHitBounceContribution;
+    } else if (push.padding2 == DEBUG_AOV_PATH_SECONDARY_SUN) {
+        outputColor = debugSecondaryDirectSunContribution;
+    } else if (push.padding2 == DEBUG_AOV_PATH_BASELINE_CONTINUATION) {
+        outputColor = debugBaselineContinuationContribution;
     }
+    recordTargetWallLuminance(outputColor, primaryInstanceID, primarySurfaceHit);
     noisyColorOutput[launchID] = float4(outputColor, 1.0);
 }

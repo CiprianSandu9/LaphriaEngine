@@ -3,6 +3,13 @@
 /build*
 /bin
 /docs
+/docs/architecture/*
+/tools
+!/tools/
+/tools/*
+!/tools/assets/
+/tools/assets/*
+!/tools/assets/prepare_gltf_assets.py
 
 ##############################
 #CLion specific

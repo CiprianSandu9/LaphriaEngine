@@ -6,5 +6,6 @@ bool testPathTracerPercentiles();
 bool testPathTracerScoreBudgetGate();
 bool testPathTracerDebugAovContract();
 bool testPathTracerHistoryClampPreservesDimIndirectHistory();
+bool testPathTracerPowerHeuristic();
 
 #endif

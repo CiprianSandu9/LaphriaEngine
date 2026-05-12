@@ -17,12 +17,17 @@ struct RayPayload {
 // Set 1 - global UBO (needed for lightDir -> sun direction).
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 
+[[vk::push_constant]] ScenePushConstants push;
+
+static const int PATH_TRACER_BLACK_ENVIRONMENT_BIT = 1 << 24;
+
 [shader("miss")]
 void main(inout RayPayload payload) {
     float3 rayDir = normalize(WorldRayDirection());
     float3 sunDir = normalize(-ubo.lightDir.xyz); // FROM scene TOWARD sun
+    bool blackEnvironmentEnabled = (push.padding3 & PATH_TRACER_BLACK_ENVIRONMENT_BIT) != 0;
 
-    payload.emission    = evalSkyColor(rayDir, sunDir);
+    payload.emission    = blackEnvironmentEnabled ? float3(0.0, 0.0, 0.0) : evalSkyColor(rayDir, sunDir);
     payload.hitT        = -1.0;   // Negative sentinel: ray escaped to sky, no surface hit.
     payload.albedo      = float3(0.0, 0.0, 0.0);
     payload.worldNormal = -rayDir;
