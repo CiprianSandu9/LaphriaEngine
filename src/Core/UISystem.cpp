@@ -1102,6 +1102,7 @@ void UISystem::drawPathTracerDebugLab() {
     ImGui::SliderFloat("Cache Reuse Weight", &pathTracerSettings.cacheReuseWeight, 0.0f, 1.0f, "%.3f");
     ImGui::SliderFloat("Cache MIS Strength", &pathTracerSettings.cacheMisStrength, 0.0f, 4.0f, "%.2f");
     ImGui::Checkbox("Adaptive Cache Refresh", &pathTracerSettings.adaptiveCacheRefresh);
+    ImGui::Checkbox("Targeted Diagnostic Refresh", &pathTracerSettings.targetedDiagnosticCacheRefresh);
     ImGui::SliderInt("Cache Refresh", &pathTracerSettings.cacheRefreshCandidateCount, 0, 4);
     ImGui::SliderInt("Cache Max Age", &pathTracerSettings.cacheMaxRecordAgeFrames, 1, 600);
 
@@ -1120,6 +1121,7 @@ void UISystem::drawPathTracerDebugLab() {
         pathTracerSettings.applyFirstHitProbesToFinal = true;
         pathTracerSettings.enableSunVisibleCandidateCache = true;
         pathTracerSettings.adaptiveCacheRefresh = true;
+        pathTracerSettings.targetedDiagnosticCacheRefresh = false;
         pathTracerSettings.environmentNeeSamplingMode = EnvironmentNeeSamplingMode::SkyBiased;
         pathTracerSettings.firstHitProbeSamplingMode = FirstHitProbeSamplingMode::CachedSecondaryReuse;
         pathTracerSettings.firstHitDiffuseSamples = 8;

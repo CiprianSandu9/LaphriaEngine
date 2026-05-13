@@ -64,6 +64,7 @@ static const uint ADAPTIVE_CACHE_REFRESH_BIT = 1u << 17;
 static const uint CACHE_WEIGHTING_MODE_SHIFT = 18;
 static const uint CACHE_REFRESH_COUNT_SHIFT = 20;
 static const uint CACHE_SPATIAL_TRIAL_COUNT_SHIFT = 23;
+static const uint TARGETED_DIAGNOSTIC_CACHE_REFRESH_BIT = 1u << 29;
 static const int CACHE_WEIGHTING_CALIBRATED = 0;
 static const int CACHE_WEIGHTING_MIS_APPROX = 1;
 static const float CACHED_REUSE_MAX_CONNECTION_DISTANCE = 3.5;
@@ -630,6 +631,16 @@ void refreshSunVisibleCandidateCache(float3 hitPos,
             }
         }
     }
+}
+
+void refreshDiagnosticTargetSunVisibleCandidateCache(float3 hitPos,
+                                                     float3 N,
+                                                     float3 V,
+                                                     RayPayload payload,
+                                                     uint currentCacheGeneration,
+                                                     inout uint rngState)
+{
+    refreshSunVisibleCandidateCache(hitPos, N, V, payload, 1, currentCacheGeneration, rngState);
 }
 
 FirstHitDiffuseBounceResult sampleFirstHitCandidateSunBounce(float3 hitPos, float3 N, float3 V, RayPayload payload,
@@ -1263,6 +1274,7 @@ void main() {
     bool   applyFirstHitProbesToFinal = (push.padding3 & PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT) != 0;
     bool   sunVisibleCandidateCacheEnabled = (packedPathTracerFlags & SUN_VISIBLE_CACHE_ENABLE_BIT) != 0;
     bool   adaptiveCacheRefresh = (packedPathTracerFlags & ADAPTIVE_CACHE_REFRESH_BIT) != 0;
+    bool   targetedDiagnosticCacheRefresh = (packedPathTracerFlags & TARGETED_DIAGNOSTIC_CACHE_REFRESH_BIT) != 0;
     int    environmentNeeSamplingMode = int((packedPathTracerFlags >> 3) & 0x3);
     int    firstHitDiffuseSampleCount = clamp(int((packedPathTracerFlags >> 5) & 0xF), 1, 8);
     int    candidateCount = int((packedPathTracerFlags >> 9) & 0xF) + 1;
@@ -1336,7 +1348,7 @@ void main() {
         if (bounce == 0 && firstHitDiffuseSampleCount > 1) {
             FirstHitDiffuseBounceResult firstHitBounce;
             if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CACHED_SECONDARY_REUSE) {
-                if (adaptiveCacheRefresh) {
+                if (sunVisibleCandidateCacheEnabled && adaptiveCacheRefresh) {
                     refreshSunVisibleCandidateCache(payload.hitPos, N2, V2, payload,
                                                     cacheRefreshCandidateCount, cacheGeneration,
                                                     rngState);
@@ -1344,6 +1356,12 @@ void main() {
                 bool currentHitIsDiagnosticTarget =
                     push.cascadeIndex >= 0 &&
                     ((payload.instanceID >> 14) == uint(push.cascadeIndex));
+                if (sunVisibleCandidateCacheEnabled &&
+                    targetedDiagnosticCacheRefresh &&
+                    currentHitIsDiagnosticTarget) {
+                    refreshDiagnosticTargetSunVisibleCandidateCache(payload.hitPos, N2, V2, payload,
+                                                                    cacheGeneration, rngState);
+                }
                 firstHitBounce = sampleCachedSunVisibleCandidate(payload.hitPos, N2, V2, payload,
                                                                  firstHitDiffuseSampleCount, cacheReuseWeight,
                                                                  cacheMisStrength,

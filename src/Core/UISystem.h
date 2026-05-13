@@ -100,6 +100,7 @@ public:
         PathTracerCacheWeightingMode cacheWeightingMode = PathTracerCacheWeightingMode::CalibratedWeight;
         float                 cacheMisStrength = 1.5f;
         bool                  adaptiveCacheRefresh = true;
+        bool                  targetedDiagnosticCacheRefresh = false;
         int                   cacheRefreshCandidateCount = 1;
         int                   cacheSpatialCandidateTrials = 8;
         int                   cacheMaxRecordAgeFrames = 180;

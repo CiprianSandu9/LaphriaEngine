@@ -1171,12 +1171,14 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     constexpr uint32_t CACHE_WEIGHTING_MODE_SHIFT = 18;
     constexpr uint32_t CACHE_REFRESH_COUNT_SHIFT = 20;
     constexpr uint32_t CACHE_SPATIAL_TRIAL_COUNT_SHIFT = 23;
+    constexpr uint32_t TARGETED_DIAGNOSTIC_CACHE_REFRESH_BIT = 1u << 29;
     const uint32_t pathTracerFlags =
         (ui.pathTracerSettings.enableEnvironmentNEE ? 1u : 0u) |
         (ui.pathTracerSettings.blackEnvironment ? static_cast<uint32_t>(PATH_TRACER_BLACK_ENVIRONMENT_BIT) : 0u) |
         (ui.pathTracerSettings.applyFirstHitProbesToFinal ? static_cast<uint32_t>(PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT) : 0u) |
         (ui.pathTracerSettings.enableSunVisibleCandidateCache ? SUN_VISIBLE_CACHE_ENABLE_BIT : 0u) |
         (ui.pathTracerSettings.adaptiveCacheRefresh ? ADAPTIVE_CACHE_REFRESH_BIT : 0u) |
+        (ui.pathTracerSettings.targetedDiagnosticCacheRefresh ? TARGETED_DIAGNOSTIC_CACHE_REFRESH_BIT : 0u) |
         ((static_cast<uint32_t>(ui.pathTracerSettings.environmentNeeSamplingMode) & 0x3u) << 3) |
         ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.firstHitDiffuseSamples, 1, 8)) & 0xFu) << 5) |
         ((candidateCountMinusOne & 0xFu) << 9) |
@@ -1893,24 +1895,18 @@ void EngineCore::startPathTracerGiCacheWeightSweep()
             .cacheMisStrength = 1.5f,
             .cacheWeightingMode = UISystem::PathTracerCacheWeightingMode::MisApproximation,
             .adaptiveCacheRefresh = true,
+            .targetedDiagnosticCacheRefresh = false,
             .cacheRefreshCandidateCount = 1,
             .cacheSpatialCandidateTrials = spatialTrials,
             .lightPreset = lightPreset};
     };
-
     ptExperimentRows = {
         makeReferenceRow("Hard / Candidate RIS Reference", UISystem::PathTracerDebugLightPreset::HardBounce),
-        makeCachedRow("Hard / Cached Reuse Trials 8", UISystem::PathTracerDebugLightPreset::HardBounce, 8),
-        makeCachedRow("Hard / Cached Reuse Trials 12", UISystem::PathTracerDebugLightPreset::HardBounce, 12),
-        makeCachedRow("Hard / Cached Reuse Trials 16", UISystem::PathTracerDebugLightPreset::HardBounce, 16),
+        makeCachedRow("Hard / Cached Reuse Chosen", UISystem::PathTracerDebugLightPreset::HardBounce, 8),
         makeReferenceRow("Medium / Candidate RIS Reference", UISystem::PathTracerDebugLightPreset::MediumBounce),
-        makeCachedRow("Medium / Cached Reuse Trials 8", UISystem::PathTracerDebugLightPreset::MediumBounce, 8),
-        makeCachedRow("Medium / Cached Reuse Trials 12", UISystem::PathTracerDebugLightPreset::MediumBounce, 12),
-        makeCachedRow("Medium / Cached Reuse Trials 16", UISystem::PathTracerDebugLightPreset::MediumBounce, 16),
+        makeCachedRow("Medium / Cached Reuse Chosen", UISystem::PathTracerDebugLightPreset::MediumBounce, 8),
         makeReferenceRow("Easy / Candidate RIS Reference", UISystem::PathTracerDebugLightPreset::EasyBounce),
-        makeCachedRow("Easy / Cached Reuse Trials 8", UISystem::PathTracerDebugLightPreset::EasyBounce, 8),
-        makeCachedRow("Easy / Cached Reuse Trials 12", UISystem::PathTracerDebugLightPreset::EasyBounce, 12),
-        makeCachedRow("Easy / Cached Reuse Trials 16", UISystem::PathTracerDebugLightPreset::EasyBounce, 16)};
+        makeCachedRow("Easy / Cached Reuse Chosen", UISystem::PathTracerDebugLightPreset::EasyBounce, 8)};
 
     ptExperimentSweepActive = !ptExperimentRows.empty();
     ptExperimentRowIndex = 0;
@@ -2005,10 +2001,11 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
     settings.firstHitCandidateCount = row.firstHitCandidateCount;
     settings.cacheReuseWeight = row.cacheReuseWeight;
     settings.cacheMisStrength = row.cacheMisStrength;
-        settings.cacheWeightingMode = row.cacheWeightingMode;
-        settings.adaptiveCacheRefresh = row.adaptiveCacheRefresh;
-        settings.cacheRefreshCandidateCount = row.cacheRefreshCandidateCount;
-        settings.cacheSpatialCandidateTrials = row.cacheSpatialCandidateTrials;
+    settings.cacheWeightingMode = row.cacheWeightingMode;
+    settings.adaptiveCacheRefresh = row.adaptiveCacheRefresh;
+    settings.targetedDiagnosticCacheRefresh = row.targetedDiagnosticCacheRefresh;
+    settings.cacheRefreshCandidateCount = row.cacheRefreshCandidateCount;
+    settings.cacheSpatialCandidateTrials = row.cacheSpatialCandidateTrials;
     analysis.debugLightPreset = row.lightPreset;
     analysis.applyDebugLightPreset = true;
     analysis.debugAov = row.debugAov;
@@ -2025,7 +2022,7 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow &row,
 {
     const double invSamples = (accum.sampleCount > 0) ? (1.0 / static_cast<double>(accum.sampleCount)) : 0.0;
     LOGI("PT Experiment Row: name=\"%s\", samples=%u, mode=%d, cacheWeight=%.3f, "
-         "misStrength=%.2f, weighting=%d, refresh=%s, refreshCandidates=%d, spatialTrials=%d, "
+         "misStrength=%.2f, weighting=%d, refresh=%s, targetRefresh=%s, refreshCandidates=%d, spatialTrials=%d, "
          "targetWallFinalLuma=%.5f, targetWallBaseLuma=%.5f, targetWallProbeAddedLuma=%.5f, "
          "firstHitProbeAvgLuma=%.5f, firstHitSunVisibleAvgLuma=%.5f, "
          "residentCachedCandidates=%.1f, cacheReuseAccepted=%.2f%%, cacheReuseAvgLuma=%.5f, "
@@ -2042,6 +2039,7 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow &row,
          row.cacheMisStrength,
          static_cast<int>(row.cacheWeightingMode),
          row.adaptiveCacheRefresh ? "on" : "off",
+         row.targetedDiagnosticCacheRefresh ? "on" : "off",
          row.cacheRefreshCandidateCount,
          row.cacheSpatialCandidateTrials,
          accum.targetWallLuma * invSamples,
@@ -2316,6 +2314,7 @@ void EngineCore::loadPathTracerIndirectBounceTestSceneIfRequested()
     ui.pathTracerSettings.enableEnvironmentNEE = true;
     ui.pathTracerSettings.blackEnvironment = true;
     ui.pathTracerSettings.firstHitDiffuseSamples = 1;
+    ui.pathTracerSettings.targetedDiagnosticCacheRefresh = false;
     ui.pathTracerSettings.cacheSpatialCandidateTrials = 8;
     ui.pathTracerAnalysisSettings.debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor;
 

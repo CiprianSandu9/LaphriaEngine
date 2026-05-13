@@ -104,6 +104,7 @@ class EngineCore
 		UISystem::PathTracerCacheWeightingMode cacheWeightingMode =
 		    UISystem::PathTracerCacheWeightingMode::CalibratedWeight;
 		bool adaptiveCacheRefresh = true;
+		bool targetedDiagnosticCacheRefresh = false;
 		bool enableSunVisibleCandidateCache = true;
 		bool clearCacheBeforeRow = true;
 		int cacheRefreshCandidateCount = 1;
