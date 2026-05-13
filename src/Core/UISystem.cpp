@@ -1082,7 +1082,12 @@ void UISystem::drawPathTracerDebugLab() {
     if (ImGui::Combo("Env NEE Sampling", &envNeeSamplingMode, envNeeSamplingModes, IM_ARRAYSIZE(envNeeSamplingModes))) {
         pathTracerSettings.environmentNeeSamplingMode = static_cast<EnvironmentNeeSamplingMode>(envNeeSamplingMode);
     }
-    const char *firstHitProbeSamplingModes[] = {"Cosine Hemisphere", "Sun-Bounce Guided"};
+    const char *firstHitProbeSamplingModes[] = {
+        "Cosine Hemisphere",
+        "Naive Sun Guide",
+        "Candidate Sun Bounce",
+        "Candidate Average Reference",
+        "Candidate RIS"};
     int firstHitProbeSamplingMode = static_cast<int>(pathTracerSettings.firstHitProbeSamplingMode);
     if (ImGui::Combo("First-Hit Probe Sampling", &firstHitProbeSamplingMode,
                      firstHitProbeSamplingModes, IM_ARRAYSIZE(firstHitProbeSamplingModes))) {
@@ -1090,9 +1095,20 @@ void UISystem::drawPathTracerDebugLab() {
             static_cast<FirstHitProbeSamplingMode>(firstHitProbeSamplingMode);
     }
     ImGui::SliderInt("First-Hit Diffuse Samples", &pathTracerSettings.firstHitDiffuseSamples, 1, 8);
+    ImGui::SliderInt("First-Hit Candidate Count", &pathTracerSettings.firstHitCandidateCount, 2, 16);
 
     if (ImGui::Button("Load Indirect Bounce Test Scene")) {
         pathTracerAnalysisSettings.loadIndirectBounceTestScene = true;
+        pathTracerAnalysisSettings.enableAnalysisMode = true;
+    }
+
+    const char *lightPresets[] = {"Hard Bounce", "Medium Bounce", "Easy Bounce"};
+    int lightPresetIdx = static_cast<int>(pathTracerAnalysisSettings.debugLightPreset);
+    if (ImGui::Combo("Light Preset", &lightPresetIdx, lightPresets, IM_ARRAYSIZE(lightPresets))) {
+        pathTracerAnalysisSettings.debugLightPreset = static_cast<PathTracerDebugLightPreset>(lightPresetIdx);
+    }
+    if (ImGui::Button("Apply Light Preset")) {
+        pathTracerAnalysisSettings.applyDebugLightPreset = true;
         pathTracerAnalysisSettings.enableAnalysisMode = true;
     }
 
@@ -1134,6 +1150,14 @@ void UISystem::drawPathTracerDebugLab() {
                 pathTracerPerfStats.firstHitProbeContributionAverage);
     ImGui::Text("First-Hit Probe Sun-Visible Avg Luma: %.5f",
                 pathTracerPerfStats.firstHitProbeSunVisibleContributionAverage);
+
+    if (ImGui::CollapsingHeader("Capture Checklist")) {
+        ImGui::TextWrapped("Record these values after the image stabilizes:");
+        ImGui::Text("Target Wall Avg Luma");
+        ImGui::Text("First-Hit Probe Sun Visible");
+        ImGui::Text("First-Hit Probe Sun-Visible Avg Luma");
+        ImGui::Text("First-Hit Probe Avg Luma");
+    }
 }
 
 void UISystem::drawPathTracerBenchmarkControls() {
@@ -1239,6 +1263,7 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         pathTracerSettings.motionAlphaMax = std::clamp(pathTracerSettings.motionAlphaMax, 0.20f, 1.00f);
         pathTracerSettings.historyResetMotionThreshold = std::clamp(pathTracerSettings.historyResetMotionThreshold, 0.25f, 10.0f);
         pathTracerSettings.firstHitDiffuseSamples = std::clamp(pathTracerSettings.firstHitDiffuseSamples, 1, 8);
+        pathTracerSettings.firstHitCandidateCount = std::clamp(pathTracerSettings.firstHitCandidateCount, 2, 16);
         pathTracerAnalysisSettings.warmupFrames = std::clamp(pathTracerAnalysisSettings.warmupFrames, 30, 600);
         pathTracerAnalysisSettings.sampleFrames = std::clamp(pathTracerAnalysisSettings.sampleFrames, 60, 1200);
         pathTracerAnalysisSettings.minSampleFrames = std::clamp(pathTracerAnalysisSettings.minSampleFrames, 60, pathTracerAnalysisSettings.sampleFrames);

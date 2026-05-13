@@ -44,7 +44,10 @@ static const int ENV_NEE_SAMPLING_COSINE_HEMISPHERE = 0;
 static const int ENV_NEE_SAMPLING_SKY_BIASED = 1;
 static const int FIRST_HIT_PROBE_SAMPLING_COSINE_HEMISPHERE = 0;
 static const int FIRST_HIT_PROBE_SAMPLING_SUN_BOUNCE_GUIDED = 1;
-static const int PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = 1 << 25;
+static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_SUN_BOUNCE = 2;
+static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_AVERAGE_REFERENCE = 3;
+static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_RIS = 4;
+static const int PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = 1 << 2;
 
 struct FirstHitDiffuseBounceResult {
     float3 totalContribution;
@@ -286,6 +289,257 @@ FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N,
     return result;
 }
 
+FirstHitDiffuseBounceResult sampleFirstHitCandidateSunBounce(float3 hitPos, float3 N, float3 V, RayPayload payload,
+                                                             int firstHitDiffuseSampleCount,
+                                                             int candidateCount,
+                                                             inout uint rngState)
+{
+    FirstHitDiffuseBounceResult result;
+    result.totalContribution = float3(0.0, 0.0, 0.0);
+    result.secondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
+
+    int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
+    if (extraSampleCount <= 0) {
+        return result;
+    }
+
+    candidateCount = clamp(candidateCount, 2, 16);
+
+    float3 F = fresnelSchlick(max(dot(N, V), 0.0), payload.F0);
+    float3 kD = (float3(1.0, 1.0, 1.0) - F) * (1.0 - payload.metallic);
+    float3 diffuseBsdf = kD * payload.albedo / PI;
+
+    for (int probe = 0; probe < extraSampleCount; ++probe) {
+        float3 bestTotal = float3(0.0, 0.0, 0.0);
+        float3 bestSecondarySun = float3(0.0, 0.0, 0.0);
+        float bestLuma = -1.0;
+        bool bestSurfaceHit = false;
+        bool bestSunVisible = false;
+
+        for (int c = 0; c < candidateCount; ++c) {
+            float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
+            float3 bounceDir = cosineSampleHemisphere(xi, N);
+            float NdotBounce = max(dot(N, bounceDir), 0.0);
+            float pdf = max(NdotBounce / PI, 0.0001);
+            float3 firstLegThroughput = diffuseBsdf * NdotBounce / pdf;
+
+            RayPayload bouncePayload;
+            bouncePayload.hitT = -1.0;
+            RayDesc bounceRay;
+            bounceRay.Origin = hitPos + N * 0.002;
+            bounceRay.Direction = bounceDir;
+            bounceRay.TMin = 0.001;
+            bounceRay.TMax = 10000.0;
+            TraceRay(tlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, bounceRay, bouncePayload);
+
+            float3 candidateTotal = float3(0.0, 0.0, 0.0);
+            float3 candidateSecondarySun = float3(0.0, 0.0, 0.0);
+            bool surfaceHit = bouncePayload.hitT >= 0.0;
+            bool sunVisible = false;
+
+            if (surfaceHit) {
+                float3 secondaryV = -bounceDir;
+                float3 emissiveContribution = firstLegThroughput * bouncePayload.emission;
+                candidateSecondarySun = evaluateDirectSunContribution(bouncePayload.hitPos,
+                                                                      bouncePayload.worldNormal,
+                                                                      secondaryV,
+                                                                      firstLegThroughput,
+                                                                      bouncePayload);
+                candidateTotal = emissiveContribution + candidateSecondarySun;
+                sunVisible = pathTracerLuminance(candidateSecondarySun) > 0.000001;
+            } else {
+                candidateTotal = firstLegThroughput * bouncePayload.emission;
+            }
+
+            float candidateLuma = pathTracerLuminance(candidateSecondarySun);
+            if (candidateLuma > bestLuma) {
+                bestLuma = candidateLuma;
+                bestTotal = candidateTotal;
+                bestSecondarySun = candidateSecondarySun;
+                bestSurfaceHit = surfaceHit;
+                bestSunVisible = sunVisible;
+            }
+        }
+
+        float3 weightedBestTotal = bestTotal / float(candidateCount);
+        float3 weightedBestSecondarySun = bestSecondarySun / float(candidateCount);
+        recordFirstHitProbeStats(bestSurfaceHit, bestSunVisible, weightedBestTotal);
+        result.totalContribution += weightedBestTotal;
+        result.secondaryDirectSunContribution += weightedBestSecondarySun;
+    }
+
+    result.totalContribution /= float(firstHitDiffuseSampleCount);
+    result.secondaryDirectSunContribution /= float(firstHitDiffuseSampleCount);
+    return result;
+}
+
+FirstHitDiffuseBounceResult sampleFirstHitCandidateAverageReference(float3 hitPos, float3 N, float3 V, RayPayload payload,
+                                                                    int firstHitDiffuseSampleCount,
+                                                                    int candidateCount,
+                                                                    inout uint rngState)
+{
+    FirstHitDiffuseBounceResult result;
+    result.totalContribution = float3(0.0, 0.0, 0.0);
+    result.secondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
+
+    int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
+    if (extraSampleCount <= 0) {
+        return result;
+    }
+
+    candidateCount = clamp(candidateCount, 2, 16);
+
+    float3 F = fresnelSchlick(max(dot(N, V), 0.0), payload.F0);
+    float3 kD = (float3(1.0, 1.0, 1.0) - F) * (1.0 - payload.metallic);
+    float3 diffuseBsdf = kD * payload.albedo / PI;
+
+    for (int probe = 0; probe < extraSampleCount; ++probe) {
+        float3 averagedTotal = float3(0.0, 0.0, 0.0);
+        float3 averagedSecondarySun = float3(0.0, 0.0, 0.0);
+        bool anySurfaceHit = false;
+        bool anySunVisible = false;
+
+        for (int c = 0; c < candidateCount; ++c) {
+            float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
+            float3 bounceDir = cosineSampleHemisphere(xi, N);
+            float NdotBounce = max(dot(N, bounceDir), 0.0);
+            float pdf = max(NdotBounce / PI, 0.0001);
+            float3 firstLegThroughput = diffuseBsdf * NdotBounce / pdf;
+
+            RayPayload bouncePayload;
+            bouncePayload.hitT = -1.0;
+            RayDesc bounceRay;
+            bounceRay.Origin = hitPos + N * 0.002;
+            bounceRay.Direction = bounceDir;
+            bounceRay.TMin = 0.001;
+            bounceRay.TMax = 10000.0;
+            TraceRay(tlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, bounceRay, bouncePayload);
+
+            float3 candidateTotal = float3(0.0, 0.0, 0.0);
+            float3 candidateSecondarySun = float3(0.0, 0.0, 0.0);
+            bool surfaceHit = bouncePayload.hitT >= 0.0;
+            bool sunVisible = false;
+
+            if (surfaceHit) {
+                float3 secondaryV = -bounceDir;
+                float3 emissiveContribution = firstLegThroughput * bouncePayload.emission;
+                candidateSecondarySun = evaluateDirectSunContribution(bouncePayload.hitPos,
+                                                                      bouncePayload.worldNormal,
+                                                                      secondaryV,
+                                                                      firstLegThroughput,
+                                                                      bouncePayload);
+                candidateTotal = emissiveContribution + candidateSecondarySun;
+                sunVisible = pathTracerLuminance(candidateSecondarySun) > 0.000001;
+            } else {
+                candidateTotal = firstLegThroughput * bouncePayload.emission;
+            }
+
+            averagedTotal += candidateTotal;
+            averagedSecondarySun += candidateSecondarySun;
+            anySurfaceHit = anySurfaceHit || surfaceHit;
+            anySunVisible = anySunVisible || sunVisible;
+        }
+
+        averagedTotal /= float(candidateCount);
+        averagedSecondarySun /= float(candidateCount);
+        recordFirstHitProbeStats(anySurfaceHit, anySunVisible, averagedTotal);
+        result.totalContribution += averagedTotal;
+        result.secondaryDirectSunContribution += averagedSecondarySun;
+    }
+
+    result.totalContribution /= float(firstHitDiffuseSampleCount);
+    result.secondaryDirectSunContribution /= float(firstHitDiffuseSampleCount);
+    return result;
+}
+
+FirstHitDiffuseBounceResult sampleFirstHitCandidateRis(float3 hitPos, float3 N, float3 V, RayPayload payload,
+                                                       int firstHitDiffuseSampleCount,
+                                                       int candidateCount,
+                                                       inout uint rngState)
+{
+    FirstHitDiffuseBounceResult result;
+    result.totalContribution = float3(0.0, 0.0, 0.0);
+    result.secondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
+
+    int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
+    if (extraSampleCount <= 0) {
+        return result;
+    }
+
+    candidateCount = clamp(candidateCount, 2, 16);
+
+    float3 F = fresnelSchlick(max(dot(N, V), 0.0), payload.F0);
+    float3 kD = (float3(1.0, 1.0, 1.0) - F) * (1.0 - payload.metallic);
+    float3 diffuseBsdf = kD * payload.albedo / PI;
+
+    for (int probe = 0; probe < extraSampleCount; ++probe) {
+        float3 selectedTotal = float3(0.0, 0.0, 0.0);
+        float3 selectedSecondarySun = float3(0.0, 0.0, 0.0);
+        float selectedWeight = 0.0;
+        float risWeightSum = 0.0;
+        bool selectedSurfaceHit = false;
+        bool selectedSunVisible = false;
+
+        for (int c = 0; c < candidateCount; ++c) {
+            float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
+            float3 bounceDir = cosineSampleHemisphere(xi, N);
+            float NdotBounce = max(dot(N, bounceDir), 0.0);
+            float pdf = max(NdotBounce / PI, 0.0001);
+            float3 firstLegThroughput = diffuseBsdf * NdotBounce / pdf;
+
+            RayPayload bouncePayload;
+            bouncePayload.hitT = -1.0;
+            RayDesc bounceRay;
+            bounceRay.Origin = hitPos + N * 0.002;
+            bounceRay.Direction = bounceDir;
+            bounceRay.TMin = 0.001;
+            bounceRay.TMax = 10000.0;
+            TraceRay(tlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, bounceRay, bouncePayload);
+
+            float3 candidateTotal = float3(0.0, 0.0, 0.0);
+            float3 candidateSecondarySun = float3(0.0, 0.0, 0.0);
+            bool surfaceHit = bouncePayload.hitT >= 0.0;
+            bool sunVisible = false;
+
+            if (surfaceHit) {
+                float3 secondaryV = -bounceDir;
+                float3 emissiveContribution = firstLegThroughput * bouncePayload.emission;
+                candidateSecondarySun = evaluateDirectSunContribution(bouncePayload.hitPos,
+                                                                      bouncePayload.worldNormal,
+                                                                      secondaryV,
+                                                                      firstLegThroughput,
+                                                                      bouncePayload);
+                candidateTotal = emissiveContribution + candidateSecondarySun;
+                sunVisible = pathTracerLuminance(candidateSecondarySun) > 0.000001;
+            } else {
+                candidateTotal = firstLegThroughput * bouncePayload.emission;
+            }
+
+            float candidateWeight = max(pathTracerLuminance(candidateTotal), 0.000001);
+            risWeightSum += candidateWeight;
+            if (randomFloat(rngState) < candidateWeight / risWeightSum) {
+                selectedTotal = candidateTotal;
+                selectedSecondarySun = candidateSecondarySun;
+                selectedWeight = candidateWeight;
+                selectedSurfaceHit = surfaceHit;
+                selectedSunVisible = sunVisible;
+            }
+        }
+
+        float selectedCandidateProbability = selectedWeight / max(risWeightSum, 0.000001);
+        float risScale = 1.0 / (float(candidateCount) * max(selectedCandidateProbability, 0.000001));
+        float3 risTotal = selectedTotal * risScale;
+        float3 risSecondarySun = selectedSecondarySun * risScale;
+        recordFirstHitProbeStats(selectedSurfaceHit, selectedSunVisible, risTotal);
+        result.totalContribution += risTotal;
+        result.secondaryDirectSunContribution += risSecondarySun;
+    }
+
+    result.totalContribution /= float(firstHitDiffuseSampleCount);
+    result.secondaryDirectSunContribution /= float(firstHitDiffuseSampleCount);
+    return result;
+}
+
 float3 sampleEnvironmentNEE(float3 hitPos, float3 N, float3 V, float3 throughput, RayPayload payload, float diffuseSelectionProbability, int samplingMode, inout uint rngState)
 {
     float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
@@ -356,11 +610,14 @@ void main() {
     uint   primaryInstanceID = 0;
     bool   primarySurfaceHit = false;
     float  pendingSkyMissMisWeight = 1.0;
-    bool   environmentNeeEnabled = (push.padding3 & 0xFF) != 0;
+    uint   packedPathTracerFlags = uint(push.padding3);
+    bool   environmentNeeEnabled = (packedPathTracerFlags & 0x1) != 0;
     bool   applyFirstHitProbesToFinal = (push.padding3 & PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT) != 0;
-    int    environmentNeeSamplingMode = (push.padding3 >> 8) & 0xFF;
-    int    firstHitDiffuseSampleCount = clamp((push.padding3 >> 16) & 0xFF, 1, 8);
-    int    firstHitProbeSamplingMode = (push.padding3 >> 26) & 0x3;
+    int    environmentNeeSamplingMode = int((packedPathTracerFlags >> 3) & 0x3);
+    int    firstHitDiffuseSampleCount = clamp(int((packedPathTracerFlags >> 5) & 0xF), 1, 8);
+    int    candidateCount = int((packedPathTracerFlags >> 9) & 0xF) + 1;
+    candidateCount = clamp(candidateCount, 2, 16);
+    int    firstHitProbeSamplingMode = int((packedPathTracerFlags >> 13) & 0x7);
 
     RayDesc ray;
     ray.Origin    = origin;
@@ -419,9 +676,20 @@ void main() {
         float3 V2 = -ray.Direction;
 
         if (bounce == 0 && firstHitDiffuseSampleCount > 1) {
-            FirstHitDiffuseBounceResult firstHitBounce =
-                sampleFirstHitDiffuseBounce(payload.hitPos, N2, V2, payload,
-                                            firstHitDiffuseSampleCount, firstHitProbeSamplingMode, rngState);
+            FirstHitDiffuseBounceResult firstHitBounce;
+            if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CANDIDATE_SUN_BOUNCE) {
+                firstHitBounce = sampleFirstHitCandidateSunBounce(payload.hitPos, N2, V2, payload,
+                                                                  firstHitDiffuseSampleCount, candidateCount, rngState);
+            } else if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CANDIDATE_AVERAGE_REFERENCE) {
+                firstHitBounce = sampleFirstHitCandidateAverageReference(payload.hitPos, N2, V2, payload,
+                                                                         firstHitDiffuseSampleCount, candidateCount, rngState);
+            } else if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CANDIDATE_RIS) {
+                firstHitBounce = sampleFirstHitCandidateRis(payload.hitPos, N2, V2, payload,
+                                                            firstHitDiffuseSampleCount, candidateCount, rngState);
+            } else {
+                firstHitBounce = sampleFirstHitDiffuseBounce(payload.hitPos, N2, V2, payload,
+                                                            firstHitDiffuseSampleCount, firstHitProbeSamplingMode, rngState);
+            }
             if (applyFirstHitProbesToFinal) {
                 radiance += firstHitBounce.totalContribution;
                 debugIndirectLighting += firstHitBounce.totalContribution;

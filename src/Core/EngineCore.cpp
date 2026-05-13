@@ -32,8 +32,8 @@ using namespace Laphria;
 namespace
 {
 constexpr uint32_t kPtTimestampQueryCountPerFrame = 8;
-constexpr int PATH_TRACER_BLACK_ENVIRONMENT_BIT = 1 << 24;
-constexpr int PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = 1 << 25;
+constexpr int PATH_TRACER_BLACK_ENVIRONMENT_BIT = 1 << 1;
+constexpr int PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = 1 << 2;
 constexpr double kWindowTitleUpdateIntervalSeconds = 0.5;
 constexpr const char *kPtBenchmarkCsvFileName = "path_tracer_benchmark_results.csv";
 constexpr const char *kPtBacklogCsvFileName = "path_tracer_backlog.csv";
@@ -269,6 +269,7 @@ void EngineCore::mainLoop() {
 
         glfwPollEvents();
         loadPathTracerIndirectBounceTestSceneIfRequested();
+        applyPathTracerDebugLightPreset();
         loadPathTracerBenchmarkSceneIfNeeded();
         updatePathTracerBenchmark(deltaTime);
         updatePathTracerPhysicalSanityChecks(deltaTime);
@@ -1084,12 +1085,17 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     rtPush.modelMatrix = glm::mat4(1.0f);
     rtPush.cascadeIndex = ptIndirectBounceTargetWallModelId;
     rtPush.padding2 = debugAov;
-    rtPush.padding3 = (ui.pathTracerSettings.enableEnvironmentNEE ? 1 : 0) |
-                      ((static_cast<int>(ui.pathTracerSettings.environmentNeeSamplingMode) & 0xFF) << 8) |
-                      ((std::clamp(ui.pathTracerSettings.firstHitDiffuseSamples, 1, 8) & 0xFF) << 16) |
-                      ((static_cast<int>(ui.pathTracerSettings.firstHitProbeSamplingMode) & 0x3) << 26) |
-                      (ui.pathTracerSettings.blackEnvironment ? PATH_TRACER_BLACK_ENVIRONMENT_BIT : 0) |
-                      (ui.pathTracerSettings.applyFirstHitProbesToFinal ? PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT : 0);
+    const uint32_t candidateCountMinusOne =
+        static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.firstHitCandidateCount, 2, 16) - 1);
+    const uint32_t pathTracerFlags =
+        (ui.pathTracerSettings.enableEnvironmentNEE ? 1u : 0u) |
+        (ui.pathTracerSettings.blackEnvironment ? static_cast<uint32_t>(PATH_TRACER_BLACK_ENVIRONMENT_BIT) : 0u) |
+        (ui.pathTracerSettings.applyFirstHitProbesToFinal ? static_cast<uint32_t>(PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT) : 0u) |
+        ((static_cast<uint32_t>(ui.pathTracerSettings.environmentNeeSamplingMode) & 0x3u) << 3) |
+        ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.firstHitDiffuseSamples, 1, 8)) & 0xFu) << 5) |
+        ((candidateCountMinusOne & 0xFu) << 9) |
+        ((static_cast<uint32_t>(ui.pathTracerSettings.firstHitProbeSamplingMode) & 0x7u) << 13);
+    rtPush.padding3 = static_cast<int>(pathTracerFlags);
     commandBuffer.pushConstants<ScenePushConstants>(*pipelines.rayTracingPipelineLayout,
                                                     vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
                                                     0, rtPush);
@@ -1784,6 +1790,27 @@ void EngineCore::updatePathTracerPhysicalSanityChecks(float /*deltaTimeSeconds*/
             ptSanityPhase = 2;
             ui.exposure = 1.0f;
         }
+    }
+}
+
+void EngineCore::applyPathTracerDebugLightPreset()
+{
+    auto &analysis = ui.pathTracerAnalysisSettings;
+    if (!analysis.applyDebugLightPreset) {
+        return;
+    }
+    analysis.applyDebugLightPreset = false;
+
+    switch (analysis.debugLightPreset) {
+    case UISystem::PathTracerDebugLightPreset::HardBounce:
+        ui.lightDirection = glm::normalize(glm::vec3(-0.353f, -0.784f, 0.510f));
+        break;
+    case UISystem::PathTracerDebugLightPreset::MediumBounce:
+        ui.lightDirection = glm::normalize(glm::vec3(-0.353f, -2.054f, 0.510f));
+        break;
+    case UISystem::PathTracerDebugLightPreset::EasyBounce:
+        ui.lightDirection = glm::normalize(glm::vec3(-0.353f, -13.954f, -9.810f));
+        break;
     }
 }
 

@@ -159,6 +159,7 @@ class EngineCore
 	void resetPathTracerAnalysisCounters(uint32_t frameSlot);
 	void collectPathTracerAnalysisCounters(uint32_t frameSlot);
 	void ensurePathTracerSanityScene();
+	void applyPathTracerDebugLightPreset();
 	void loadPathTracerIndirectBounceTestSceneIfRequested();
 	void updatePathTracerPhysicalSanityChecks(float deltaTimeSeconds);
 	void writePathTracerBacklogCsv();

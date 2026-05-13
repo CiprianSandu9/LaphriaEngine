@@ -53,6 +53,13 @@ public:
         AutoAggressive = 2
     };
 
+    enum class PathTracerDebugLightPreset
+    {
+        HardBounce = 0,
+        MediumBounce = 1,
+        EasyBounce = 2
+    };
+
     enum class EnvironmentNeeSamplingMode
     {
         CosineHemisphere = 0,
@@ -62,7 +69,10 @@ public:
     enum class FirstHitProbeSamplingMode
     {
         CosineHemisphere = 0,
-        SunBounceGuided = 1
+        SunBounceGuided = 1,
+        CandidateSunBounce = 2,
+        CandidateAverageReference = 3,
+        CandidateRis = 4
     };
 
     struct PathTracerSettings
@@ -77,6 +87,7 @@ public:
         EnvironmentNeeSamplingMode environmentNeeSamplingMode = EnvironmentNeeSamplingMode::SkyBiased;
         FirstHitProbeSamplingMode firstHitProbeSamplingMode = FirstHitProbeSamplingMode::CosineHemisphere;
         int                   firstHitDiffuseSamples = 1;
+        int                   firstHitCandidateCount = 4;
         float                 targetFrameMs = 16.6f;
         bool                  enableReprojection = true;
         bool                  enableDenoiser = true;
@@ -127,6 +138,8 @@ public:
         bool                         benchmarkActive = false;
         bool                         runBaselineSweep = false;
         bool                         loadIndirectBounceTestScene = false;
+        PathTracerDebugLightPreset   debugLightPreset = PathTracerDebugLightPreset::HardBounce;
+        bool                         applyDebugLightPreset = false;
         bool                         freezeCameraInputDuringBenchmark = true;
         PathTracerBenchmarkCameraPath cameraPath = PathTracerBenchmarkCameraPath::SlowPan;
         bool                         adaptiveSampling = true;
