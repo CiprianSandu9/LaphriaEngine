@@ -1072,10 +1072,12 @@ void UISystem::drawPathTracerDebugLab() {
         return;
     }
 
+    static constexpr const char *cachedSecondaryReuse = "Cached Secondary Reuse";
     ImGui::Checkbox("Enable Analysis Mode", &pathTracerAnalysisSettings.enableAnalysisMode);
     ImGui::Checkbox("Environment NEE", &pathTracerSettings.enableEnvironmentNEE);
     ImGui::Checkbox("Black Environment", &pathTracerSettings.blackEnvironment);
     ImGui::Checkbox("Apply First-Hit Probes", &pathTracerSettings.applyFirstHitProbesToFinal);
+    ImGui::Checkbox("Enable Sun-Visible Cache", &pathTracerSettings.enableSunVisibleCandidateCache);
 
     const char *envNeeSamplingModes[] = {"Cosine Hemisphere", "Sky Biased"};
     int envNeeSamplingMode = static_cast<int>(pathTracerSettings.environmentNeeSamplingMode);
@@ -1087,7 +1089,8 @@ void UISystem::drawPathTracerDebugLab() {
         "Naive Sun Guide",
         "Candidate Sun Bounce",
         "Candidate Average Reference",
-        "Candidate RIS"};
+        "Candidate RIS",
+        cachedSecondaryReuse};
     int firstHitProbeSamplingMode = static_cast<int>(pathTracerSettings.firstHitProbeSamplingMode);
     if (ImGui::Combo("First-Hit Probe Sampling", &firstHitProbeSamplingMode,
                      firstHitProbeSamplingModes, IM_ARRAYSIZE(firstHitProbeSamplingModes))) {
@@ -1096,8 +1099,14 @@ void UISystem::drawPathTracerDebugLab() {
     }
     ImGui::SliderInt("First-Hit Diffuse Samples", &pathTracerSettings.firstHitDiffuseSamples, 1, 8);
     ImGui::SliderInt("First-Hit Candidate Count", &pathTracerSettings.firstHitCandidateCount, 2, 16);
+    ImGui::SliderFloat("Cache Reuse Weight", &pathTracerSettings.cacheReuseWeight, 0.0f, 1.0f, "%.3f");
 
     if (ImGui::Button("Load Indirect Bounce Test Scene")) {
+        pathTracerAnalysisSettings.loadIndirectBounceTestScene = true;
+        pathTracerAnalysisSettings.enableAnalysisMode = true;
+    }
+    if (ImGui::Button("Run GI Cache Weight Sweep")) {
+        pathTracerAnalysisSettings.runGiCacheWeightSweep = true;
         pathTracerAnalysisSettings.loadIndirectBounceTestScene = true;
         pathTracerAnalysisSettings.enableAnalysisMode = true;
     }
@@ -1150,6 +1159,23 @@ void UISystem::drawPathTracerDebugLab() {
                 pathTracerPerfStats.firstHitProbeContributionAverage);
     ImGui::Text("First-Hit Probe Sun-Visible Avg Luma: %.5f",
                 pathTracerPerfStats.firstHitProbeSunVisibleContributionAverage);
+
+    if (ImGui::CollapsingHeader("Sun-Visible Cache")) {
+        if (ImGui::Button("Clear Sun-Visible Cache")) {
+            pathTracerAnalysisSettings.clearSunVisibleCacheRequested = true;
+        }
+        ImGui::Text("Cache Inserts This Frame: %u", pathTracerPerfStats.cachedCandidateCount);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Successful new inserts for the latest frame; this can be 0 when the bounded cache is already full.");
+        }
+        ImGui::Text("Resident Cached Candidates: %u", pathTracerPerfStats.residentCachedCandidateCount);
+        ImGui::Text("Cache Reuse Attempts: %u", pathTracerPerfStats.cacheReuseAttemptCount);
+        ImGui::Text("Cache Reuse Accepted: %u (%.2f%%)",
+                    pathTracerPerfStats.cacheReuseAcceptedCount,
+                    pathTracerPerfStats.cacheReuseAcceptedRatio * 100.0f);
+        ImGui::Text("Cache Reuse Avg Luma: %.5f",
+                    pathTracerPerfStats.cacheReuseContributionAverage);
+    }
 
     if (ImGui::CollapsingHeader("Capture Checklist")) {
         ImGui::TextWrapped("Record these values after the image stabilizes:");
@@ -1264,6 +1290,7 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         pathTracerSettings.historyResetMotionThreshold = std::clamp(pathTracerSettings.historyResetMotionThreshold, 0.25f, 10.0f);
         pathTracerSettings.firstHitDiffuseSamples = std::clamp(pathTracerSettings.firstHitDiffuseSamples, 1, 8);
         pathTracerSettings.firstHitCandidateCount = std::clamp(pathTracerSettings.firstHitCandidateCount, 2, 16);
+        pathTracerSettings.cacheReuseWeight = std::clamp(pathTracerSettings.cacheReuseWeight, 0.0f, 1.0f);
         pathTracerAnalysisSettings.warmupFrames = std::clamp(pathTracerAnalysisSettings.warmupFrames, 30, 600);
         pathTracerAnalysisSettings.sampleFrames = std::clamp(pathTracerAnalysisSettings.sampleFrames, 60, 1200);
         pathTracerAnalysisSettings.minSampleFrames = std::clamp(pathTracerAnalysisSettings.minSampleFrames, 60, pathTracerAnalysisSettings.sampleFrames);

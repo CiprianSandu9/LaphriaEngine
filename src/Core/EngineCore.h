@@ -95,6 +95,36 @@ class EngineCore
 	std::vector<float>                 ptSampleDenoiserMs;
 	std::vector<Laphria::PathTracerRunScore>    ptSweepScores;
 	std::vector<Laphria::PathTracerBacklogItem> ptBacklogItems;
+	struct PathTracerExperimentRow
+	{
+		std::string name;
+		UISystem::FirstHitProbeSamplingMode probeMode = UISystem::FirstHitProbeSamplingMode::CosineHemisphere;
+		float cacheReuseWeight = 1.0f;
+		int firstHitDiffuseSamples = 8;
+		int firstHitCandidateCount = 4;
+		UISystem::PathTracerDebugLightPreset lightPreset = UISystem::PathTracerDebugLightPreset::HardBounce;
+		UISystem::PathTracerDebugAov debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor;
+	};
+	struct PathTracerExperimentAccumulator
+	{
+		uint32_t sampleCount = 0;
+		double targetWallLuma = 0.0;
+		double firstHitProbeAvgLuma = 0.0;
+		double firstHitProbeSunVisibleAvgLuma = 0.0;
+		double residentCachedCandidates = 0.0;
+		double cacheReuseAcceptedRatio = 0.0;
+		double cacheReuseAvgLuma = 0.0;
+		double rayTraceMs = 0.0;
+		double totalFrameMs = 0.0;
+	};
+	bool ptExperimentSweepActive{false};
+	size_t ptExperimentRowIndex{0};
+	int ptExperimentWarmupRemaining{0};
+	int ptExperimentSampleRemaining{0};
+	std::vector<PathTracerExperimentRow> ptExperimentRows;
+	PathTracerExperimentAccumulator ptExperimentAccum;
+	glm::vec3 lastSunVisibleCacheLightDirection{0.0f};
+	bool      sunVisibleCacheLightDirectionInitialized{false};
 	bool      ptSanitySceneCreated{false};
 	bool      ptSanityBaselineCaptured{false};
 	float     ptSanityBaselineExposure{1.0f};
@@ -158,6 +188,14 @@ class EngineCore
 	void updatePathTracerTimingPercentiles();
 	void resetPathTracerAnalysisCounters(uint32_t frameSlot);
 	void collectPathTracerAnalysisCounters(uint32_t frameSlot);
+	void startPathTracerGiCacheWeightSweep();
+	void clearPathTracerExperimentCache();
+	void clearSunVisibleCandidateCache(const char *reason);
+	void updateSunVisibleCandidateCacheInvalidation();
+	void updatePathTracerExperimentSweep();
+	void applyPathTracerExperimentRow(const PathTracerExperimentRow &row);
+	void logPathTracerExperimentRow(const PathTracerExperimentRow &row,
+	                                const PathTracerExperimentAccumulator &accum) const;
 	void ensurePathTracerSanityScene();
 	void applyPathTracerDebugLightPreset();
 	void loadPathTracerIndirectBounceTestSceneIfRequested();

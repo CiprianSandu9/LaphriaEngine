@@ -1,3 +1,7 @@
+#if defined(_WIN32) && !defined(NOMINMAX)
+#define NOMINMAX
+#endif
+
 #include "EngineCore.h"
 #include "VulkanUtils.h"
 #include "VmaContext.h"
@@ -20,6 +24,10 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
+
+#if defined(_WIN32)
+#include <Windows.h>
+#endif
 
 #include "../SceneManagement/Scene.h"
 #include "EngineAuxiliary.h"
@@ -67,6 +75,38 @@ std::filesystem::path resolveAnalysisOutputPath(const char *fileName)
     fs::create_directories(outputDir, ec);
     return outputDir / fileName;
 }
+
+void debugBreakIfDebuggerAttached()
+{
+#if defined(_WIN32)
+    if (::IsDebuggerPresent() != 0) {
+        ::DebugBreak();
+    }
+#endif
+}
+
+vk::Result waitForFencesOrThrow(const vk::raii::Device &device,
+                                vk::ArrayProxy<const vk::Fence> fences,
+                                const char *waitLabel)
+{
+    try {
+        return device.waitForFences(fences, vk::True, UINT64_MAX);
+    } catch (const vk::SystemError &error) {
+        if (error.code().value() == static_cast<int>(vk::Result::eErrorDeviceLost)) {
+            LOGE("Vulkan device lost while waiting for %s: %s", waitLabel, error.what());
+        } else {
+            LOGE("Vulkan fence wait failed while waiting for %s: %s", waitLabel, error.what());
+        }
+        debugBreakIfDebuggerAttached();
+        throw;
+    }
+}
+
+vk::Result waitForFenceOrThrow(const vk::raii::Device &device, vk::Fence fence, const char *waitLabel)
+{
+    return waitForFencesOrThrow(device, std::array<vk::Fence, 1>{fence}, waitLabel);
+}
+
 enum PtTimestampSlot : uint32_t
 {
     kPtTS_TlasStart = 0,
@@ -269,6 +309,9 @@ void EngineCore::mainLoop() {
 
         glfwPollEvents();
         loadPathTracerIndirectBounceTestSceneIfRequested();
+        if (ui.pathTracerAnalysisSettings.runGiCacheWeightSweep) {
+            startPathTracerGiCacheWeightSweep();
+        }
         applyPathTracerDebugLightPreset();
         loadPathTracerBenchmarkSceneIfNeeded();
         updatePathTracerBenchmark(deltaTime);
@@ -330,6 +373,7 @@ void EngineCore::mainLoop() {
             auto &servicesRef = *services;
             callbacks.drawUi(servicesRef);
         }
+        updateSunVisibleCandidateCacheInvalidation();
 
         if (scene) {
             scene->syncSpatialIndex();
@@ -570,6 +614,19 @@ void EngineCore::createRayTracingDescriptorSets() {
         vk::WriteDescriptorSet analysisCounterWrite{
             .dstSet = *rtDescriptorSets[i], .dstBinding = 9, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &analysisCounterInfo
         };
+        vk::DescriptorBufferInfo sunVisibleCandidateCacheInfo{
+            .buffer = *frames.sunVisibleCandidateCacheBuffers[i],
+            .offset = 0,
+            .range = FrameContext::kSunVisibleCandidateCacheBufferSize
+        };
+        vk::WriteDescriptorSet sunVisibleCandidateCacheWrite{
+            .dstSet = *rtDescriptorSets[i],
+            .dstBinding = 10,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .pBufferInfo = &sunVisibleCandidateCacheInfo
+        };
 
         std::vector<vk::WriteDescriptorSet> descriptorWrites;
         descriptorWrites.push_back(tlasWrite);
@@ -578,6 +635,7 @@ void EngineCore::createRayTracingDescriptorSets() {
         descriptorWrites.push_back(depthWrite);
         descriptorWrites.push_back(mvWrite);
         descriptorWrites.push_back(analysisCounterWrite);
+        descriptorWrites.push_back(sunVisibleCandidateCacheWrite);
 
         // Now we extract ALL global vertices, indices, materials, and textures
         // across all Scene Nodes that have been uploaded into VRAM by ResourceManager
@@ -1060,6 +1118,20 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
         std::memset(frames.ptAnalysisCounterMapped[fi], 0, sizeof(Laphria::PathTracerAnalysisCounters));
     }
 
+    // PT analysis/cache buffers are host-cleared and also persist shader writes across
+    // submissions. Make those writes visible before the next raygen reads or updates them.
+    vk::MemoryBarrier2 pathTracerStorageBufferBarrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eHost | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+        .srcAccessMask = vk::AccessFlagBits2::eHostWrite | vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite
+    };
+    vk::DependencyInfo pathTracerStorageBufferDependency{
+        .memoryBarrierCount = 1,
+        .pMemoryBarriers = &pathTracerStorageBufferBarrier
+    };
+    commandBuffer.pipelineBarrier2(pathTracerStorageBufferDependency);
+
     // 1. Transition all PT images to general layout for writing.
     auto transitionToGeneral = [&](vk::Image img) {
         transition_image_layout(img, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
@@ -1085,12 +1157,15 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     rtPush.modelMatrix = glm::mat4(1.0f);
     rtPush.cascadeIndex = ptIndirectBounceTargetWallModelId;
     rtPush.padding2 = debugAov;
+    rtPush.skyData = glm::vec4(std::clamp(ui.pathTracerSettings.cacheReuseWeight, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f);
     const uint32_t candidateCountMinusOne =
         static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.firstHitCandidateCount, 2, 16) - 1);
+    constexpr uint32_t SUN_VISIBLE_CACHE_ENABLE_BIT = 1u << 16;
     const uint32_t pathTracerFlags =
         (ui.pathTracerSettings.enableEnvironmentNEE ? 1u : 0u) |
         (ui.pathTracerSettings.blackEnvironment ? static_cast<uint32_t>(PATH_TRACER_BLACK_ENVIRONMENT_BIT) : 0u) |
         (ui.pathTracerSettings.applyFirstHitProbesToFinal ? static_cast<uint32_t>(PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT) : 0u) |
+        (ui.pathTracerSettings.enableSunVisibleCandidateCache ? SUN_VISIBLE_CACHE_ENABLE_BIT : 0u) |
         ((static_cast<uint32_t>(ui.pathTracerSettings.environmentNeeSamplingMode) & 0x3u) << 3) |
         ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.firstHitDiffuseSamples, 1, 8)) & 0xFu) << 5) |
         ((candidateCountMinusOne & 0xFu) << 9) |
@@ -1481,6 +1556,25 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
             ? static_cast<float>(counters->firstHitProbeSunVisibleContributionSum) /
                   (static_cast<float>(counters->firstHitProbeSunVisibleCount) * 64.0f)
             : 0.0f;
+    ui.pathTracerPerfStats.cachedCandidateCount = counters->cachedCandidateInsertCount;
+    ui.pathTracerPerfStats.residentCachedCandidateCount = 0;
+    if (frameSlot < frames.sunVisibleCandidateCacheMapped.size() && frames.sunVisibleCandidateCacheMapped[frameSlot]) {
+        const auto *cacheWords = reinterpret_cast<const uint32_t *>(frames.sunVisibleCandidateCacheMapped[frameSlot]);
+        ui.pathTracerPerfStats.residentCachedCandidateCount =
+            std::min(cacheWords[0], FrameContext::kSunVisibleCandidateCacheCapacity);
+    }
+    ui.pathTracerPerfStats.cacheReuseAttemptCount = counters->cacheReuseAttemptCount;
+    ui.pathTracerPerfStats.cacheReuseAcceptedCount = counters->cacheReuseAcceptedCount;
+    ui.pathTracerPerfStats.cacheReuseAcceptedRatio =
+        (counters->cacheReuseAttemptCount > 0)
+            ? static_cast<float>(counters->cacheReuseAcceptedCount) /
+                  static_cast<float>(counters->cacheReuseAttemptCount)
+            : 0.0f;
+    ui.pathTracerPerfStats.cacheReuseContributionAverage =
+        (counters->cacheReuseAcceptedCount > 0)
+            ? static_cast<float>(counters->cacheReuseContributionSum) /
+                  (static_cast<float>(counters->cacheReuseAcceptedCount) * 64.0f)
+            : 0.0f;
 
     const float historyTotal = static_cast<float>(counters->historyAcceptedCount + counters->historyRejectedCount);
     ui.pathTracerPerfStats.historyAcceptanceRatio = (historyTotal > 0.0f) ? static_cast<float>(counters->historyAcceptedCount) / historyTotal : 0.0f;
@@ -1688,6 +1782,187 @@ void EngineCore::resetPathTracerAnalysisCounters(uint32_t frameSlot)
         return;
     }
     std::memset(frames.ptAnalysisCounterMapped[frameSlot], 0, sizeof(Laphria::PathTracerAnalysisCounters));
+}
+
+void EngineCore::startPathTracerGiCacheWeightSweep()
+{
+    auto &analysis = ui.pathTracerAnalysisSettings;
+    analysis.runGiCacheWeightSweep = false;
+    analysis.enableAnalysisMode = true;
+    vulkan.logicalDevice.waitIdle();
+    clearPathTracerExperimentCache();
+
+    ptExperimentRows = {
+        PathTracerExperimentRow{
+            .name = "Candidate RIS Reference",
+            .probeMode = UISystem::FirstHitProbeSamplingMode::CandidateRis,
+            .cacheReuseWeight = 1.0f},
+        PathTracerExperimentRow{
+            .name = "Cached Secondary Reuse 0.118",
+            .probeMode = UISystem::FirstHitProbeSamplingMode::CachedSecondaryReuse,
+            .cacheReuseWeight = 0.118f},
+        PathTracerExperimentRow{
+            .name = "Cached Secondary Reuse 0.122",
+            .probeMode = UISystem::FirstHitProbeSamplingMode::CachedSecondaryReuse,
+            .cacheReuseWeight = 0.122f},
+        PathTracerExperimentRow{
+            .name = "Cached Secondary Reuse 0.126",
+            .probeMode = UISystem::FirstHitProbeSamplingMode::CachedSecondaryReuse,
+            .cacheReuseWeight = 0.126f},
+        PathTracerExperimentRow{
+            .name = "Cached Secondary Reuse 0.130",
+            .probeMode = UISystem::FirstHitProbeSamplingMode::CachedSecondaryReuse,
+            .cacheReuseWeight = 0.130f}};
+
+    ptExperimentSweepActive = !ptExperimentRows.empty();
+    ptExperimentRowIndex = 0;
+    ptExperimentWarmupRemaining = std::max(1, analysis.warmupFrames);
+    ptExperimentSampleRemaining = std::max(1, analysis.sampleFrames);
+    ptExperimentAccum = {};
+    ui.renderMode = RenderMode::PathTracer;
+
+    if (ptExperimentSweepActive) {
+        LOGI("PT Experiment Sweep: starting GI cache weight sweep (%zu rows, warmup=%d, samples=%d)",
+             ptExperimentRows.size(), ptExperimentWarmupRemaining, ptExperimentSampleRemaining);
+        applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
+    }
+}
+
+void EngineCore::clearPathTracerExperimentCache()
+{
+    for (void *mapped : frames.sunVisibleCandidateCacheMapped) {
+        if (mapped) {
+            std::memset(mapped, 0, static_cast<size_t>(FrameContext::kSunVisibleCandidateCacheBufferSize));
+        }
+    }
+}
+
+void EngineCore::clearSunVisibleCandidateCache(const char *reason)
+{
+    if (!vulkanInitialized) {
+        return;
+    }
+
+    vulkan.logicalDevice.waitIdle();
+    clearPathTracerExperimentCache();
+    ui.pathTracerPerfStats.cachedCandidateCount = 0;
+    ui.pathTracerPerfStats.residentCachedCandidateCount = 0;
+    ui.pathTracerPerfStats.cacheReuseAttemptCount = 0;
+    ui.pathTracerPerfStats.cacheReuseAcceptedCount = 0;
+    ui.pathTracerPerfStats.cacheReuseAcceptedRatio = 0.0f;
+    ui.pathTracerPerfStats.cacheReuseContributionAverage = 0.0f;
+    LOGI("Sun-Visible Cache: cleared (%s)", reason ? reason : "manual");
+}
+
+void EngineCore::updateSunVisibleCandidateCacheInvalidation()
+{
+    auto &analysis = ui.pathTracerAnalysisSettings;
+    const glm::vec3 currentLightDirection = ui.lightDirection;
+
+    if (!sunVisibleCacheLightDirectionInitialized) {
+        lastSunVisibleCacheLightDirection = currentLightDirection;
+        sunVisibleCacheLightDirectionInitialized = true;
+    }
+
+    const glm::vec3 lightDelta = currentLightDirection - lastSunVisibleCacheLightDirection;
+    const bool lightChanged = glm::dot(lightDelta, lightDelta) > 1.0e-6f;
+    if (analysis.clearSunVisibleCacheRequested || lightChanged) {
+        clearSunVisibleCandidateCache(lightChanged ? "light direction changed" : "manual request");
+        analysis.clearSunVisibleCacheRequested = false;
+        lastSunVisibleCacheLightDirection = currentLightDirection;
+    }
+}
+
+void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row)
+{
+    auto &settings = ui.pathTracerSettings;
+    auto &analysis = ui.pathTracerAnalysisSettings;
+    settings.enableEnvironmentNEE = true;
+    settings.blackEnvironment = true;
+    settings.applyFirstHitProbesToFinal = true;
+    settings.enableSunVisibleCandidateCache = true;
+    settings.environmentNeeSamplingMode = UISystem::EnvironmentNeeSamplingMode::SkyBiased;
+    settings.firstHitProbeSamplingMode = row.probeMode;
+    settings.firstHitDiffuseSamples = row.firstHitDiffuseSamples;
+    settings.firstHitCandidateCount = row.firstHitCandidateCount;
+    settings.cacheReuseWeight = row.cacheReuseWeight;
+    analysis.debugLightPreset = row.lightPreset;
+    analysis.applyDebugLightPreset = true;
+    analysis.debugAov = row.debugAov;
+    analysis.debugAtrousIteration = 0;
+    analysis.enableAnalysisMode = true;
+    applyPathTracerDebugLightPreset();
+}
+
+void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow &row,
+                                            const PathTracerExperimentAccumulator &accum) const
+{
+    const double invSamples = (accum.sampleCount > 0) ? (1.0 / static_cast<double>(accum.sampleCount)) : 0.0;
+    LOGI("PT Experiment Row: name=\"%s\", samples=%u, mode=%d, cacheWeight=%.3f, "
+         "targetWallLuma=%.5f, firstHitProbeAvgLuma=%.5f, firstHitSunVisibleAvgLuma=%.5f, "
+         "residentCachedCandidates=%.1f, cacheReuseAccepted=%.2f%%, cacheReuseAvgLuma=%.5f, "
+         "rayTraceMs=%.3f, totalMs=%.3f",
+         row.name.c_str(),
+         accum.sampleCount,
+         static_cast<int>(row.probeMode),
+         row.cacheReuseWeight,
+         accum.targetWallLuma * invSamples,
+         accum.firstHitProbeAvgLuma * invSamples,
+         accum.firstHitProbeSunVisibleAvgLuma * invSamples,
+         accum.residentCachedCandidates * invSamples,
+         accum.cacheReuseAcceptedRatio * invSamples * 100.0,
+         accum.cacheReuseAvgLuma * invSamples,
+         accum.rayTraceMs * invSamples,
+         accum.totalFrameMs * invSamples);
+}
+
+void EngineCore::updatePathTracerExperimentSweep()
+{
+    if (!ptExperimentSweepActive) {
+        return;
+    }
+
+    if (ptExperimentRowIndex >= ptExperimentRows.size()) {
+        ptExperimentSweepActive = false;
+        return;
+    }
+
+    if (ptExperimentWarmupRemaining > 0) {
+        --ptExperimentWarmupRemaining;
+        return;
+    }
+
+    const auto &stats = ui.pathTracerPerfStats;
+    ptExperimentAccum.targetWallLuma += stats.targetWallLuminanceAverage;
+    ptExperimentAccum.firstHitProbeAvgLuma += stats.firstHitProbeContributionAverage;
+    ptExperimentAccum.firstHitProbeSunVisibleAvgLuma += stats.firstHitProbeSunVisibleContributionAverage;
+    ptExperimentAccum.residentCachedCandidates += static_cast<double>(stats.residentCachedCandidateCount);
+    ptExperimentAccum.cacheReuseAcceptedRatio += stats.cacheReuseAcceptedRatio;
+    ptExperimentAccum.cacheReuseAvgLuma += stats.cacheReuseContributionAverage;
+    ptExperimentAccum.rayTraceMs += stats.rayTraceMs;
+    ptExperimentAccum.totalFrameMs += stats.totalFrameMs;
+    ++ptExperimentAccum.sampleCount;
+
+    if (ptExperimentSampleRemaining > 0) {
+        --ptExperimentSampleRemaining;
+    }
+    if (ptExperimentSampleRemaining > 0) {
+        return;
+    }
+
+    logPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex], ptExperimentAccum);
+    ++ptExperimentRowIndex;
+    if (ptExperimentRowIndex >= ptExperimentRows.size()) {
+        ptExperimentSweepActive = false;
+        LOGI("PT Experiment Sweep: GI cache weight sweep complete");
+        return;
+    }
+
+    ptExperimentWarmupRemaining = std::max(1, ui.pathTracerAnalysisSettings.warmupFrames);
+    ptExperimentSampleRemaining = std::max(1, ui.pathTracerAnalysisSettings.sampleFrames);
+    ptExperimentAccum = {};
+    vulkan.logicalDevice.waitIdle();
+    applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
 }
 
 void EngineCore::ensurePathTracerSanityScene()
@@ -2485,7 +2760,8 @@ void EngineCore::drawFrame() {
 
     // Note: inFlightFences, presentCompleteSemaphores, and commandBuffers are indexed by frameIndex,
     //       while renderFinishedSemaphores is indexed by imageIndex
-    auto fenceResult = vulkan.logicalDevice.waitForFences(*frames.inFlightFences[frames.frameIndex], vk::True, UINT64_MAX);
+    auto fenceResult = waitForFenceOrThrow(
+        vulkan.logicalDevice, *frames.inFlightFences[frames.frameIndex], "frame in-flight fence");
     if (fenceResult != vk::Result::eSuccess) {
         throw std::runtime_error("failed to wait for fence!");
     }
@@ -2497,7 +2773,8 @@ void EngineCore::drawFrame() {
             if (i == frames.frameIndex) {
                 continue;
             }
-            const auto syncResult = vulkan.logicalDevice.waitForFences(*frames.inFlightFences[i], vk::True, UINT64_MAX);
+            const auto syncResult = waitForFenceOrThrow(
+                vulkan.logicalDevice, *frames.inFlightFences[i], "runtime skinned BLAS synchronization fence");
             if (syncResult != vk::Result::eSuccess) {
                 throw std::runtime_error("failed to synchronize runtime skinned BLAS updates");
             }
@@ -2507,6 +2784,7 @@ void EngineCore::drawFrame() {
     if (submittedRenderModes[frames.frameIndex] == RenderMode::PathTracer) {
         collectPathTracerTimings(frames.frameIndex);
         collectPathTracerAnalysisCounters(frames.frameIndex);
+        updatePathTracerExperimentSweep();
         updateAdaptivePathTracerSettings();
     }
 
@@ -2524,8 +2802,8 @@ void EngineCore::drawFrame() {
 
     // If this swapchain image is still associated with an older in-flight frame, wait for it.
     if (imageIndex < imagesInFlight.size() && imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
-        const auto imageFenceResult = vulkan.logicalDevice.waitForFences(
-            std::array<vk::Fence, 1>{imagesInFlight[imageIndex]}, vk::True, UINT64_MAX);
+        const auto imageFenceResult = waitForFenceOrThrow(
+            vulkan.logicalDevice, imagesInFlight[imageIndex], "swapchain image in-flight fence");
         if (imageFenceResult != vk::Result::eSuccess) {
             throw std::runtime_error("failed to wait for in-flight swapchain image fence");
         }

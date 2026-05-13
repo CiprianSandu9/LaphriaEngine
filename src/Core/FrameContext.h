@@ -96,6 +96,15 @@ class FrameContext
 	std::vector<Laphria::VulkanUtils::VmaBuffer> ptAnalysisCounterBuffers;
 	std::vector<void *>                          ptAnalysisCounterMapped;
 
+	static constexpr uint32_t       kSunVisibleCandidateCacheCapacity = 4096;
+	static constexpr vk::DeviceSize kSunVisibleCandidateRecordSize = 80;
+	static constexpr vk::DeviceSize kSunVisibleCandidateCacheHeaderSize = 16;
+	static constexpr vk::DeviceSize kSunVisibleCandidateCacheBufferSize =
+	    kSunVisibleCandidateCacheHeaderSize +
+	    kSunVisibleCandidateCacheCapacity * kSunVisibleCandidateRecordSize;
+	std::vector<Laphria::VulkanUtils::VmaBuffer> sunVisibleCandidateCacheBuffers;
+	std::vector<void *>                          sunVisibleCandidateCacheMapped;
+
 	// ── Temporal tracking (updated each frame by updateUniformBuffer) ────────
 	glm::mat4 prevViewProj{1.0f};   // VP matrix of the last submitted frame
 	uint32_t  frameCount = 0;       // monotonically increasing, seeds per-pixel RNG
@@ -128,6 +137,7 @@ class FrameContext
 	void createAtrousResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
 	void createPathTracerAnalysisResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
 	void createPathTracerAnalysisBuffers(const VulkanDevice &dev);
+	void createSunVisibleCandidateCacheBuffers(const VulkanDevice &dev);
 
 	void createUniformBuffers(const VulkanDevice &dev);
 	void createTLASResources(VulkanDevice &dev);

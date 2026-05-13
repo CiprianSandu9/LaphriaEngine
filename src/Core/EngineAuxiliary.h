@@ -160,7 +160,10 @@ struct PathTracerAnalysisCounters
 	uint32_t firstHitProbeSunVisibleCount = 0;
 	uint32_t firstHitProbeContributionSum = 0;
 	uint32_t firstHitProbeSunVisibleContributionSum = 0;
-	uint32_t _pad3[3] = {};
+	uint32_t cachedCandidateInsertCount = 0;
+	uint32_t cacheReuseAttemptCount = 0;
+	uint32_t cacheReuseAcceptedCount = 0;
+	uint32_t cacheReuseContributionSum = 0;
 };
 
 struct SkinningPushConstants

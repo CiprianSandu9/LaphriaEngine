@@ -72,7 +72,8 @@ public:
         SunBounceGuided = 1,
         CandidateSunBounce = 2,
         CandidateAverageReference = 3,
-        CandidateRis = 4
+        CandidateRis = 4,
+        CachedSecondaryReuse = 5
     };
 
     struct PathTracerSettings
@@ -84,10 +85,12 @@ public:
         bool                  enableEnvironmentNEE = true;
         bool                  blackEnvironment = false;
         bool                  applyFirstHitProbesToFinal = false;
+        bool                  enableSunVisibleCandidateCache = false;
         EnvironmentNeeSamplingMode environmentNeeSamplingMode = EnvironmentNeeSamplingMode::SkyBiased;
         FirstHitProbeSamplingMode firstHitProbeSamplingMode = FirstHitProbeSamplingMode::CosineHemisphere;
         int                   firstHitDiffuseSamples = 1;
         int                   firstHitCandidateCount = 4;
+        float                 cacheReuseWeight = 0.126f;
         float                 targetFrameMs = 16.6f;
         bool                  enableReprojection = true;
         bool                  enableDenoiser = true;
@@ -128,6 +131,12 @@ public:
         float firstHitProbeSunVisibleRatio = 0.0f;
         float firstHitProbeContributionAverage = 0.0f;
         float firstHitProbeSunVisibleContributionAverage = 0.0f;
+        uint32_t cachedCandidateCount = 0;
+        uint32_t residentCachedCandidateCount = 0;
+        uint32_t cacheReuseAttemptCount = 0;
+        uint32_t cacheReuseAcceptedCount = 0;
+        float cacheReuseAcceptedRatio = 0.0f;
+        float cacheReuseContributionAverage = 0.0f;
         float cameraMotionFactor = 0.0f;
     };
 
@@ -137,6 +146,8 @@ public:
         bool                         lockBenchmarkScene = false;
         bool                         benchmarkActive = false;
         bool                         runBaselineSweep = false;
+        bool                         runGiCacheWeightSweep = false;
+        bool                         clearSunVisibleCacheRequested = false;
         bool                         loadIndirectBounceTestScene = false;
         PathTracerDebugLightPreset   debugLightPreset = PathTracerDebugLightPreset::HardBounce;
         bool                         applyDebugLightPreset = false;
@@ -148,8 +159,8 @@ public:
         float                        p95ConvergenceThreshold = 0.02f;
         PathTracerDebugAov           debugAov = PathTracerDebugAov::FinalColor;
         int                          debugAtrousIteration = 0;
-        int                          warmupFrames = 60;
-        int                          sampleFrames = 240;
+        int                          warmupFrames = 30;
+        int                          sampleFrames = 120;
         float                        benchmarkVisualFidelityScore = 0.80f;
         bool                         runPhysicalSanityChecks = false;
         bool                         physicalSanityActive = false;

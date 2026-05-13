@@ -23,11 +23,17 @@ struct RayPayload {
 [[vk::binding(3, 0)]] RWTexture2D<float>  gBufferDepth;       // linear ray hit distance (negative = sky)
 [[vk::binding(4, 0)]] RWTexture2D<float2> motionVectors;      // screen-space UV offset current→previous
 [[vk::binding(9, 0)]] RWByteAddressBuffer ptAnalysisCounters;
+[[vk::binding(10, 0)]] RWByteAddressBuffer ptSunVisibleCandidateCache;
 
 // Set 1 — global UBO
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 
 [[vk::push_constant]] ScenePushConstants push;
+
+static const int SUN_VISIBLE_CANDIDATE_CACHE_BINDING = 10;
+static const uint SUN_VISIBLE_CANDIDATE_CACHE_CAPACITY = 4096;
+static const uint SUN_VISIBLE_CANDIDATE_CACHE_HEADER_SIZE = 16;
+static const uint SUN_VISIBLE_CANDIDATE_RECORD_SIZE = 80;
 
 static const int DEBUG_AOV_PATH_RAW_FINAL_COLOR   = 6;
 static const int DEBUG_AOV_PATH_DIRECT_LIGHTING   = 7;
@@ -47,7 +53,10 @@ static const int FIRST_HIT_PROBE_SAMPLING_SUN_BOUNCE_GUIDED = 1;
 static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_SUN_BOUNCE = 2;
 static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_AVERAGE_REFERENCE = 3;
 static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_RIS = 4;
+static const int FIRST_HIT_PROBE_SAMPLING_CACHED_SECONDARY_REUSE = 5;
 static const int PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = 1 << 2;
+static const uint SUN_VISIBLE_CACHE_ENABLE_BIT = 1u << 16;
+static const float CACHED_REUSE_MAX_CONNECTION_DISTANCE = 3.5;
 
 struct FirstHitDiffuseBounceResult {
     float3 totalContribution;
@@ -57,6 +66,15 @@ struct FirstHitDiffuseBounceResult {
 struct FirstHitProbeSample {
     float3 direction;
     float  pdf;
+};
+
+struct CachedSunVisibleCandidate {
+    float3 position;
+    float3 normal;
+    float3 albedo;
+    float3 F0;
+    float  roughness;
+    float  metallic;
 };
 
 RayPayload makeVisibilityPayload()
@@ -155,6 +173,100 @@ void recordFirstHitProbeStats(bool surfaceHit, bool sunVisible, float3 contribut
     ptAnalysisCounters.InterlockedAdd(44, scaledLuma);
 }
 
+uint sunVisibleCandidateRecordOffset(uint slot)
+{
+    return SUN_VISIBLE_CANDIDATE_CACHE_HEADER_SIZE +
+           slot * SUN_VISIBLE_CANDIDATE_RECORD_SIZE;
+}
+
+void storeFloat3ToCache(uint offset, float3 value)
+{
+    ptSunVisibleCandidateCache.Store(offset + 0, asuint(value.x));
+    ptSunVisibleCandidateCache.Store(offset + 4, asuint(value.y));
+    ptSunVisibleCandidateCache.Store(offset + 8, asuint(value.z));
+}
+
+float3 loadFloat3FromCache(uint offset)
+{
+    return float3(asfloat(ptSunVisibleCandidateCache.Load(offset + 0)),
+                  asfloat(ptSunVisibleCandidateCache.Load(offset + 4)),
+                  asfloat(ptSunVisibleCandidateCache.Load(offset + 8)));
+}
+
+void storeSunVisibleCandidateMaterial(uint offset, RayPayload payload)
+{
+    storeFloat3ToCache(offset + 32, payload.albedo);
+    storeFloat3ToCache(offset + 48, payload.F0);
+    ptSunVisibleCandidateCache.Store(offset + 60, asuint(payload.roughness));
+    ptSunVisibleCandidateCache.Store(offset + 64, asuint(payload.metallic));
+}
+
+RayPayload makeCachedSunVisiblePayload(CachedSunVisibleCandidate candidate)
+{
+    RayPayload payload;
+    payload.albedo = candidate.albedo;
+    payload.emission = float3(0.0, 0.0, 0.0);
+    payload.worldNormal = candidate.normal;
+    payload.hitPos = candidate.position;
+    payload.roughness = candidate.roughness;
+    payload.metallic = candidate.metallic;
+    payload.F0 = candidate.F0;
+    payload.ao = 1.0;
+    payload.hitT = 0.0;
+    payload.instanceID = 0;
+    return payload;
+}
+
+void recordSunVisibleCandidate(RayPayload secondaryPayload, float3 referenceContribution)
+{
+    float luma = pathTracerLuminance(referenceContribution);
+    if (luma <= 0.000001) {
+        return;
+    }
+
+    uint insertIndex = 0;
+    ptSunVisibleCandidateCache.InterlockedAdd(0, 1u, insertIndex);
+    if (insertIndex >= SUN_VISIBLE_CANDIDATE_CACHE_CAPACITY) {
+        return;
+    }
+    uint offset = sunVisibleCandidateRecordOffset(insertIndex);
+    storeFloat3ToCache(offset + 0, secondaryPayload.hitPos);
+    storeFloat3ToCache(offset + 16, normalize(secondaryPayload.worldNormal));
+    storeSunVisibleCandidateMaterial(offset, secondaryPayload);
+    ptSunVisibleCandidateCache.Store(offset + 68, asuint(luma));
+    ptSunVisibleCandidateCache.Store(offset + 72, ubo.frameCount);
+    ptAnalysisCounters.InterlockedAdd(52, 1u);
+}
+
+bool isSaneCachedSunVisibleCandidate(CachedSunVisibleCandidate candidate)
+{
+    float normalLenSq = dot(candidate.normal, candidate.normal);
+    bool positionOk = all(abs(candidate.position) < float3(100000.0, 100000.0, 100000.0));
+    bool normalOk = normalLenSq > 0.25 && normalLenSq < 1.25 &&
+                    all(abs(candidate.normal) <= float3(1.1, 1.1, 1.1));
+    bool albedoOk = all(candidate.albedo >= float3(0.0, 0.0, 0.0)) &&
+                    all(candidate.albedo <= float3(8.0, 8.0, 8.0));
+    bool f0Ok = all(candidate.F0 >= float3(0.0, 0.0, 0.0)) &&
+                all(candidate.F0 <= float3(8.0, 8.0, 8.0));
+    bool materialOk = candidate.roughness >= 0.0 && candidate.roughness <= 1.1 &&
+                      candidate.metallic >= 0.0 && candidate.metallic <= 1.1;
+    return positionOk && normalOk && albedoOk && f0Ok && materialOk;
+}
+
+bool loadSunVisibleCandidate(uint slot, uint currentFrame, out CachedSunVisibleCandidate candidate)
+{
+    uint offset = sunVisibleCandidateRecordOffset(slot);
+    candidate.position = loadFloat3FromCache(offset + 0);
+    candidate.normal = loadFloat3FromCache(offset + 16);
+    candidate.albedo = loadFloat3FromCache(offset + 32);
+    candidate.F0 = loadFloat3FromCache(offset + 48);
+    candidate.roughness = asfloat(ptSunVisibleCandidateCache.Load(offset + 60));
+    candidate.metallic = asfloat(ptSunVisibleCandidateCache.Load(offset + 64));
+    float luma = asfloat(ptSunVisibleCandidateCache.Load(offset + 68));
+    uint frameId = ptSunVisibleCandidateCache.Load(offset + 72);
+    return luma > 0.000001 && frameId < currentFrame && isSaneCachedSunVisibleCandidate(candidate);
+}
+
 float3 firstHitSunBounceGuideAxis(float3 N)
 {
     float3 axis = normalize(ubo.lightDir.xyz);
@@ -229,6 +341,7 @@ float3 evaluateDirectSunContribution(float3 hitPos, float3 N, float3 V, float3 t
 FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N, float3 V, RayPayload payload,
                                                         int firstHitDiffuseSampleCount,
                                                         int firstHitProbeSamplingMode,
+                                                        bool sunVisibleCandidateCacheEnabled,
                                                         inout uint rngState)
 {
     FirstHitDiffuseBounceResult result;
@@ -278,6 +391,9 @@ FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N,
                                                                    firstLegThroughput,
                                                                    bouncePayload);
             bool secondarySunVisible = pathTracerLuminance(secondaryDirect) > 0.000001;
+            if (sunVisibleCandidateCacheEnabled && secondarySunVisible) {
+                recordSunVisibleCandidate(bouncePayload, secondaryDirect);
+            }
             recordFirstHitProbeStats(true, secondarySunVisible, emissiveContribution + secondaryDirect);
             result.secondaryDirectSunContribution += secondaryDirect;
             result.totalContribution += emissiveContribution + secondaryDirect;
@@ -292,6 +408,7 @@ FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N,
 FirstHitDiffuseBounceResult sampleFirstHitCandidateSunBounce(float3 hitPos, float3 N, float3 V, RayPayload payload,
                                                              int firstHitDiffuseSampleCount,
                                                              int candidateCount,
+                                                             bool sunVisibleCandidateCacheEnabled,
                                                              inout uint rngState)
 {
     FirstHitDiffuseBounceResult result;
@@ -347,6 +464,9 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateSunBounce(float3 hitPos, floa
                                                                       bouncePayload);
                 candidateTotal = emissiveContribution + candidateSecondarySun;
                 sunVisible = pathTracerLuminance(candidateSecondarySun) > 0.000001;
+                if (sunVisibleCandidateCacheEnabled && sunVisible) {
+                    recordSunVisibleCandidate(bouncePayload, candidateSecondarySun);
+                }
             } else {
                 candidateTotal = firstLegThroughput * bouncePayload.emission;
             }
@@ -376,6 +496,7 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateSunBounce(float3 hitPos, floa
 FirstHitDiffuseBounceResult sampleFirstHitCandidateAverageReference(float3 hitPos, float3 N, float3 V, RayPayload payload,
                                                                     int firstHitDiffuseSampleCount,
                                                                     int candidateCount,
+                                                                    bool sunVisibleCandidateCacheEnabled,
                                                                     inout uint rngState)
 {
     FirstHitDiffuseBounceResult result;
@@ -430,6 +551,9 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateAverageReference(float3 hitPo
                                                                       bouncePayload);
                 candidateTotal = emissiveContribution + candidateSecondarySun;
                 sunVisible = pathTracerLuminance(candidateSecondarySun) > 0.000001;
+                if (sunVisibleCandidateCacheEnabled && sunVisible) {
+                    recordSunVisibleCandidate(bouncePayload, candidateSecondarySun);
+                }
             } else {
                 candidateTotal = firstLegThroughput * bouncePayload.emission;
             }
@@ -455,6 +579,7 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateAverageReference(float3 hitPo
 FirstHitDiffuseBounceResult sampleFirstHitCandidateRis(float3 hitPos, float3 N, float3 V, RayPayload payload,
                                                        int firstHitDiffuseSampleCount,
                                                        int candidateCount,
+                                                       bool sunVisibleCandidateCacheEnabled,
                                                        inout uint rngState)
 {
     FirstHitDiffuseBounceResult result;
@@ -511,6 +636,9 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateRis(float3 hitPos, float3 N, 
                                                                       bouncePayload);
                 candidateTotal = emissiveContribution + candidateSecondarySun;
                 sunVisible = pathTracerLuminance(candidateSecondarySun) > 0.000001;
+                if (sunVisibleCandidateCacheEnabled && sunVisible) {
+                    recordSunVisibleCandidate(bouncePayload, candidateSecondarySun);
+                }
             } else {
                 candidateTotal = firstLegThroughput * bouncePayload.emission;
             }
@@ -533,6 +661,120 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateRis(float3 hitPos, float3 N, 
         recordFirstHitProbeStats(selectedSurfaceHit, selectedSunVisible, risTotal);
         result.totalContribution += risTotal;
         result.secondaryDirectSunContribution += risSecondarySun;
+    }
+
+    result.totalContribution /= float(firstHitDiffuseSampleCount);
+    result.secondaryDirectSunContribution /= float(firstHitDiffuseSampleCount);
+    return result;
+}
+
+float3 evaluateCachedSunVisibleContribution(float3 hitPos, float3 N, float3 V,
+                                             RayPayload primaryPayload,
+                                             CachedSunVisibleCandidate candidate,
+                                             out bool accepted)
+{
+    accepted = false;
+
+    float3 toCached = candidate.position - hitPos;
+    float rawDistanceSq = dot(toCached, toCached);
+    float maxConnectionDistanceSq =
+        CACHED_REUSE_MAX_CONNECTION_DISTANCE * CACHED_REUSE_MAX_CONNECTION_DISTANCE;
+    if (!(rawDistanceSq > 0.000001) || rawDistanceSq > maxConnectionDistanceSq) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float distanceToCached = sqrt(rawDistanceSq);
+    float3 bounceDir = toCached / distanceToCached;
+    if (!all(abs(bounceDir) <= float3(1.1, 1.1, 1.1))) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float NdotBounce = max(dot(N, bounceDir), 0.0);
+    float cachedNdot = max(dot(candidate.normal, -bounceDir), 0.0);
+    if (NdotBounce <= 0.0 || cachedNdot <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float visibilityRayTMin = 0.001;
+    float visibilityRayTMax = distanceToCached - 0.004;
+    if (visibilityRayTMax <= visibilityRayTMin) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    RayPayload visibilityPayload = makeVisibilityPayload();
+    RayDesc visibilityRay;
+    visibilityRay.Origin = hitPos + N * 0.002;
+    visibilityRay.Direction = bounceDir;
+    visibilityRay.TMin = visibilityRayTMin;
+    visibilityRay.TMax = visibilityRayTMax;
+    TraceRay(tlas,
+             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE,
+             0xFF, 0, 0, 0, visibilityRay, visibilityPayload);
+
+    if (visibilityPayload.hitT >= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    accepted = true;
+
+    float3 F = fresnelSchlick(max(dot(N, V), 0.0), primaryPayload.F0);
+    float3 kD = (float3(1.0, 1.0, 1.0) - F) * (1.0 - primaryPayload.metallic);
+    float3 firstLegThroughput = kD * primaryPayload.albedo;
+    RayPayload cachedPayload = makeCachedSunVisiblePayload(candidate);
+    float3 secondaryV = -bounceDir;
+    return evaluateDirectSunContribution(candidate.position,
+                                         candidate.normal,
+                                         secondaryV,
+                                         firstLegThroughput,
+                                         cachedPayload);
+}
+
+FirstHitDiffuseBounceResult sampleCachedSunVisibleCandidate(float3 hitPos, float3 N, float3 V,
+                                                            RayPayload payload,
+                                                            int firstHitDiffuseSampleCount,
+                                                            float cacheReuseWeight,
+                                                            inout uint rngState)
+{
+    FirstHitDiffuseBounceResult result;
+    result.totalContribution = float3(0.0, 0.0, 0.0);
+    result.secondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
+
+    int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
+    if (extraSampleCount <= 0) {
+        return result;
+    }
+
+    uint totalInserted = ptSunVisibleCandidateCache.Load(0);
+    uint available = min(totalInserted, SUN_VISIBLE_CANDIDATE_CACHE_CAPACITY);
+    if (available == 0) {
+        return result;
+    }
+
+    for (int probe = 0; probe < extraSampleCount; ++probe) {
+        ptAnalysisCounters.InterlockedAdd(56, 1u);
+
+        uint slot = min(uint(randomFloat(rngState) * float(available)), available - 1);
+        CachedSunVisibleCandidate candidate;
+        if (!loadSunVisibleCandidate(slot, ubo.frameCount, candidate)) {
+            recordFirstHitProbeStats(false, false, float3(0.0, 0.0, 0.0));
+            continue;
+        }
+
+        bool accepted = false;
+        float3 reusedContribution = evaluateCachedSunVisibleContribution(hitPos, N, V, payload, candidate, accepted);
+        if (!accepted) {
+            recordFirstHitProbeStats(true, false, float3(0.0, 0.0, 0.0));
+            continue;
+        }
+
+        reusedContribution = min(reusedContribution * cacheReuseWeight, float3(8.0, 8.0, 8.0));
+        result.totalContribution += reusedContribution;
+        result.secondaryDirectSunContribution += reusedContribution;
+        bool sunVisible = pathTracerLuminance(reusedContribution) > 0.000001;
+        recordFirstHitProbeStats(true, sunVisible, reusedContribution);
+        ptAnalysisCounters.InterlockedAdd(60, 1u);
+        uint scaledLuma = uint(clamp(pathTracerLuminance(reusedContribution), 0.0, 8.0) * 64.0 + 0.5);
+        ptAnalysisCounters.InterlockedAdd(64, scaledLuma);
     }
 
     result.totalContribution /= float(firstHitDiffuseSampleCount);
@@ -613,11 +855,13 @@ void main() {
     uint   packedPathTracerFlags = uint(push.padding3);
     bool   environmentNeeEnabled = (packedPathTracerFlags & 0x1) != 0;
     bool   applyFirstHitProbesToFinal = (push.padding3 & PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT) != 0;
+    bool   sunVisibleCandidateCacheEnabled = (packedPathTracerFlags & SUN_VISIBLE_CACHE_ENABLE_BIT) != 0;
     int    environmentNeeSamplingMode = int((packedPathTracerFlags >> 3) & 0x3);
     int    firstHitDiffuseSampleCount = clamp(int((packedPathTracerFlags >> 5) & 0xF), 1, 8);
     int    candidateCount = int((packedPathTracerFlags >> 9) & 0xF) + 1;
     candidateCount = clamp(candidateCount, 2, 16);
     int    firstHitProbeSamplingMode = int((packedPathTracerFlags >> 13) & 0x7);
+    float  cacheReuseWeight = clamp(push.skyData.x, 0.0, 1.0);
 
     RayDesc ray;
     ray.Origin    = origin;
@@ -677,18 +921,25 @@ void main() {
 
         if (bounce == 0 && firstHitDiffuseSampleCount > 1) {
             FirstHitDiffuseBounceResult firstHitBounce;
-            if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CANDIDATE_SUN_BOUNCE) {
+            if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CACHED_SECONDARY_REUSE) {
+                firstHitBounce = sampleCachedSunVisibleCandidate(payload.hitPos, N2, V2, payload,
+                                                                 firstHitDiffuseSampleCount, cacheReuseWeight, rngState);
+            } else if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CANDIDATE_SUN_BOUNCE) {
                 firstHitBounce = sampleFirstHitCandidateSunBounce(payload.hitPos, N2, V2, payload,
-                                                                  firstHitDiffuseSampleCount, candidateCount, rngState);
+                                                                  firstHitDiffuseSampleCount, candidateCount,
+                                                                  sunVisibleCandidateCacheEnabled, rngState);
             } else if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CANDIDATE_AVERAGE_REFERENCE) {
                 firstHitBounce = sampleFirstHitCandidateAverageReference(payload.hitPos, N2, V2, payload,
-                                                                         firstHitDiffuseSampleCount, candidateCount, rngState);
+                                                                         firstHitDiffuseSampleCount, candidateCount,
+                                                                         sunVisibleCandidateCacheEnabled, rngState);
             } else if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CANDIDATE_RIS) {
                 firstHitBounce = sampleFirstHitCandidateRis(payload.hitPos, N2, V2, payload,
-                                                            firstHitDiffuseSampleCount, candidateCount, rngState);
+                                                            firstHitDiffuseSampleCount, candidateCount,
+                                                            sunVisibleCandidateCacheEnabled, rngState);
             } else {
                 firstHitBounce = sampleFirstHitDiffuseBounce(payload.hitPos, N2, V2, payload,
-                                                            firstHitDiffuseSampleCount, firstHitProbeSamplingMode, rngState);
+                                                            firstHitDiffuseSampleCount, firstHitProbeSamplingMode,
+                                                            sunVisibleCandidateCacheEnabled, rngState);
             }
             if (applyFirstHitProbesToFinal) {
                 radiance += firstHitBounce.totalContribution;

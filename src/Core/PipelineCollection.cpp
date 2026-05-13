@@ -187,7 +187,8 @@ void PipelineCollection::createRayTracingDescriptorSetLayout(const VulkanDevice 
 	// Bindings 0-4: acceleration structure + storage images written by Raygen.
 	// Bindings 5-8: mesh data arrays read by ClosestHit.
 	// Binding 9: analysis counters buffer (optional instrumentation path).
-	std::array<vk::DescriptorSetLayoutBinding, 10> bindings = {
+	// Binding 10: sun-visible secondary hit cache for debug GI reuse experiments.
+	std::array<vk::DescriptorSetLayoutBinding, 11> bindings = {
 	    vk::DescriptorSetLayoutBinding{// 0: TLAS
 	                                   .binding         = 0,
 	                                   .descriptorType  = vk::DescriptorType::eAccelerationStructureKHR,
@@ -237,8 +238,13 @@ void PipelineCollection::createRayTracingDescriptorSetLayout(const VulkanDevice 
 	                                   .binding         = 9,
 	                                   .descriptorType  = vk::DescriptorType::eStorageBuffer,
 	                                   .descriptorCount = 1,
+	                                   .stageFlags      = vk::ShaderStageFlagBits::eRaygenKHR},
+	    vk::DescriptorSetLayoutBinding{// 10: PT sun-visible secondary hit cache
+	                                   .binding         = 10,
+	                                   .descriptorType  = vk::DescriptorType::eStorageBuffer,
+	                                   .descriptorCount = 1,
 	                                   .stageFlags      = vk::ShaderStageFlagBits::eRaygenKHR}};
-	std::array<vk::DescriptorBindingFlags, 10> flags = {
+	std::array<vk::DescriptorBindingFlags, 11> flags = {
 	    vk::DescriptorBindingFlags{},   // 0: TLAS
 	    vk::DescriptorBindingFlags{},   // 1: noisy colour
 	    vk::DescriptorBindingFlags{},   // 2: normals
@@ -248,7 +254,8 @@ void PipelineCollection::createRayTracingDescriptorSetLayout(const VulkanDevice 
 	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,  // 6
 	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,  // 7
 	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind, // 8
-	    vk::DescriptorBindingFlags{} // 9
+	    vk::DescriptorBindingFlags{}, // 9
+	    vk::DescriptorBindingFlags{}  // 10
 	};
 	vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlags{
 	    .bindingCount  = static_cast<uint32_t>(flags.size()),

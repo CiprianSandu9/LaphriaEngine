@@ -172,13 +172,25 @@ bool testPathTracerDebugAovContract()
     const std::string uiSource = readTextFile(sourceRoot / "src" / "Core" / "UISystem.cpp");
     const std::string engineHeader = readTextFile(sourceRoot / "src" / "Core" / "EngineCore.h");
     const std::string engineSource = readTextFile(sourceRoot / "src" / "Core" / "EngineCore.cpp");
+    const std::string frameContextHeader = readTextFile(sourceRoot / "src" / "Core" / "FrameContext.h");
+    const std::string frameContextSource = readTextFile(sourceRoot / "src" / "Core" / "FrameContext.cpp");
     const std::string raygen = readTextFile(sourceRoot / "src" / "shaders" / "Raygen.slang");
     const std::string miss = readTextFile(sourceRoot / "src" / "shaders" / "Miss.slang");
     const std::string denoiser = readTextFile(sourceRoot / "src" / "shaders" / "Denoiser.slang");
+    const std::string anyHit = readTextFile(sourceRoot / "src" / "shaders" / "AnyHit.slang");
 
     if (uiHeader.empty() || uiSource.empty() || engineHeader.empty() || engineSource.empty() ||
-        raygen.empty() || miss.empty() || denoiser.empty()) {
+        frameContextHeader.empty() || frameContextSource.empty() ||
+        raygen.empty() || miss.empty() || denoiser.empty() || anyHit.empty()) {
         std::cerr << "failed to load path tracer debug AOV contract files\n";
+        return false;
+    }
+    if (!containsText(uiHeader, "warmupFrames = 30") || !containsText(uiHeader, "sampleFrames = 120")) {
+        std::cerr << "GI cache sweep defaults should stay short enough for interactive runs\n";
+        return false;
+    }
+    if (!containsText(uiHeader, "cacheReuseWeight = 0.126f")) {
+        std::cerr << "cached secondary reuse debug default should match the calibrated hard-bounce weight\n";
         return false;
     }
 
@@ -213,9 +225,20 @@ bool testPathTracerDebugAovContract()
         "Candidate Sun Bounce",
         "Candidate Average Reference",
         "Candidate RIS",
+        "Cached Secondary Reuse",
         "First-Hit Candidate Count",
+        "Cache Reuse Weight",
+        "Run GI Cache Weight Sweep",
         "Capture Checklist",
         "Record these values after the image stabilizes",
+        "Sun-Visible Cache",
+        "Enable Sun-Visible Cache",
+        "Clear Sun-Visible Cache",
+        "Cache Inserts This Frame",
+        "Resident Cached Candidates",
+        "Cache Reuse Attempts",
+        "Cache Reuse Accepted",
+        "Cache Reuse Avg Luma",
         "Light Preset",
         "Hard Bounce",
         "Medium Bounce",
@@ -279,6 +302,25 @@ bool testPathTracerDebugAovContract()
         "sampleFirstHitCandidateSunBounce",
         "sampleFirstHitCandidateAverageReference",
         "sampleFirstHitCandidateRis",
+        "ptSunVisibleCandidateCache",
+        "SUN_VISIBLE_CANDIDATE_CACHE_BINDING",
+        "SUN_VISIBLE_CANDIDATE_RECORD_SIZE",
+        "CachedSunVisibleCandidate",
+        "storeSunVisibleCandidateMaterial",
+        "makeCachedSunVisiblePayload",
+        "isSaneCachedSunVisibleCandidate",
+        "evaluateCachedSunVisibleContribution",
+        "rawDistanceSq > 0.000001",
+        "visibilityRayTMax <= visibilityRayTMin",
+        "recordSunVisibleCandidate",
+        "loadSunVisibleCandidate",
+        "sampleCachedSunVisibleCandidate",
+        "insertIndex >= SUN_VISIBLE_CANDIDATE_CACHE_CAPACITY",
+        "CACHED_REUSE_MAX_CONNECTION_DISTANCE",
+        "CACHED_REUSE_MAX_CONNECTION_DISTANCE * CACHED_REUSE_MAX_CONNECTION_DISTANCE",
+        "RAY_FLAG_FORCE_OPAQUE",
+        "cacheReuseWeight",
+        "FIRST_HIT_PROBE_SAMPLING_CACHED_SECONDARY_REUSE",
         "candidateCount",
         "risWeightSum",
         "selectedCandidateProbability",
@@ -294,6 +336,10 @@ bool testPathTracerDebugAovContract()
             return false;
         }
     }
+    if (!containsText(anyHit, "float  ao;")) {
+        std::cerr << "path tracer AnyHit RayPayload layout must include ao before hitT\n";
+        return false;
+    }
 
     const char *requiredEngineSymbols[] = {
         "blackEnvironment",
@@ -306,6 +352,32 @@ bool testPathTracerDebugAovContract()
         "firstHitProbeContributionAverage",
         "firstHitProbeSunVisibleContributionAverage",
         "firstHitProbeSamplingMode",
+        "enableSunVisibleCandidateCache",
+        "cacheReuseWeight",
+        "PathTracerExperimentRow",
+        "startPathTracerGiCacheWeightSweep",
+        "Cached Secondary Reuse 0.118",
+        "Cached Secondary Reuse 0.122",
+        "Cached Secondary Reuse 0.126",
+        "Cached Secondary Reuse 0.130",
+        "updatePathTracerExperimentSweep",
+        "logPathTracerExperimentRow",
+        "clearPathTracerExperimentCache",
+        "clearSunVisibleCandidateCache",
+        "clearSunVisibleCacheRequested",
+        "updateSunVisibleCandidateCacheInvalidation",
+        "lastSunVisibleCacheLightDirection",
+        "vulkan.logicalDevice.waitIdle()",
+        "debugBreakIfDebuggerAttached",
+        "waitForFenceOrThrow",
+        "vk::SystemError",
+        "Vulkan device lost while waiting for",
+        "pathTracerStorageBufferBarrier",
+        "vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite",
+        "sunVisibleCandidateCacheBuffers",
+        "sunVisibleCandidateCacheMapped",
+        "kSunVisibleCandidateCacheCapacity",
+        "cachedSecondaryReuse",
         "PathTracerDebugLightPreset",
         "applyPathTracerDebugLightPreset",
         "ptIndirectBounceTargetWallModelId",
@@ -318,8 +390,10 @@ bool testPathTracerDebugAovContract()
         "PT_IndirectBounce_LeftWall",
         "PT_IndirectBounce_RightWall"};
     for (const char *symbol : requiredEngineSymbols) {
-        if (!containsText(uiHeader, symbol) && !containsText(engineHeader, symbol) &&
-            !containsText(engineSource, symbol)) {
+        if (!containsText(uiHeader, symbol) && !containsText(uiSource, symbol) &&
+            !containsText(engineHeader, symbol) &&
+            !containsText(engineSource, symbol) && !containsText(frameContextHeader, symbol) &&
+            !containsText(frameContextSource, symbol)) {
             std::cerr << "missing path tracer indirect bounce scene symbol: " << symbol << "\n";
             return false;
         }
