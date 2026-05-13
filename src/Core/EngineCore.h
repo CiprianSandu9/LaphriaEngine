@@ -100,6 +100,14 @@ class EngineCore
 		std::string name;
 		UISystem::FirstHitProbeSamplingMode probeMode = UISystem::FirstHitProbeSamplingMode::CosineHemisphere;
 		float cacheReuseWeight = 1.0f;
+		float cacheMisStrength = 1.5f;
+		UISystem::PathTracerCacheWeightingMode cacheWeightingMode =
+		    UISystem::PathTracerCacheWeightingMode::CalibratedWeight;
+		bool adaptiveCacheRefresh = true;
+		bool enableSunVisibleCandidateCache = true;
+		bool clearCacheBeforeRow = true;
+		int cacheRefreshCandidateCount = 1;
+		int cacheSpatialCandidateTrials = 16;
 		int firstHitDiffuseSamples = 8;
 		int firstHitCandidateCount = 4;
 		UISystem::PathTracerDebugLightPreset lightPreset = UISystem::PathTracerDebugLightPreset::HardBounce;
@@ -109,11 +117,23 @@ class EngineCore
 	{
 		uint32_t sampleCount = 0;
 		double targetWallLuma = 0.0;
+		double targetWallBaseLuma = 0.0;
+		double targetWallProbeAddedLuma = 0.0;
 		double firstHitProbeAvgLuma = 0.0;
 		double firstHitProbeSunVisibleAvgLuma = 0.0;
 		double residentCachedCandidates = 0.0;
 		double cacheReuseAcceptedRatio = 0.0;
 		double cacheReuseAvgLuma = 0.0;
+		double diagnosticTargetCacheReuseAttempts = 0.0;
+		double diagnosticTargetCacheSelected = 0.0;
+		double diagnosticTargetCacheRejectDistance = 0.0;
+		double diagnosticTargetCacheRejectGeometry = 0.0;
+		double diagnosticTargetCacheRejectVisibility = 0.0;
+		double diagnosticTargetCacheReuseAccepted = 0.0;
+		double diagnosticTargetCacheReuseAvgLuma = 0.0;
+		double cacheRefreshAttempts = 0.0;
+		double cacheRefreshInserts = 0.0;
+		double cacheMisAvgWeight = 0.0;
 		double rayTraceMs = 0.0;
 		double totalFrameMs = 0.0;
 	};
@@ -124,6 +144,7 @@ class EngineCore
 	std::vector<PathTracerExperimentRow> ptExperimentRows;
 	PathTracerExperimentAccumulator ptExperimentAccum;
 	glm::vec3 lastSunVisibleCacheLightDirection{0.0f};
+	uint32_t  sunVisibleCacheGeneration{1};
 	bool      sunVisibleCacheLightDirectionInitialized{false};
 	bool      ptSanitySceneCreated{false};
 	bool      ptSanityBaselineCaptured{false};

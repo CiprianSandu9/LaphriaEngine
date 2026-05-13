@@ -164,6 +164,20 @@ struct PathTracerAnalysisCounters
 	uint32_t cacheReuseAttemptCount = 0;
 	uint32_t cacheReuseAcceptedCount = 0;
 	uint32_t cacheReuseContributionSum = 0;
+	uint32_t cacheRefreshAttemptCount = 0;
+	uint32_t cacheRefreshInsertCount = 0;
+	uint32_t cacheStaleRejectCount = 0;
+	uint32_t cacheMisWeightSum = 0;
+	uint32_t cacheMisWeightCount = 0;
+	uint32_t targetWallFirstHitProbeContributionSum = 0;
+	uint32_t targetWallBaseLuminanceSum = 0;
+	uint32_t diagnosticTargetCacheReuseAttemptCount = 0;
+	uint32_t diagnosticTargetCacheSelectedCount = 0;
+	uint32_t diagnosticTargetCacheRejectDistanceCount = 0;
+	uint32_t diagnosticTargetCacheRejectGeometryCount = 0;
+	uint32_t diagnosticTargetCacheRejectVisibilityCount = 0;
+	uint32_t diagnosticTargetCacheReuseAcceptedCount = 0;
+	uint32_t diagnosticTargetCacheReuseContributionSum = 0;
 };
 
 struct SkinningPushConstants

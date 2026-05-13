@@ -76,6 +76,12 @@ public:
         CachedSecondaryReuse = 5
     };
 
+    enum class PathTracerCacheWeightingMode
+    {
+        CalibratedWeight = 0,
+        MisApproximation = 1
+    };
+
     struct PathTracerSettings
     {
         float                 resolutionScale = 1.0f;
@@ -91,6 +97,12 @@ public:
         int                   firstHitDiffuseSamples = 1;
         int                   firstHitCandidateCount = 4;
         float                 cacheReuseWeight = 0.126f;
+        PathTracerCacheWeightingMode cacheWeightingMode = PathTracerCacheWeightingMode::CalibratedWeight;
+        float                 cacheMisStrength = 1.5f;
+        bool                  adaptiveCacheRefresh = true;
+        int                   cacheRefreshCandidateCount = 1;
+        int                   cacheSpatialCandidateTrials = 8;
+        int                   cacheMaxRecordAgeFrames = 180;
         float                 targetFrameMs = 16.6f;
         bool                  enableReprojection = true;
         bool                  enableDenoiser = true;
@@ -124,6 +136,8 @@ public:
         uint32_t pixelSampleCount = 0;
         uint32_t targetWallSampleCount = 0;
         float targetWallLuminanceAverage = 0.0f;
+        float targetWallBaseLuminanceAverage = 0.0f;
+        float targetWallFirstHitProbeContributionAverage = 0.0f;
         uint32_t firstHitProbeCount = 0;
         uint32_t firstHitProbeSurfaceHitCount = 0;
         uint32_t firstHitProbeSunVisibleCount = 0;
@@ -137,6 +151,18 @@ public:
         uint32_t cacheReuseAcceptedCount = 0;
         float cacheReuseAcceptedRatio = 0.0f;
         float cacheReuseContributionAverage = 0.0f;
+        uint32_t diagnosticTargetCacheReuseAttemptCount = 0;
+        uint32_t diagnosticTargetCacheSelectedCount = 0;
+        uint32_t diagnosticTargetCacheRejectDistanceCount = 0;
+        uint32_t diagnosticTargetCacheRejectGeometryCount = 0;
+        uint32_t diagnosticTargetCacheRejectVisibilityCount = 0;
+        uint32_t diagnosticTargetCacheReuseAcceptedCount = 0;
+        float diagnosticTargetCacheReuseAcceptedRatio = 0.0f;
+        float diagnosticTargetCacheReuseContributionAverage = 0.0f;
+        uint32_t cacheRefreshAttemptCount = 0;
+        uint32_t cacheRefreshInsertCount = 0;
+        uint32_t cacheStaleRejectCount = 0;
+        float cacheMisWeightAverage = 0.0f;
         float cameraMotionFactor = 0.0f;
     };
 

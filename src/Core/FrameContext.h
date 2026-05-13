@@ -97,7 +97,7 @@ class FrameContext
 	std::vector<void *>                          ptAnalysisCounterMapped;
 
 	static constexpr uint32_t       kSunVisibleCandidateCacheCapacity = 4096;
-	static constexpr vk::DeviceSize kSunVisibleCandidateRecordSize = 80;
+	static constexpr vk::DeviceSize kSunVisibleCandidateRecordSize = 96;
 	static constexpr vk::DeviceSize kSunVisibleCandidateCacheHeaderSize = 16;
 	static constexpr vk::DeviceSize kSunVisibleCandidateCacheBufferSize =
 	    kSunVisibleCandidateCacheHeaderSize +
