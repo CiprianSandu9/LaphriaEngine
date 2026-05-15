@@ -385,7 +385,6 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
     stagingMemories.reserve(maxBatchTextures);
     size_t batchTextureCount = 0;
     size_t batchBytes = 0;
-    size_t submittedTextureCount = 0;
 
     auto beginBatch = [&]() {
         uploadCommandBuffer = VulkanUtils::beginSingleTimeCommands(device, commandPool);
@@ -398,9 +397,6 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
         VulkanUtils::endSingleTimeCommands(device, queue, commandPool, uploadCommandBuffer);
         const auto uploadSubmitEnd = std::chrono::high_resolution_clock::now();
         stats.uploadMs += std::chrono::duration<double, std::milli>(uploadSubmitEnd - uploadSubmitStart).count();
-
-        submittedTextureCount += batchTextureCount;
-        LOGI("Texture upload progress: %zu/%zu textures submitted", submittedTextureCount, textureSources.size());
 
         stagingBuffers.clear();
         stagingMemories.clear();
@@ -423,7 +419,6 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
         std::string decodePathTag = "rgba-fallback";
 
         if (source.kind == GltfImporter::TextureImportSource::Kind::Uri) {
-            LOGI("Loading texture from URI: %s", source.uriPath.string().c_str());
 			const std::string extension = source.uriPath.extension().string();
 			if (extension == ".ktx2" || extension == ".KTX2")
 			{
@@ -454,7 +449,6 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
 				}
 			}
         } else if (source.kind == GltfImporter::TextureImportSource::Kind::Bytes) {
-            LOGI("Loading embedded texture (size: %zu)", source.bytesLength);
             const auto *data = source.bytesData;
             const size_t len = source.bytesLength;
 
@@ -501,8 +495,6 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
         if (role == TextureSemanticRole::Linear && !isSrgbFormat(payload.format)) {
             ++stats.unormLinearCount;
         }
-        LOGI("Texture path[%zu]: %s", i, decodePathTag.c_str());
-
         const auto decodeEnd = std::chrono::high_resolution_clock::now();
         stats.decodeMs += std::chrono::duration<double, std::milli>(decodeEnd - decodeStart).count();
 
@@ -536,9 +528,6 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
         samplerInfo.maxLod = static_cast<float>(payload.mipLevels);
         modelRes->textureSamplers.emplace_back(device, samplerInfo);
 
-        if (((i + 1) % 8) == 0 || (i + 1) == textureSources.size()) {
-            LOGI("Texture decode progress: %zu/%zu", i + 1, textureSources.size());
-        }
         if (batchTextureCount >= maxBatchTextures || batchBytes >= maxBatchBytes) {
             flushBatch();
             if ((i + 1) < textureSources.size()) {
@@ -548,12 +537,6 @@ void ResourceManager::loadTextures(const fastgltf::Asset &gltf, const std::files
     }
 
     flushBatch();
-    LOGI("Texture decode path summary: bc7=%u bc3=%u bc1=%u nativeKtx=%u rgbaFallback=%u",
-         stats.basisuBc7Count, stats.basisuBc3Count, stats.basisuBc1Count, stats.nativeKtxCount,
-         stats.rgbaFallbackCount);
-    LOGI("Texture color-space summary: srgbColor=%u unormLinear=%u mixedUsage=%u forcedRemap=%u model=%s",
-         stats.srgbColorCount, stats.unormLinearCount, stats.mixedUsageCount, stats.forcedRemapCount,
-         textureColorSpaceModel == TextureColorSpaceModel::HardwareSrgb ? "HardwareSrgb" : "LegacyManual");
 }
 
 SceneNode::Ptr ResourceManager::loadGltfModel(const std::string &path, vk::DescriptorSetLayout layout) {

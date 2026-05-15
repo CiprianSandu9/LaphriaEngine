@@ -23,8 +23,6 @@ struct RayPayload {
 [[vk::binding(3, 0)]] RWTexture2D<float>  gBufferDepth;       // linear ray hit distance (negative = sky)
 [[vk::binding(4, 0)]] RWTexture2D<float2> motionVectors;      // screen-space UV offset current→previous
 [[vk::binding(9, 0)]] RWByteAddressBuffer ptAnalysisCounters;
-[[vk::binding(10, 0)]] RWByteAddressBuffer ptSunVisibleCandidateCache;
-[[vk::binding(11, 0)]] RWByteAddressBuffer ptSunVisibleConnectionCache;
 [[vk::binding(12, 0)]] RWByteAddressBuffer ptReservoirGiCurrent;
 [[vk::binding(13, 0)]] RWByteAddressBuffer ptReservoirGiHistory;
 
@@ -33,25 +31,9 @@ struct RayPayload {
 
 [[vk::push_constant]] ScenePushConstants push;
 
-static const int SUN_VISIBLE_CANDIDATE_CACHE_BINDING = 10;
-static const int SUN_VISIBLE_CONNECTION_CACHE_BINDING = 11;
 static const int RESERVOIR_GI_CURRENT_BINDING = 12;
 static const int RESERVOIR_GI_HISTORY_BINDING = 13;
 static const uint RESERVOIR_GI_CURRENT_CAPACITY = 262144u;
-static const uint SUN_VISIBLE_CANDIDATE_CACHE_CAPACITY = 4096;
-static const uint SUN_VISIBLE_CANDIDATE_CACHE_BANK_COUNT = 2;
-static const uint SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY =
-    SUN_VISIBLE_CANDIDATE_CACHE_CAPACITY / SUN_VISIBLE_CANDIDATE_CACHE_BANK_COUNT;
-static const uint SUN_VISIBLE_CANDIDATE_CACHE_FRAME_SLOT_COUNT = 2;
-static const uint SUN_VISIBLE_CANDIDATE_CACHE_HEADER_SIZE = 16;
-static const uint SUN_VISIBLE_CANDIDATE_RECORD_SIZE = 96;
-static const uint SUN_VISIBLE_CONNECTION_CACHE_CAPACITY = 4096;
-static const uint SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT = 2;
-static const uint SUN_VISIBLE_CONNECTION_CACHE_BANK_CAPACITY =
-    SUN_VISIBLE_CONNECTION_CACHE_CAPACITY / SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT;
-static const uint SUN_VISIBLE_CONNECTION_CACHE_FRAME_SLOT_COUNT = 2;
-static const uint SUN_VISIBLE_CONNECTION_CACHE_HEADER_SIZE = 16;
-static const uint SUN_VISIBLE_CONNECTION_RECORD_SIZE = 128;
 static const uint RESERVOIR_GI_CURRENT_HEADER_SIZE = 16;
 static const uint RESERVOIR_GI_RECORD_SIZE = 96;
 
@@ -66,6 +48,12 @@ static const int DEBUG_AOV_PATH_ENVIRONMENT_NEE   = 13;
 static const int DEBUG_AOV_PATH_FIRST_HIT_BOUNCE  = 14;
 static const int DEBUG_AOV_PATH_SECONDARY_SUN     = 15;
 static const int DEBUG_AOV_PATH_BASELINE_CONTINUATION = 16;
+static const int DEBUG_AOV_PATH_RESERVOIR_GI_CONTRIBUTION = 17;
+static const int DEBUG_AOV_PATH_RESERVOIR_GI_ACCEPTED_LUMA = 18;
+static const int DEBUG_AOV_PATH_RESERVOIR_GI_CANDIDATE_SURFACE_HIT = 19;
+static const int DEBUG_AOV_PATH_RESERVOIR_GI_CANDIDATE_SUN_VISIBLE = 20;
+static const int DEBUG_AOV_PATH_RESERVOIR_GI_CANDIDATE_POSITIVE_WEIGHT = 21;
+static const int DEBUG_AOV_PATH_RESERVOIR_GI_SELECTED_WEIGHT = 22;
 static const int ENV_NEE_SAMPLING_COSINE_HEMISPHERE = 0;
 static const int ENV_NEE_SAMPLING_SKY_BIASED = 1;
 static const int FIRST_HIT_PROBE_SAMPLING_COSINE_HEMISPHERE = 0;
@@ -73,81 +61,39 @@ static const int FIRST_HIT_PROBE_SAMPLING_SUN_BOUNCE_GUIDED = 1;
 static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_SUN_BOUNCE = 2;
 static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_AVERAGE_REFERENCE = 3;
 static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_RIS = 4;
-static const int FIRST_HIT_PROBE_SAMPLING_CACHED_SECONDARY_REUSE = 5;
 static const int PATH_TRACER_RESERVOIR_GI_OFF = 0;
 static const int PATH_TRACER_RESERVOIR_GI_SINGLE_FRAME = 1;
 static const int PATH_TRACER_RESERVOIR_GI_TEMPORAL = 2;
 static const int PATH_TRACER_RESERVOIR_GI_TEMPORAL_SPATIAL = 3;
+static const int DIRECT_SUN_BOUNCE_ALL = 0;
+static const int DIRECT_SUN_BOUNCE_FIRST_ONLY = 1;
+static const int DIRECT_SUN_BOUNCE_FIRST_TWO = 2;
+static const int RESERVOIR_GI_CANDIDATE_TRACE_ONLY = 0;
+static const int RESERVOIR_GI_CANDIDATE_UNSHADOWED_SUN = 1;
+static const int RESERVOIR_GI_CANDIDATE_SHADOWED_SUN = 2;
 static const uint PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = 1u << 2;
-static const uint SUN_VISIBLE_CACHE_ENABLE_BIT = 1u << 16;
-static const uint ADAPTIVE_CACHE_REFRESH_BIT = 1u << 17;
-static const uint CACHE_WEIGHTING_MODE_SHIFT = 18;
-static const uint CACHE_REFRESH_COUNT_SHIFT = 20;
-static const uint CACHE_SPATIAL_TRIAL_COUNT_SHIFT = 23;
-static const uint TARGETED_DIAGNOSTIC_CACHE_REFRESH_BIT = 1u << 29;
-static const uint CACHE_VISIBILITY_BUDGET_SHIFT = 30;
-static const int CACHE_WEIGHTING_CALIBRATED = 0;
-static const int CACHE_WEIGHTING_MIS_APPROX = 1;
-static const int CACHE_PROPOSAL_SPATIAL_LOCAL = 0;
-static const int CACHE_PROPOSAL_GLOBAL_NON_LOCAL = 1;
-static const int CACHE_PROPOSAL_CONNECTION_CACHE = 2;
-static const float CACHED_REUSE_DEFAULT_CONNECTION_DISTANCE = 3.5;
-static const uint CACHED_REUSE_MAX_RECORD_AGE_FRAMES = 180;
-static const int CACHED_REUSE_SPATIAL_CANDIDATE_TRIALS = 32;
-static const int CACHED_REUSE_GLOBAL_FALLBACK_TRIALS = 8;
-static const int CACHED_REUSE_MAX_RADIUS_CELLS = 8;
-static const float CACHED_REUSE_SPATIAL_CELL_SIZE = CACHED_REUSE_DEFAULT_CONNECTION_DISTANCE;
-static const uint CACHED_REUSE_SPATIAL_BUCKET_SIZE = 128u;
-static const uint SUN_VISIBLE_CACHE_SLOT_EMPTY = 0u;
-static const uint SUN_VISIBLE_CACHE_SLOT_WRITING = 1u;
-static const uint SUN_VISIBLE_CACHE_SLOT_READY = 2u;
-static const uint targetWallFirstHitProbeContributionSumOffset = 88u;
-static const uint targetWallBaseLuminanceSumOffset = 92u;
-static const uint diagnosticTargetCacheReuseAttemptCountOffset = 96u;
-static const uint diagnosticTargetCacheSelectedCountOffset = 100u;
-static const uint diagnosticTargetCacheRejectDistanceCountOffset = 104u;
-static const uint diagnosticTargetCacheRejectGeometryCountOffset = 108u;
-static const uint diagnosticTargetCacheRejectVisibilityCountOffset = 112u;
-static const uint diagnosticTargetCacheReuseAcceptedCountOffset = 116u;
-static const uint diagnosticTargetCacheReuseContributionSumOffset = 120u;
-static const uint cacheReusePathEntryCountOffset = 124u;
-static const uint cacheReuseExtraSampleZeroCountOffset = 128u;
-static const uint cacheReuseUnavailableCandidateCountOffset = 132u;
-static const uint cacheReuseSelectedCountOffset = 136u;
-static const uint cacheReuseSelectMissCountOffset = 140u;
-static const uint cacheReuseRejectDistanceCountOffset = 144u;
-static const uint cacheReuseRejectGeometryCountOffset = 148u;
-static const uint cacheReuseRejectVisibilityCountOffset = 152u;
-static const uint cacheReuseSelectLoadSuccessCountOffset = 156u;
-static const uint cacheReuseSelectLoadMissCountOffset = 160u;
-static const uint cacheReuseSelectRejectDistanceCountOffset = 164u;
-static const uint cacheReuseSelectRejectGeometryCountOffset = 168u;
-static const uint cacheReuseAcceptedDistanceNearCountOffset = 172u;
-static const uint cacheReuseAcceptedDistanceMidCountOffset = 176u;
-static const uint cacheReuseAcceptedDistanceFarCountOffset = 180u;
-static const uint cacheReuseAcceptedDistanceVeryFarCountOffset = 184u;
-static const uint cacheReuseAcceptedLumaDarkCountOffset = 188u;
-static const uint cacheReuseAcceptedLumaDimCountOffset = 192u;
-static const uint cacheReuseAcceptedLumaUsefulCountOffset = 196u;
-static const uint cacheReuseAcceptedLumaBrightCountOffset = 200u;
-static const uint cacheConnectionReuseAttemptsOffset = 204u;
-static const uint cacheConnectionReuseAcceptedOffset = 208u;
-static const uint reservoirGiCandidatesOffset = 212u;
-static const uint reservoirGiAcceptedOffset = 216u;
-static const uint reservoirGiLumaScaledSumOffset = 220u;
-static const uint reservoirGiTemporalAcceptedOffset = 224u;
-static const uint reservoirGiTemporalRejectedOffset = 228u;
-static const uint reservoirGiSpatialAcceptedOffset = 232u;
-static const uint reservoirGiSpatialRejectedOffset = 236u;
-
-static const int CACHED_REUSE_REJECT_NONE = 0;
-static const int CACHED_REUSE_REJECT_DISTANCE = 1;
-static const int CACHED_REUSE_REJECT_GEOMETRY = 2;
-static const int CACHED_REUSE_REJECT_VISIBILITY = 3;
+static const uint targetWallFirstHitProbeContributionSumOffset = 52u;
+static const uint targetWallBaseLuminanceSumOffset = 56u;
+static const uint reservoirGiCandidatesOffset = 60u;
+static const uint reservoirGiAcceptedOffset = 64u;
+static const uint reservoirGiLumaScaledSumOffset = 68u;
+static const uint reservoirGiTemporalAcceptedOffset = 72u;
+static const uint reservoirGiTemporalRejectedOffset = 76u;
+static const uint reservoirGiSpatialAcceptedOffset = 80u;
+static const uint reservoirGiSpatialRejectedOffset = 84u;
+static const uint reservoirGiCandidateSurfaceHitsOffset = 88u;
+static const uint reservoirGiCandidateSunVisibleOffset = 92u;
+static const uint reservoirGiCandidatePositiveWeightOffset = 96u;
+static const uint reservoirGiZeroWeightOffset = 100u;
+static const uint reservoirGiSelectedWeightScaledSumOffset = 104u;
 
 struct FirstHitDiffuseBounceResult {
     float3 totalContribution;
     float3 secondaryDirectSunContribution;
+    float  reservoirCandidateSurfaceHitRatio;
+    float  reservoirCandidateSunVisibleRatio;
+    float  reservoirCandidatePositiveWeightRatio;
+    float  reservoirSelectedWeight;
 };
 
 struct FirstHitProbeSample {
@@ -155,19 +101,10 @@ struct FirstHitProbeSample {
     float  pdf;
 };
 
-struct CachedSunVisibleCandidate {
-    float3 position;
-    float3 normal;
-    float3 albedo;
-    float3 F0;
-    float  roughness;
-    float  metallic;
-};
-
 struct ReservoirGiRecord {
     float3 primaryPosition;
     float3 candidatePosition;
-    float3 candidateNormal;
+    float3 primaryNormal;
     float3 contribution;
     float3 secondaryDirectSun;
     float  weightSum;
@@ -333,7 +270,7 @@ void updateReservoirGi(uint2 launchID,
 
     storeFloat3ToReservoirGi(offset + 0, record.primaryPosition);
     storeFloat3ToReservoirGi(offset + 16, record.candidatePosition);
-    storeFloat3ToReservoirGi(offset + 32, record.candidateNormal);
+    storeFloat3ToReservoirGi(offset + 32, record.primaryNormal);
     storeFloat3ToReservoirGi(offset + 48, record.contribution);
     storeFloat3ToReservoirGi(offset + 64, record.secondaryDirectSun);
     ptReservoirGiCurrent.Store(offset + 80, asuint(record.weightSum));
@@ -347,7 +284,7 @@ ReservoirGiRecord loadReservoirGiHistoryRecord(uint offset)
     ReservoirGiRecord record;
     record.primaryPosition = loadFloat3FromReservoirGiHistory(offset + 0);
     record.candidatePosition = loadFloat3FromReservoirGiHistory(offset + 16);
-    record.candidateNormal = loadFloat3FromReservoirGiHistory(offset + 32);
+    record.primaryNormal = loadFloat3FromReservoirGiHistory(offset + 32);
     record.contribution = loadFloat3FromReservoirGiHistory(offset + 48);
     record.secondaryDirectSun = loadFloat3FromReservoirGiHistory(offset + 64);
     record.weightSum = asfloat(ptReservoirGiHistory.Load(offset + 80));
@@ -367,7 +304,7 @@ bool loadTemporalReservoirGi(uint2 pixel,
 {
     record.primaryPosition = float3(0.0, 0.0, 0.0);
     record.candidatePosition = float3(0.0, 0.0, 0.0);
-    record.candidateNormal = float3(0.0, 0.0, 0.0);
+    record.primaryNormal = float3(0.0, 0.0, 0.0);
     record.contribution = float3(0.0, 0.0, 0.0);
     record.secondaryDirectSun = float3(0.0, 0.0, 0.0);
     record.weightSum = 0.0;
@@ -401,7 +338,7 @@ bool loadTemporalReservoirGi(uint2 pixel,
     }
     if (!isSaneReservoirGiVector(record.primaryPosition, 100000.0) ||
         !isSaneReservoirGiVector(record.candidatePosition, 100000.0) ||
-        !isSaneReservoirGiVector(record.candidateNormal, 1.1) ||
+        !isSaneReservoirGiVector(record.primaryNormal, 1.1) ||
         !isSaneReservoirGiVector(record.contribution, 64.0) ||
         !isSaneReservoirGiVector(record.secondaryDirectSun, 64.0)) {
         return false;
@@ -416,7 +353,7 @@ bool loadTemporalReservoirGi(uint2 pixel,
     if (abs(previousDepth - currentPrimaryDepth) > 0.1) {
         return false;
     }
-    float3 previousPrimaryNormal = normalize(record.candidateNormal);
+    float3 previousPrimaryNormal = normalize(record.primaryNormal);
     float3 currentNormal = normalize(currentPrimaryNormal);
     if (!isSaneReservoirGiVector(previousPrimaryNormal, 1.1) ||
         !isSaneReservoirGiVector(currentNormal, 1.1) ||
@@ -498,399 +435,9 @@ void combineSpatialReservoirGi(uint2 pixel,
     }
 }
 
-uint sunVisibleCandidateRecordOffset(uint slot)
-{
-    return SUN_VISIBLE_CANDIDATE_CACHE_HEADER_SIZE +
-           slot * SUN_VISIBLE_CANDIDATE_RECORD_SIZE;
-}
-
-uint sunVisibleCandidateBankInsertCountOffset(uint bank)
-{
-    return min(bank, SUN_VISIBLE_CANDIDATE_CACHE_BANK_COUNT - 1u) * 4u;
-}
-
-uint cacheWriteBank(uint currentFrame)
-{
-    return (currentFrame / SUN_VISIBLE_CANDIDATE_CACHE_FRAME_SLOT_COUNT) %
-           SUN_VISIBLE_CANDIDATE_CACHE_BANK_COUNT;
-}
-
-uint cacheReadBank(uint currentFrame)
-{
-    uint frameSlotGeneration = currentFrame / SUN_VISIBLE_CANDIDATE_CACHE_FRAME_SLOT_COUNT;
-    return (frameSlotGeneration + SUN_VISIBLE_CANDIDATE_CACHE_BANK_COUNT - 1u) %
-           SUN_VISIBLE_CANDIDATE_CACHE_BANK_COUNT;
-}
-
-uint sunVisibleCandidateBankSlot(uint bank, uint bankSlot)
-{
-    return min(bank, SUN_VISIBLE_CANDIDATE_CACHE_BANK_COUNT - 1u) *
-               SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY +
-           (bankSlot % SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY);
-}
-
-int3 spatialCacheCell(float3 position)
-{
-    return int3(floor(position / CACHED_REUSE_SPATIAL_CELL_SIZE));
-}
-
-uint hashSpatialCacheCell(int3 cell)
-{
-    uint3 ucell = uint3(cell);
-    uint hash = ucell.x * 73856093u;
-    hash ^= ucell.y * 19349663u;
-    hash ^= ucell.z * 83492791u;
-    hash ^= hash >> 13;
-    hash *= 1274126177u;
-    return hash;
-}
-
-uint sunVisibleCandidateSpatialBankSlot(uint bank, int3 cell, uint bucketSlot)
-{
-    uint bucketCount = max(SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY / CACHED_REUSE_SPATIAL_BUCKET_SIZE, 1u);
-    uint bucket = hashSpatialCacheCell(cell) % bucketCount;
-    uint bankSlot = bucket * CACHED_REUSE_SPATIAL_BUCKET_SIZE +
-                    (bucketSlot % CACHED_REUSE_SPATIAL_BUCKET_SIZE);
-    return sunVisibleCandidateBankSlot(bank, bankSlot);
-}
-
-uint cacheRecordFrameId(uint offset) { return ptSunVisibleCandidateCache.Load(offset + 72); }
-uint cacheRecordGeneration(uint offset) { return ptSunVisibleCandidateCache.Load(offset + 76); }
-uint cacheRecordSourcePdfBits(uint offset) { return ptSunVisibleCandidateCache.Load(offset + 80); }
-float cacheRecordSourcePdf(uint offset) { return asfloat(ptSunVisibleCandidateCache.Load(offset + 80)); }
-uint cacheRecordSlotState(uint offset) { return ptSunVisibleCandidateCache.Load(offset + 84); }
-
-uint sunVisibleConnectionRecordOffset(uint slot)
-{
-    return SUN_VISIBLE_CONNECTION_CACHE_HEADER_SIZE +
-           slot * SUN_VISIBLE_CONNECTION_RECORD_SIZE;
-}
-
-uint sunVisibleConnectionBankInsertCountOffset(uint bank)
-{
-    return min(bank, SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT - 1u) * 4u;
-}
-
-uint connectionCacheWriteBank(uint currentFrame)
-{
-    return (currentFrame / SUN_VISIBLE_CONNECTION_CACHE_FRAME_SLOT_COUNT) %
-           SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT;
-}
-
-uint connectionCacheReadBank(uint currentFrame)
-{
-    uint frameSlotGeneration = currentFrame / SUN_VISIBLE_CONNECTION_CACHE_FRAME_SLOT_COUNT;
-    return (frameSlotGeneration + SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT - 1u) %
-           SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT;
-}
-
-uint sunVisibleConnectionBankSlot(uint bank, uint bankSlot)
-{
-    return min(bank, SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT - 1u) *
-               SUN_VISIBLE_CONNECTION_CACHE_BANK_CAPACITY +
-           (bankSlot % SUN_VISIBLE_CONNECTION_CACHE_BANK_CAPACITY);
-}
-
-uint connectionRecordFrameId(uint offset) { return ptSunVisibleConnectionCache.Load(offset + 104); }
-uint connectionRecordGeneration(uint offset) { return ptSunVisibleConnectionCache.Load(offset + 108); }
-uint connectionRecordSlotState(uint offset) { return ptSunVisibleConnectionCache.Load(offset + 112); }
-
 bool isFinitePositive(float value)
 {
     return value > 0.0 && abs(value) < 3.402823e+38;
-}
-
-void storeFloat3ToCache(uint offset, float3 value)
-{
-    ptSunVisibleCandidateCache.Store(offset + 0, asuint(value.x));
-    ptSunVisibleCandidateCache.Store(offset + 4, asuint(value.y));
-    ptSunVisibleCandidateCache.Store(offset + 8, asuint(value.z));
-}
-
-float3 loadFloat3FromCache(uint offset)
-{
-    return float3(asfloat(ptSunVisibleCandidateCache.Load(offset + 0)),
-                  asfloat(ptSunVisibleCandidateCache.Load(offset + 4)),
-                  asfloat(ptSunVisibleCandidateCache.Load(offset + 8)));
-}
-
-void storeFloat3ToConnectionCache(uint offset, float3 value)
-{
-    ptSunVisibleConnectionCache.Store(offset + 0, asuint(value.x));
-    ptSunVisibleConnectionCache.Store(offset + 4, asuint(value.y));
-    ptSunVisibleConnectionCache.Store(offset + 8, asuint(value.z));
-}
-
-float3 loadFloat3FromConnectionCache(uint offset)
-{
-    return float3(asfloat(ptSunVisibleConnectionCache.Load(offset + 0)),
-                  asfloat(ptSunVisibleConnectionCache.Load(offset + 4)),
-                  asfloat(ptSunVisibleConnectionCache.Load(offset + 8)));
-}
-
-void storeSunVisibleCandidateMaterial(uint offset, RayPayload payload)
-{
-    storeFloat3ToCache(offset + 32, payload.albedo);
-    storeFloat3ToCache(offset + 48, payload.F0);
-    ptSunVisibleCandidateCache.Store(offset + 60, asuint(payload.roughness));
-    ptSunVisibleCandidateCache.Store(offset + 64, asuint(payload.metallic));
-}
-
-void invalidateSunVisibleCacheSlotForWrite(uint offset, uint currentFrame)
-{
-    ptSunVisibleCandidateCache.Store(offset + 84, SUN_VISIBLE_CACHE_SLOT_WRITING);
-    ptSunVisibleCandidateCache.Store(offset + 72, currentFrame);
-    ptSunVisibleCandidateCache.Store(offset + 76, 0u);
-}
-
-void invalidateSunVisibleConnectionSlotForWrite(uint offset, uint currentFrame)
-{
-    ptSunVisibleConnectionCache.Store(offset + 112, SUN_VISIBLE_CACHE_SLOT_WRITING);
-    ptSunVisibleConnectionCache.Store(offset + 104, currentFrame);
-    ptSunVisibleConnectionCache.Store(offset + 108, 0u);
-}
-
-RayPayload makeCachedSunVisiblePayload(CachedSunVisibleCandidate candidate)
-{
-    RayPayload payload;
-    payload.albedo = candidate.albedo;
-    payload.emission = float3(0.0, 0.0, 0.0);
-    payload.worldNormal = candidate.normal;
-    payload.hitPos = candidate.position;
-    payload.roughness = candidate.roughness;
-    payload.metallic = candidate.metallic;
-    payload.F0 = candidate.F0;
-    payload.ao = 1.0;
-    payload.hitT = 0.0;
-    payload.instanceID = 0;
-    return payload;
-}
-
-bool recordSunVisibleCandidate(RayPayload secondaryPayload,
-                               float3 referenceContribution,
-                               float sourcePdf,
-                               uint currentCacheGeneration)
-{
-    float luma = pathTracerLuminance(referenceContribution);
-    if (luma <= 0.000001) {
-        return false;
-    }
-
-    uint insertIndex = 0;
-    uint writeBank = cacheWriteBank(ubo.frameCount);
-    uint insertCountOffset = sunVisibleCandidateBankInsertCountOffset(writeBank);
-    ptSunVisibleCandidateCache.InterlockedAdd(insertCountOffset, 1u, insertIndex);
-    uint slot = sunVisibleCandidateSpatialBankSlot(writeBank,
-                                                   spatialCacheCell(secondaryPayload.hitPos),
-                                                   insertIndex);
-    uint offset = sunVisibleCandidateRecordOffset(slot);
-
-    uint previousState = 0u;
-    ptSunVisibleCandidateCache.InterlockedCompareExchange(offset + 84,
-                                                          SUN_VISIBLE_CACHE_SLOT_READY,
-                                                          SUN_VISIBLE_CACHE_SLOT_WRITING,
-                                                          previousState);
-    if (previousState != SUN_VISIBLE_CACHE_SLOT_READY) {
-        ptSunVisibleCandidateCache.InterlockedCompareExchange(offset + 84,
-                                                              SUN_VISIBLE_CACHE_SLOT_EMPTY,
-                                                              SUN_VISIBLE_CACHE_SLOT_WRITING,
-                                                              previousState);
-        if (previousState != SUN_VISIBLE_CACHE_SLOT_EMPTY) {
-            return false;
-        }
-    }
-
-    invalidateSunVisibleCacheSlotForWrite(offset, ubo.frameCount);
-    storeFloat3ToCache(offset + 0, secondaryPayload.hitPos);
-    storeFloat3ToCache(offset + 16, normalize(secondaryPayload.worldNormal));
-    storeSunVisibleCandidateMaterial(offset, secondaryPayload);
-    ptSunVisibleCandidateCache.Store(offset + 68, asuint(luma));
-    ptSunVisibleCandidateCache.Store(offset + 76, currentCacheGeneration);
-    ptSunVisibleCandidateCache.Store(offset + 80, asuint(max(sourcePdf, 0.000001)));
-    ptSunVisibleCandidateCache.Store(offset + 72, ubo.frameCount);
-    ptSunVisibleCandidateCache.Store(offset + 84, SUN_VISIBLE_CACHE_SLOT_READY);
-    ptAnalysisCounters.InterlockedAdd(52, 1u);
-    return true;
-}
-
-bool isSaneCachedSunVisibleCandidate(CachedSunVisibleCandidate candidate)
-{
-    float normalLenSq = dot(candidate.normal, candidate.normal);
-    bool positionOk = all(abs(candidate.position) < float3(100000.0, 100000.0, 100000.0));
-    bool normalOk = normalLenSq > 0.25 && normalLenSq < 1.25 &&
-                    all(abs(candidate.normal) <= float3(1.1, 1.1, 1.1));
-    bool albedoOk = all(candidate.albedo >= float3(0.0, 0.0, 0.0)) &&
-                    all(candidate.albedo <= float3(8.0, 8.0, 8.0));
-    bool f0Ok = all(candidate.F0 >= float3(0.0, 0.0, 0.0)) &&
-                all(candidate.F0 <= float3(8.0, 8.0, 8.0));
-    bool materialOk = candidate.roughness >= 0.0 && candidate.roughness <= 1.1 &&
-                      candidate.metallic >= 0.0 && candidate.metallic <= 1.1;
-    return positionOk && normalOk && albedoOk && f0Ok && materialOk;
-}
-
-bool recordSunVisibleConnectionCandidate(float3 hitPos,
-                                         float3 N,
-                                         CachedSunVisibleCandidate candidate,
-                                         float sourcePdf,
-                                         uint currentCacheGeneration)
-{
-    if (!isFinitePositive(sourcePdf) || !isSaneCachedSunVisibleCandidate(candidate)) {
-        return false;
-    }
-
-    uint insertIndex = 0;
-    uint writeBank = connectionCacheWriteBank(ubo.frameCount);
-    uint insertCountOffset = sunVisibleConnectionBankInsertCountOffset(writeBank);
-    ptSunVisibleConnectionCache.InterlockedAdd(insertCountOffset, 1u, insertIndex);
-    uint slot = sunVisibleConnectionBankSlot(writeBank, insertIndex);
-    uint offset = sunVisibleConnectionRecordOffset(slot);
-
-    uint previousState = 0u;
-    ptSunVisibleConnectionCache.InterlockedCompareExchange(offset + 112,
-                                                           SUN_VISIBLE_CACHE_SLOT_READY,
-                                                           SUN_VISIBLE_CACHE_SLOT_WRITING,
-                                                           previousState);
-    if (previousState != SUN_VISIBLE_CACHE_SLOT_READY) {
-        ptSunVisibleConnectionCache.InterlockedCompareExchange(offset + 112,
-                                                               SUN_VISIBLE_CACHE_SLOT_EMPTY,
-                                                               SUN_VISIBLE_CACHE_SLOT_WRITING,
-                                                               previousState);
-        if (previousState != SUN_VISIBLE_CACHE_SLOT_EMPTY) {
-            return false;
-        }
-    }
-
-    invalidateSunVisibleConnectionSlotForWrite(offset, ubo.frameCount);
-    storeFloat3ToConnectionCache(offset + 0, hitPos);
-    storeFloat3ToConnectionCache(offset + 16, normalize(N));
-    storeFloat3ToConnectionCache(offset + 32, candidate.position);
-    storeFloat3ToConnectionCache(offset + 48, normalize(candidate.normal));
-    storeFloat3ToConnectionCache(offset + 64, candidate.albedo);
-    storeFloat3ToConnectionCache(offset + 80, candidate.F0);
-    ptSunVisibleConnectionCache.Store(offset + 92, asuint(candidate.roughness));
-    ptSunVisibleConnectionCache.Store(offset + 96, asuint(candidate.metallic));
-    ptSunVisibleConnectionCache.Store(offset + 100, asuint(max(sourcePdf, 0.000001)));
-    ptSunVisibleConnectionCache.Store(offset + 108, currentCacheGeneration);
-    ptSunVisibleConnectionCache.Store(offset + 104, ubo.frameCount);
-    ptSunVisibleConnectionCache.Store(offset + 112, SUN_VISIBLE_CACHE_SLOT_READY);
-    return true;
-}
-
-bool loadSunVisibleCandidate(uint slot,
-                             uint currentFrame,
-                             uint currentCacheGeneration,
-                             uint maxRecordAgeFrames,
-                             out CachedSunVisibleCandidate candidate,
-                             out float sourcePdf)
-{
-    uint offset = sunVisibleCandidateRecordOffset(slot);
-    candidate.position = float3(0.0, 0.0, 0.0);
-    candidate.normal = float3(0.0, 1.0, 0.0);
-    candidate.albedo = float3(0.0, 0.0, 0.0);
-    candidate.F0 = float3(0.0, 0.0, 0.0);
-    candidate.roughness = 1.0;
-    candidate.metallic = 0.0;
-    uint initialState = cacheRecordSlotState(offset);
-    if (initialState != SUN_VISIBLE_CACHE_SLOT_READY) {
-        sourcePdf = 0.0;
-        ptAnalysisCounters.InterlockedAdd(76, 1u);
-        return false;
-    }
-
-    uint frameId = cacheRecordFrameId(offset);
-    uint generation = cacheRecordGeneration(offset);
-    uint sourcePdfBits = cacheRecordSourcePdfBits(offset);
-    sourcePdf = asfloat(sourcePdfBits);
-    bool ageOk = frameId < currentFrame && (currentFrame - frameId) <= maxRecordAgeFrames;
-    bool generationOk = generation == currentCacheGeneration;
-    if (!ageOk || !generationOk || !isFinitePositive(sourcePdf)) {
-        ptAnalysisCounters.InterlockedAdd(76, 1u);
-        return false;
-    }
-
-    candidate.position = loadFloat3FromCache(offset + 0);
-    candidate.normal = loadFloat3FromCache(offset + 16);
-    candidate.albedo = loadFloat3FromCache(offset + 32);
-    candidate.F0 = loadFloat3FromCache(offset + 48);
-    candidate.roughness = asfloat(ptSunVisibleCandidateCache.Load(offset + 60));
-    candidate.metallic = asfloat(ptSunVisibleCandidateCache.Load(offset + 64));
-    float luma = asfloat(ptSunVisibleCandidateCache.Load(offset + 68));
-    uint finalState = cacheRecordSlotState(offset);
-    uint finalFrameId = cacheRecordFrameId(offset);
-    uint finalGeneration = cacheRecordGeneration(offset);
-    uint finalSourcePdfBits = cacheRecordSourcePdfBits(offset);
-    if (finalState != initialState ||
-        finalFrameId != frameId ||
-        finalGeneration != generation ||
-        finalSourcePdfBits != sourcePdfBits) {
-        ptAnalysisCounters.InterlockedAdd(76, 1u);
-        return false;
-    }
-
-    return luma > 0.000001 && frameId < currentFrame && isSaneCachedSunVisibleCandidate(candidate);
-}
-
-bool loadSunVisibleConnection(uint slot,
-                              uint currentFrame,
-                              uint currentCacheGeneration,
-                              uint maxRecordAgeFrames,
-                              out float3 primaryPosition,
-                              out float3 primaryNormal,
-                              out CachedSunVisibleCandidate candidate,
-                              out float sourcePdf)
-{
-    uint offset = sunVisibleConnectionRecordOffset(slot);
-    primaryPosition = float3(0.0, 0.0, 0.0);
-    primaryNormal = float3(0.0, 1.0, 0.0);
-    candidate.position = float3(0.0, 0.0, 0.0);
-    candidate.normal = float3(0.0, 1.0, 0.0);
-    candidate.albedo = float3(0.0, 0.0, 0.0);
-    candidate.F0 = float3(0.0, 0.0, 0.0);
-    candidate.roughness = 1.0;
-    candidate.metallic = 0.0;
-    sourcePdf = 0.0;
-
-    uint initialState = connectionRecordSlotState(offset);
-    if (initialState != SUN_VISIBLE_CACHE_SLOT_READY) {
-        return false;
-    }
-
-    uint frameId = connectionRecordFrameId(offset);
-    uint generation = connectionRecordGeneration(offset);
-    uint sourcePdfBits = ptSunVisibleConnectionCache.Load(offset + 100);
-    sourcePdf = asfloat(sourcePdfBits);
-    bool ageOk =
-        currentFrame >= SUN_VISIBLE_CONNECTION_CACHE_FRAME_SLOT_COUNT &&
-        frameId + SUN_VISIBLE_CONNECTION_CACHE_FRAME_SLOT_COUNT == currentFrame;
-    bool generationOk = generation == currentCacheGeneration;
-    if (!ageOk || !generationOk || !isFinitePositive(sourcePdf)) {
-        return false;
-    }
-
-    primaryPosition = loadFloat3FromConnectionCache(offset + 0);
-    primaryNormal = loadFloat3FromConnectionCache(offset + 16);
-    candidate.position = loadFloat3FromConnectionCache(offset + 32);
-    candidate.normal = loadFloat3FromConnectionCache(offset + 48);
-    candidate.albedo = loadFloat3FromConnectionCache(offset + 64);
-    candidate.F0 = loadFloat3FromConnectionCache(offset + 80);
-    candidate.roughness = asfloat(ptSunVisibleConnectionCache.Load(offset + 92));
-    candidate.metallic = asfloat(ptSunVisibleConnectionCache.Load(offset + 96));
-
-    uint finalState = connectionRecordSlotState(offset);
-    uint finalFrameId = connectionRecordFrameId(offset);
-    uint finalGeneration = connectionRecordGeneration(offset);
-    uint finalSourcePdfBits = ptSunVisibleConnectionCache.Load(offset + 100);
-    if (finalState != initialState ||
-        finalFrameId != frameId ||
-        finalGeneration != generation ||
-        finalSourcePdfBits != sourcePdfBits) {
-        return false;
-    }
-
-    float primaryNormalLenSq = dot(primaryNormal, primaryNormal);
-    bool primaryOk = all(abs(primaryPosition) < float3(100000.0, 100000.0, 100000.0)) &&
-                     primaryNormalLenSq > 0.25 && primaryNormalLenSq < 1.25;
-    return primaryOk && isSaneCachedSunVisibleCandidate(candidate);
 }
 
 float3 firstHitSunBounceGuideAxis(float3 N)
@@ -929,7 +476,16 @@ FirstHitProbeSample sampleFirstHitProbeDirection(float2 xi, float selector, floa
     return sample;
 }
 
-float3 evaluateDirectSunContribution(float3 hitPos, float3 N, float3 V, float3 throughput, RayPayload payload)
+bool directSunEnabledForBounce(int bounce, int directSunBounceMode)
+{
+    return directSunBounceMode == DIRECT_SUN_BOUNCE_ALL ||
+           (directSunBounceMode == DIRECT_SUN_BOUNCE_FIRST_ONLY && bounce == 0) ||
+           (directSunBounceMode == DIRECT_SUN_BOUNCE_FIRST_TWO && bounce <= 1);
+}
+
+float3 evaluateDirectSunContributionInternal(float3 hitPos, float3 N, float3 V,
+                                             float3 throughput, RayPayload payload,
+                                             bool traceVisibility)
 {
     float3 Ldir = normalize(-ubo.lightDir.xyz);
     float NdotL = max(dot(N, Ldir), 0.0);
@@ -937,17 +493,20 @@ float3 evaluateDirectSunContribution(float3 hitPos, float3 N, float3 V, float3 t
         return float3(0.0, 0.0, 0.0);
     }
 
-    RayPayload shadowPayload = makeVisibilityPayload();
-    RayDesc shadowRay;
-    shadowRay.Origin    = hitPos + N * 0.002;
-    shadowRay.Direction = Ldir;
-    shadowRay.TMin      = 0.001;
-    shadowRay.TMax      = 10000.0;
-    TraceRay(tlas,
-        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-        0xFF, 0, 0, 0, shadowRay, shadowPayload);
+    float shadowVisibility = 1.0;
+    if (traceVisibility) {
+        RayPayload shadowPayload = makeVisibilityPayload();
+        RayDesc shadowRay;
+        shadowRay.Origin    = hitPos + N * 0.002;
+        shadowRay.Direction = Ldir;
+        shadowRay.TMin      = 0.001;
+        shadowRay.TMax      = 10000.0;
+        TraceRay(tlas,
+            RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+            0xFF, 0, 0, 0, shadowRay, shadowPayload);
 
-    float shadowVisibility = (shadowPayload.hitT < 0.0) ? 1.0 : 0.0;
+        shadowVisibility = (shadowPayload.hitT < 0.0) ? 1.0 : 0.0;
+    }
     if (shadowVisibility <= 0.0) {
         return float3(0.0, 0.0, 0.0);
     }
@@ -964,16 +523,29 @@ float3 evaluateDirectSunContribution(float3 hitPos, float3 N, float3 V, float3 t
     return throughput * (diffuse + specular) * NdotL * SUN_RADIANCE * shadowVisibility;
 }
 
+float3 evaluateDirectSunContribution(float3 hitPos, float3 N, float3 V, float3 throughput, RayPayload payload)
+{
+    return evaluateDirectSunContributionInternal(hitPos, N, V, throughput, payload, true);
+}
+
+float3 evaluateUnshadowedDirectSunContribution(float3 hitPos, float3 N, float3 V,
+                                               float3 throughput, RayPayload payload)
+{
+    return evaluateDirectSunContributionInternal(hitPos, N, V, throughput, payload, false);
+}
+
 FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N, float3 V, RayPayload payload,
                                                         int firstHitDiffuseSampleCount,
                                                         int firstHitProbeSamplingMode,
-                                                        bool sunVisibleCandidateCacheEnabled,
-                                                        uint currentCacheGeneration,
                                                         inout uint rngState)
 {
     FirstHitDiffuseBounceResult result;
     result.totalContribution = float3(0.0, 0.0, 0.0);
     result.secondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
+    result.reservoirCandidateSurfaceHitRatio = 0.0;
+    result.reservoirCandidateSunVisibleRatio = 0.0;
+    result.reservoirCandidatePositiveWeightRatio = 0.0;
+    result.reservoirSelectedWeight = 0.0;
 
     int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
     if (extraSampleCount <= 0) {
@@ -1018,9 +590,6 @@ FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N,
                                                                    firstLegThroughput,
                                                                    bouncePayload);
             bool secondarySunVisible = pathTracerLuminance(secondaryDirect) > 0.000001;
-            if (sunVisibleCandidateCacheEnabled && secondarySunVisible) {
-                recordSunVisibleCandidate(bouncePayload, secondaryDirect, bounceSample.pdf, currentCacheGeneration);
-            }
             recordFirstHitProbeStats(true, secondarySunVisible, emissiveContribution + secondaryDirect);
             result.secondaryDirectSunContribution += secondaryDirect;
             result.totalContribution += emissiveContribution + secondaryDirect;
@@ -1032,76 +601,18 @@ FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N,
     return result;
 }
 
-void refreshSunVisibleCandidateCache(float3 hitPos,
-                                     float3 N,
-                                     float3 V,
-                                     RayPayload payload,
-                                     int refreshCandidateCount,
-                                     uint currentCacheGeneration,
-                                     inout uint rngState)
-{
-    int candidateCount = clamp(refreshCandidateCount, 0, 4);
-    if (candidateCount <= 0) {
-        return;
-    }
-
-    float3 F = fresnelSchlick(max(dot(N, V), 0.0), payload.F0);
-    float3 kD = (float3(1.0, 1.0, 1.0) - F) * (1.0 - payload.metallic);
-    float3 diffuseBsdf = kD * payload.albedo / PI;
-
-    for (int c = 0; c < candidateCount; ++c) {
-        ptAnalysisCounters.InterlockedAdd(68, 1u);
-        float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
-        float3 bounceDir = cosineSampleHemisphere(xi, N);
-        float NdotBounce = max(dot(N, bounceDir), 0.0);
-        float pdf = max(NdotBounce / PI, 0.0001);
-        float3 firstLegThroughput = diffuseBsdf * NdotBounce / pdf;
-
-        RayPayload bouncePayload;
-        bouncePayload.hitT = -1.0;
-        RayDesc bounceRay;
-        bounceRay.Origin = hitPos + N * 0.002;
-        bounceRay.Direction = bounceDir;
-        bounceRay.TMin = 0.001;
-        bounceRay.TMax = 10000.0;
-        TraceRay(tlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, bounceRay, bouncePayload);
-
-        if (bouncePayload.hitT >= 0.0) {
-            float3 secondaryV = -bounceDir;
-            float3 secondaryDirect = evaluateDirectSunContribution(bouncePayload.hitPos,
-                                                                   bouncePayload.worldNormal,
-                                                                   secondaryV,
-                                                                   firstLegThroughput,
-                                                                   bouncePayload);
-            if (pathTracerLuminance(secondaryDirect) > 0.000001) {
-                if (recordSunVisibleCandidate(bouncePayload, secondaryDirect, pdf, currentCacheGeneration)) {
-                    ptAnalysisCounters.InterlockedAdd(72, 1u);
-                }
-            }
-        }
-    }
-}
-
-void refreshDiagnosticTargetSunVisibleCandidateCache(float3 hitPos,
-                                                     float3 N,
-                                                     float3 V,
-                                                     RayPayload payload,
-                                                     uint currentCacheGeneration,
-                                                     inout uint rngState)
-{
-    refreshSunVisibleCandidateCache(hitPos, N, V, payload, 1, currentCacheGeneration, rngState);
-}
-
 FirstHitDiffuseBounceResult sampleFirstHitCandidateSunBounce(float3 hitPos, float3 N, float3 V, RayPayload payload,
                                                              int firstHitDiffuseSampleCount,
                                                              int candidateCount,
-                                                             bool sunVisibleCandidateCacheEnabled,
-                                                             uint currentCacheGeneration,
                                                              inout uint rngState)
 {
     FirstHitDiffuseBounceResult result;
     result.totalContribution = float3(0.0, 0.0, 0.0);
     result.secondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
+    result.reservoirCandidateSurfaceHitRatio = 0.0;
+    result.reservoirCandidateSunVisibleRatio = 0.0;
+    result.reservoirCandidatePositiveWeightRatio = 0.0;
+    result.reservoirSelectedWeight = 0.0;
 
     int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
     if (extraSampleCount <= 0) {
@@ -1152,9 +663,6 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateSunBounce(float3 hitPos, floa
                                                                       bouncePayload);
                 candidateTotal = emissiveContribution + candidateSecondarySun;
                 sunVisible = pathTracerLuminance(candidateSecondarySun) > 0.000001;
-                if (sunVisibleCandidateCacheEnabled && sunVisible) {
-                    recordSunVisibleCandidate(bouncePayload, candidateSecondarySun, pdf, currentCacheGeneration);
-                }
             } else {
                 candidateTotal = firstLegThroughput * bouncePayload.emission;
             }
@@ -1184,13 +692,15 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateSunBounce(float3 hitPos, floa
 FirstHitDiffuseBounceResult sampleFirstHitCandidateAverageReference(float3 hitPos, float3 N, float3 V, RayPayload payload,
                                                                     int firstHitDiffuseSampleCount,
                                                                     int candidateCount,
-                                                                    bool sunVisibleCandidateCacheEnabled,
-                                                                    uint currentCacheGeneration,
                                                                     inout uint rngState)
 {
     FirstHitDiffuseBounceResult result;
     result.totalContribution = float3(0.0, 0.0, 0.0);
     result.secondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
+    result.reservoirCandidateSurfaceHitRatio = 0.0;
+    result.reservoirCandidateSunVisibleRatio = 0.0;
+    result.reservoirCandidatePositiveWeightRatio = 0.0;
+    result.reservoirSelectedWeight = 0.0;
 
     int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
     if (extraSampleCount <= 0) {
@@ -1240,9 +750,6 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateAverageReference(float3 hitPo
                                                                       bouncePayload);
                 candidateTotal = emissiveContribution + candidateSecondarySun;
                 sunVisible = pathTracerLuminance(candidateSecondarySun) > 0.000001;
-                if (sunVisibleCandidateCacheEnabled && sunVisible) {
-                    recordSunVisibleCandidate(bouncePayload, candidateSecondarySun, pdf, currentCacheGeneration);
-                }
             } else {
                 candidateTotal = firstLegThroughput * bouncePayload.emission;
             }
@@ -1268,13 +775,15 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateAverageReference(float3 hitPo
 FirstHitDiffuseBounceResult sampleFirstHitCandidateRis(float3 hitPos, float3 N, float3 V, RayPayload payload,
                                                        int firstHitDiffuseSampleCount,
                                                        int candidateCount,
-                                                       bool sunVisibleCandidateCacheEnabled,
-                                                       uint currentCacheGeneration,
                                                        inout uint rngState)
 {
     FirstHitDiffuseBounceResult result;
     result.totalContribution = float3(0.0, 0.0, 0.0);
     result.secondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
+    result.reservoirCandidateSurfaceHitRatio = 0.0;
+    result.reservoirCandidateSunVisibleRatio = 0.0;
+    result.reservoirCandidatePositiveWeightRatio = 0.0;
+    result.reservoirSelectedWeight = 0.0;
 
     int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
     if (extraSampleCount <= 0) {
@@ -1326,9 +835,6 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateRis(float3 hitPos, float3 N, 
                                                                       bouncePayload);
                 candidateTotal = emissiveContribution + candidateSecondarySun;
                 sunVisible = pathTracerLuminance(candidateSecondarySun) > 0.000001;
-                if (sunVisibleCandidateCacheEnabled && sunVisible) {
-                    recordSunVisibleCandidate(bouncePayload, candidateSecondarySun, pdf, currentCacheGeneration);
-                }
             } else {
                 candidateTotal = firstLegThroughput * bouncePayload.emission;
             }
@@ -1364,6 +870,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
                                                                  bool useCandidateRis,
                                                                  int reservoirGiMode,
                                                                  int reservoirGiSpatialNeighborCount,
+                                                                 int reservoirGiCandidateEvaluationMode,
                                                                  uint2 launchID,
                                                                  uint2 launchSize,
                                                                  inout uint rngState)
@@ -1371,11 +878,15 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     FirstHitDiffuseBounceResult result;
     result.totalContribution = float3(0.0, 0.0, 0.0);
     result.secondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
+    result.reservoirCandidateSurfaceHitRatio = 0.0;
+    result.reservoirCandidateSunVisibleRatio = 0.0;
+    result.reservoirCandidatePositiveWeightRatio = 0.0;
+    result.reservoirSelectedWeight = 0.0;
 
     ReservoirGiRecord record;
     record.primaryPosition = float3(0.0, 0.0, 0.0);
     record.candidatePosition = float3(0.0, 0.0, 0.0);
-    record.candidateNormal = float3(0.0, 0.0, 0.0);
+    record.primaryNormal = float3(0.0, 0.0, 0.0);
     record.contribution = float3(0.0, 0.0, 0.0);
     record.secondaryDirectSun = float3(0.0, 0.0, 0.0);
     record.weightSum = 0.0;
@@ -1391,11 +902,13 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
 
     record.primaryPosition = hitPos;
     record.candidatePosition = hitPos;
-    record.candidateNormal = N;
+    record.primaryNormal = N;
 
     int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
     if (extraSampleCount <= 0) {
-        updateReservoirGi(launchID, launchSize, record);
+        if (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL) {
+            updateReservoirGi(launchID, launchSize, record);
+        }
         return result;
     }
 
@@ -1408,11 +921,13 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     float3 selectedTotal = float3(0.0, 0.0, 0.0);
     float3 selectedSecondarySun = float3(0.0, 0.0, 0.0);
     float3 selectedPosition = hitPos;
-    float3 selectedNormal = N;
     float selectedWeight = 0.0;
     float reservoirWeightSum = 0.0;
     bool selectedSurfaceHit = false;
     bool selectedSunVisible = false;
+    uint candidateSurfaceHitCount = 0u;
+    uint candidateSunVisibleCount = 0u;
+    uint candidatePositiveWeightCount = 0u;
 
     for (int c = 0; c < candidateCount; ++c) {
         float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
@@ -1435,6 +950,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
         bounceRay.Direction = bounceDir;
         bounceRay.TMin = 0.001;
         bounceRay.TMax = 10000.0;
+        ptAnalysisCounters.InterlockedAdd(reservoirGiCandidatesOffset, 1u);
         TraceRay(tlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, bounceRay, bouncePayload);
 
         float3 candidateTotal = float3(0.0, 0.0, 0.0);
@@ -1442,24 +958,36 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
         bool surfaceHit = bouncePayload.hitT >= 0.0;
         bool sunVisible = false;
         float3 candidatePosition = hitPos;
-        float3 candidateNormal = N;
 
         if (surfaceHit) {
+            candidateSurfaceHitCount += 1u;
+            ptAnalysisCounters.InterlockedAdd(reservoirGiCandidateSurfaceHitsOffset, 1u);
             if (!isSaneReservoirGiVector(bouncePayload.hitPos, 100000.0) ||
                 !isSaneReservoirGiVector(bouncePayload.worldNormal, 1.1)) {
                 continue;
             }
             float3 secondaryV = -bounceDir;
             float3 emissiveContribution = firstLegThroughput * bouncePayload.emission;
-            candidateSecondarySun = evaluateDirectSunContribution(bouncePayload.hitPos,
-                                                                  bouncePayload.worldNormal,
-                                                                  secondaryV,
-                                                                  firstLegThroughput,
-                                                                  bouncePayload);
+            if (reservoirGiCandidateEvaluationMode == RESERVOIR_GI_CANDIDATE_UNSHADOWED_SUN) {
+                candidateSecondarySun = evaluateUnshadowedDirectSunContribution(bouncePayload.hitPos,
+                                                                                bouncePayload.worldNormal,
+                                                                                secondaryV,
+                                                                                firstLegThroughput,
+                                                                                bouncePayload);
+            } else if (reservoirGiCandidateEvaluationMode == RESERVOIR_GI_CANDIDATE_SHADOWED_SUN) {
+                candidateSecondarySun = evaluateDirectSunContribution(bouncePayload.hitPos,
+                                                                      bouncePayload.worldNormal,
+                                                                      secondaryV,
+                                                                      firstLegThroughput,
+                                                                      bouncePayload);
+            }
             candidateTotal = emissiveContribution + candidateSecondarySun;
             candidatePosition = bouncePayload.hitPos;
-            candidateNormal = bouncePayload.worldNormal;
             sunVisible = pathTracerLuminance(candidateSecondarySun) > 0.000001;
+            if (sunVisible) {
+                candidateSunVisibleCount += 1u;
+                ptAnalysisCounters.InterlockedAdd(reservoirGiCandidateSunVisibleOffset, 1u);
+            }
         } else {
             candidateTotal = firstLegThroughput * bouncePayload.emission;
         }
@@ -1470,15 +998,14 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
         if (!isFinitePositive(candidateWeight)) {
             continue;
         }
-        ptAnalysisCounters.InterlockedAdd(reservoirGiCandidatesOffset, 1u);
-
+        candidatePositiveWeightCount += 1u;
+        ptAnalysisCounters.InterlockedAdd(reservoirGiCandidatePositiveWeightOffset, 1u);
         if (useCandidateRis) {
             reservoirWeightSum += candidateWeight;
             if (randomFloat(rngState) < candidateWeight / max(reservoirWeightSum, 0.000001)) {
                 selectedTotal = candidateTotal;
                 selectedSecondarySun = candidateSecondarySun;
                 selectedPosition = candidatePosition;
-                selectedNormal = candidateNormal;
                 selectedWeight = candidateWeight;
                 selectedSurfaceHit = surfaceHit;
                 selectedSunVisible = sunVisible;
@@ -1488,7 +1015,6 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
             selectedTotal = candidateTotal;
             selectedSecondarySun = candidateSecondarySun;
             selectedPosition = candidatePosition;
-            selectedNormal = candidateNormal;
             selectedWeight = candidateWeight;
             selectedSurfaceHit = surfaceHit;
             selectedSunVisible = sunVisible;
@@ -1513,6 +1039,11 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     reservoirSecondarySun = sanitizeReservoirGiContribution(reservoirSecondarySun);
     bool acceptedReservoir =
         selectedWeight > 0.0 && isFinitePositive(pathTracerLuminance(reservoirTotal));
+    float invCandidateCount = 1.0 / float(max(candidateCount, 1));
+    result.reservoirCandidateSurfaceHitRatio = float(candidateSurfaceHitCount) * invCandidateCount;
+    result.reservoirCandidateSunVisibleRatio = float(candidateSunVisibleCount) * invCandidateCount;
+    result.reservoirCandidatePositiveWeightRatio = float(candidatePositiveWeightCount) * invCandidateCount;
+    result.reservoirSelectedWeight = selectedWeight;
 
     if (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL) {
         ReservoirGiRecord temporalRecord;
@@ -1565,8 +1096,11 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     if (acceptedReservoir) {
         ptAnalysisCounters.InterlockedAdd(reservoirGiAcceptedOffset, 1u);
         ptAnalysisCounters.InterlockedAdd(reservoirGiLumaScaledSumOffset, scaledReservoirLuma);
+        uint scaledSelectedWeight = uint(clamp(selectedWeight, 0.0, 8.0) * 64.0 + 0.5);
+        ptAnalysisCounters.InterlockedAdd(reservoirGiSelectedWeightScaledSumOffset, scaledSelectedWeight);
         recordFirstHitProbeStats(selectedSurfaceHit, selectedSunVisible, reservoirTotal);
     } else {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiZeroWeightOffset, 1u);
         reservoirTotal = float3(0.0, 0.0, 0.0);
         reservoirSecondarySun = float3(0.0, 0.0, 0.0);
         selectedPosition = float3(0.0, 0.0, 0.0);
@@ -1577,7 +1111,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     }
 
     record.candidatePosition = selectedPosition;
-    record.candidateNormal = N;
+    record.primaryNormal = N;
     record.contribution = reservoirTotal;
     record.secondaryDirectSun = reservoirSecondarySun;
     record.weightSum = reservoirWeightSum;
@@ -1587,498 +1121,13 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
                    (selectedSunVisible ? 4u : 0u) |
                    (useCandidateRis ? 8u : 0u) |
                    (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL ? 16u : 0u);
-    updateReservoirGi(launchID, launchSize, record);
-
-    result.totalContribution = reservoirTotal / float(firstHitDiffuseSampleCount);
-    result.secondaryDirectSunContribution = reservoirSecondarySun / float(firstHitDiffuseSampleCount);
-    return result;
-}
-
-float3 evaluateCachedSunVisibleContribution(float3 hitPos, float3 N, float3 V,
-                                             RayPayload primaryPayload,
-                                             CachedSunVisibleCandidate candidate,
-                                             float cacheConnectionRadius,
-                                             out bool accepted,
-                                             out int CachedReuseRejectReason)
-{
-    accepted = false;
-    CachedReuseRejectReason = CACHED_REUSE_REJECT_NONE;
-
-    float3 toCached = candidate.position - hitPos;
-    float rawDistanceSq = dot(toCached, toCached);
-    float maxConnectionDistanceSq = cacheConnectionRadius * cacheConnectionRadius;
-    if (!(rawDistanceSq > 0.000001) || rawDistanceSq > maxConnectionDistanceSq) {
-        CachedReuseRejectReason = CACHED_REUSE_REJECT_DISTANCE;
-        return float3(0.0, 0.0, 0.0);
+    if (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL) {
+        updateReservoirGi(launchID, launchSize, record);
     }
 
-    float distanceToCached = sqrt(rawDistanceSq);
-    float3 bounceDir = toCached / distanceToCached;
-    if (!all(abs(bounceDir) <= float3(1.1, 1.1, 1.1))) {
-        CachedReuseRejectReason = CACHED_REUSE_REJECT_GEOMETRY;
-        return float3(0.0, 0.0, 0.0);
-    }
-
-    float NdotBounce = max(dot(N, bounceDir), 0.0);
-    float cachedNdot = max(dot(candidate.normal, -bounceDir), 0.0);
-    if (NdotBounce <= 0.0 || cachedNdot <= 0.0) {
-        CachedReuseRejectReason = CACHED_REUSE_REJECT_GEOMETRY;
-        return float3(0.0, 0.0, 0.0);
-    }
-
-    float visibilityRayTMin = 0.001;
-    float visibilityRayTMax = distanceToCached - 0.004;
-    if (visibilityRayTMax <= visibilityRayTMin) {
-        CachedReuseRejectReason = CACHED_REUSE_REJECT_DISTANCE;
-        return float3(0.0, 0.0, 0.0);
-    }
-
-    RayPayload visibilityPayload = makeVisibilityPayload();
-    RayDesc visibilityRay;
-    visibilityRay.Origin = hitPos + N * 0.002;
-    visibilityRay.Direction = bounceDir;
-    visibilityRay.TMin = visibilityRayTMin;
-    visibilityRay.TMax = visibilityRayTMax;
-    TraceRay(tlas,
-             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE,
-             0xFF, 0, 0, 0, visibilityRay, visibilityPayload);
-
-    if (visibilityPayload.hitT >= 0.0) {
-        CachedReuseRejectReason = CACHED_REUSE_REJECT_VISIBILITY;
-        return float3(0.0, 0.0, 0.0);
-    }
-
-    accepted = true;
-
-    float3 F = fresnelSchlick(max(dot(N, V), 0.0), primaryPayload.F0);
-    float3 kD = (float3(1.0, 1.0, 1.0) - F) * (1.0 - primaryPayload.metallic);
-    float3 firstLegThroughput = kD * primaryPayload.albedo;
-    RayPayload cachedPayload = makeCachedSunVisiblePayload(candidate);
-    float3 secondaryV = -bounceDir;
-    return evaluateDirectSunContribution(candidate.position,
-                                         candidate.normal,
-                                         secondaryV,
-                                         firstLegThroughput,
-                                         cachedPayload);
-}
-
-float computeCachedReuseMisWeight(float bsdfPdf,
-                                  float cacheSourcePdf,
-                                  int cacheWeightingMode)
-{
-    if (cacheWeightingMode == CACHE_WEIGHTING_CALIBRATED) {
-        return 1.0;
-    }
-
-    float cachePdf = max(cacheSourcePdf, 0.000001);
-    float competingPdf = max(bsdfPdf, 0.000001);
-    float cachePdf2 = cachePdf * cachePdf;
-    float competingPdf2 = competingPdf * competingPdf;
-    return cachePdf2 / max(cachePdf2 + competingPdf2, 0.000001);
-}
-
-float computeConservativeCachedReuseMisWeight(float cacheReuseWeight,
-                                              float rawMisWeight,
-                                              float cacheMisStrength)
-{
-    float ceiling = cacheReuseWeight * max(cacheMisStrength, 0.0);
-    return min(max(rawMisWeight, 0.0), ceiling);
-}
-
-bool candidateWithinConnectionRadius(float3 hitPos,
-                                     CachedSunVisibleCandidate candidate,
-                                     float cacheConnectionRadius,
-                                     out float distanceSq)
-{
-    float3 delta = candidate.position - hitPos;
-    distanceSq = dot(delta, delta);
-    float maxConnectionDistanceSq = cacheConnectionRadius * cacheConnectionRadius;
-    return distanceSq > 0.000001 && distanceSq <= maxConnectionDistanceSq;
-}
-
-bool candidateGeometryCompatible(float3 hitPos, float3 N, CachedSunVisibleCandidate candidate)
-{
-    float3 toCached = candidate.position - hitPos;
-    float rawDistanceSq = dot(toCached, toCached);
-    if (!(rawDistanceSq > 0.000001)) {
-        return false;
-    }
-
-    float3 bounceDir = toCached * rsqrt(rawDistanceSq);
-    float NdotBounce = max(dot(N, bounceDir), 0.0);
-    float cachedNdot = max(dot(candidate.normal, -bounceDir), 0.0);
-    return NdotBounce > 0.0 && cachedNdot > 0.0;
-}
-
-void considerCachedSunVisibleCandidate(float3 hitPos,
-                                       float3 N,
-                                       CachedSunVisibleCandidate candidate,
-                                       float sourcePdf,
-                                       float cacheConnectionRadius,
-                                       inout bool foundCandidate,
-                                       inout float bestDistanceSq,
-                                       inout CachedSunVisibleCandidate selectedCandidate,
-                                       inout float selectedSourcePdf)
-{
-    float distanceSq = 0.0;
-    if (!candidateWithinConnectionRadius(hitPos, candidate, cacheConnectionRadius, distanceSq)) {
-        ptAnalysisCounters.InterlockedAdd(cacheReuseSelectRejectDistanceCountOffset, 1u);
-        return;
-    }
-    if (!candidateGeometryCompatible(hitPos, N, candidate)) {
-        ptAnalysisCounters.InterlockedAdd(cacheReuseSelectRejectGeometryCountOffset, 1u);
-        return;
-    }
-
-    if (!foundCandidate || distanceSq < bestDistanceSq) {
-        foundCandidate = true;
-        bestDistanceSq = distanceSq;
-        selectedCandidate = candidate;
-        selectedSourcePdf = sourcePdf;
-    }
-}
-
-bool selectSpatialCachedSunVisibleCandidate(float3 hitPos,
-                                            float3 N,
-                                            uint available,
-                                            uint readBank,
-                                            int spatialCandidateTrials,
-                                            float cacheConnectionRadius,
-                                            uint cacheGeneration,
-                                            uint cacheMaxRecordAgeFrames,
-                                            out CachedSunVisibleCandidate selectedCandidate,
-                                            out float selectedSourcePdf,
-                                            inout uint rngState)
-{
-    bool foundCandidate = false;
-    float bestDistanceSq = 3.402823e+38;
-    selectedSourcePdf = 0.0;
-    int3 centerCell = spatialCacheCell(hitPos);
-    int cacheRadiusCellCount =
-        clamp(int(ceil(cacheConnectionRadius / CACHED_REUSE_SPATIAL_CELL_SIZE)), 1, CACHED_REUSE_MAX_RADIUS_CELLS);
-    int cellDiameter = cacheRadiusCellCount * 2 + 1;
-    int cellSearchCount = cellDiameter * cellDiameter * cellDiameter;
-
-    int trialCount = min(clamp(spatialCandidateTrials, 1, CACHED_REUSE_SPATIAL_CANDIDATE_TRIALS), int(available));
-    for (int trial = 0; trial < trialCount; ++trial) {
-        int neighborIndex =
-            (int(randomFloat(rngState) * float(cellSearchCount)) + trial) % cellSearchCount;
-        int3 neighborOffset = int3((neighborIndex % cellDiameter) - cacheRadiusCellCount,
-                                   ((neighborIndex / cellDiameter) % cellDiameter) - cacheRadiusCellCount,
-                                   (neighborIndex / (cellDiameter * cellDiameter)) - cacheRadiusCellCount);
-        int3 candidateCell = centerCell + neighborOffset;
-        uint bucketSlot = uint(randomFloat(rngState) * float(CACHED_REUSE_SPATIAL_BUCKET_SIZE));
-        bucketSlot = (bucketSlot + uint(trial)) % CACHED_REUSE_SPATIAL_BUCKET_SIZE;
-        uint slot = sunVisibleCandidateSpatialBankSlot(readBank, candidateCell, bucketSlot);
-        CachedSunVisibleCandidate candidate;
-        float sourcePdf = 0.0;
-        if (!loadSunVisibleCandidate(slot, ubo.frameCount, cacheGeneration, cacheMaxRecordAgeFrames, candidate, sourcePdf)) {
-            ptAnalysisCounters.InterlockedAdd(cacheReuseSelectLoadMissCountOffset, 1u);
-            continue;
-        }
-        ptAnalysisCounters.InterlockedAdd(cacheReuseSelectLoadSuccessCountOffset, 1u);
-
-        considerCachedSunVisibleCandidate(hitPos, N, candidate, sourcePdf, cacheConnectionRadius, foundCandidate,
-                                          bestDistanceSq, selectedCandidate, selectedSourcePdf);
-    }
-
-    int fallbackTrialCount = CACHED_REUSE_GLOBAL_FALLBACK_TRIALS;
-    for (int trial = 0; trial < fallbackTrialCount; ++trial) {
-        uint bankSlot =
-            uint(randomFloat(rngState) * float(SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY)) %
-            SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY;
-        uint slot = sunVisibleCandidateBankSlot(readBank, bankSlot);
-        CachedSunVisibleCandidate candidate;
-        float sourcePdf = 0.0;
-        if (!loadSunVisibleCandidate(slot, ubo.frameCount, cacheGeneration, cacheMaxRecordAgeFrames, candidate, sourcePdf)) {
-            ptAnalysisCounters.InterlockedAdd(cacheReuseSelectLoadMissCountOffset, 1u);
-            continue;
-        }
-        ptAnalysisCounters.InterlockedAdd(cacheReuseSelectLoadSuccessCountOffset, 1u);
-
-        considerCachedSunVisibleCandidate(hitPos, N, candidate, sourcePdf, cacheConnectionRadius, foundCandidate,
-                                          bestDistanceSq, selectedCandidate, selectedSourcePdf);
-    }
-
-    return foundCandidate;
-}
-
-bool selectGlobalCachedSunVisibleCandidate(float3 hitPos,
-                                           float3 N,
-                                           uint available,
-                                           uint readBank,
-                                           int candidateTrials,
-                                           float cacheConnectionRadius,
-                                           uint cacheGeneration,
-                                           uint cacheMaxRecordAgeFrames,
-                                           out CachedSunVisibleCandidate selectedCandidate,
-                                           out float selectedSourcePdf,
-                                           inout uint rngState)
-{
-    bool foundCandidate = false;
-    float bestDistanceSq = 1.0e30;
-    selectedSourcePdf = 0.0;
-
-    int trialCount = clamp(candidateTrials, 1, CACHED_REUSE_SPATIAL_CANDIDATE_TRIALS);
-    for (int trial = 0; trial < trialCount; ++trial) {
-        uint bankSlot =
-            uint(randomFloat(rngState) * float(SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY)) %
-            SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY;
-        uint slot = sunVisibleCandidateBankSlot(readBank, bankSlot);
-
-        CachedSunVisibleCandidate candidate;
-        float sourcePdf = 0.0;
-        if (!loadSunVisibleCandidate(slot, ubo.frameCount, cacheGeneration, cacheMaxRecordAgeFrames, candidate, sourcePdf)) {
-            ptAnalysisCounters.InterlockedAdd(cacheReuseSelectLoadMissCountOffset, 1u);
-            continue;
-        }
-        ptAnalysisCounters.InterlockedAdd(cacheReuseSelectLoadSuccessCountOffset, 1u);
-
-        considerCachedSunVisibleCandidate(hitPos, N, candidate, sourcePdf, cacheConnectionRadius,
-                                          foundCandidate, bestDistanceSq, selectedCandidate, selectedSourcePdf);
-    }
-
-    return foundCandidate;
-}
-
-bool selectCachedSunVisibleConnection(float3 hitPos,
-                                      float3 N,
-                                      float cacheConnectionRadius,
-                                      uint cacheGeneration,
-                                      uint cacheMaxRecordAgeFrames,
-                                      out CachedSunVisibleCandidate selectedCandidate,
-                                      out float selectedSourcePdf,
-                                      inout uint rngState)
-{
-    selectedCandidate.position = float3(0.0, 0.0, 0.0);
-    selectedCandidate.normal = float3(0.0, 1.0, 0.0);
-    selectedCandidate.albedo = float3(0.0, 0.0, 0.0);
-    selectedCandidate.F0 = float3(0.0, 0.0, 0.0);
-    selectedCandidate.roughness = 1.0;
-    selectedCandidate.metallic = 0.0;
-    selectedSourcePdf = 0.0;
-
-    uint readBank = connectionCacheReadBank(ubo.frameCount);
-    uint readInsertCount = ptSunVisibleConnectionCache.Load(sunVisibleConnectionBankInsertCountOffset(readBank));
-    uint available = min(readInsertCount, SUN_VISIBLE_CONNECTION_CACHE_BANK_CAPACITY);
-    if (available == 0) {
-        return false;
-    }
-
-    bool foundCandidate = false;
-    float bestPrimaryDistanceSq = 1.0e30;
-    float primaryReuseRadius = min(cacheConnectionRadius, CACHED_REUSE_DEFAULT_CONNECTION_DISTANCE);
-    int trialCount = min(CACHED_REUSE_SPATIAL_CANDIDATE_TRIALS, int(available));
-    for (int trial = 0; trial < trialCount; ++trial) {
-        uint bankSlot =
-            uint(randomFloat(rngState) * float(max(available, 1u))) % max(available, 1u);
-        bankSlot = (bankSlot + uint(trial)) % max(available, 1u);
-        uint slot = sunVisibleConnectionBankSlot(readBank, bankSlot);
-
-        float3 primaryPosition;
-        float3 primaryNormal;
-        CachedSunVisibleCandidate candidate;
-        float sourcePdf = 0.0;
-        if (!loadSunVisibleConnection(slot, ubo.frameCount, cacheGeneration, cacheMaxRecordAgeFrames,
-                                      primaryPosition, primaryNormal, candidate, sourcePdf)) {
-            continue;
-        }
-
-        float3 primaryDelta = primaryPosition - hitPos;
-        float primaryDistanceSq = dot(primaryDelta, primaryDelta);
-        if (primaryDistanceSq > primaryReuseRadius * primaryReuseRadius) {
-            continue;
-        }
-        if (dot(normalize(primaryNormal), normalize(N)) <= 0.5) {
-            continue;
-        }
-        if (!foundCandidate || primaryDistanceSq < bestPrimaryDistanceSq) {
-            foundCandidate = true;
-            bestPrimaryDistanceSq = primaryDistanceSq;
-            selectedCandidate = candidate;
-            selectedSourcePdf = sourcePdf;
-        }
-    }
-
-    return foundCandidate;
-}
-
-FirstHitDiffuseBounceResult sampleCachedSunVisibleCandidate(float3 hitPos, float3 N, float3 V,
-                                                            RayPayload payload,
-                                                            int firstHitDiffuseSampleCount,
-                                                            float cacheReuseWeight,
-                                                            float cacheMisStrength,
-                                                            int cacheWeightingMode,
-                                                            int cacheProposalMode,
-                                                            int cacheSpatialCandidateTrials,
-                                                            int cacheVisibilityValidationBudget,
-                                                            float cacheConnectionRadius,
-                                                            uint cacheGeneration,
-                                                            uint cacheMaxRecordAgeFrames,
-                                                            bool currentHitIsDiagnosticTarget,
-                                                            inout uint rngState)
-{
-    FirstHitDiffuseBounceResult result;
-    result.totalContribution = float3(0.0, 0.0, 0.0);
-    result.secondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
-    ptAnalysisCounters.InterlockedAdd(cacheReusePathEntryCountOffset, 1u);
-
-    int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
-    if (extraSampleCount <= 0) {
-        ptAnalysisCounters.InterlockedAdd(cacheReuseExtraSampleZeroCountOffset, 1u);
-        return result;
-    }
-
-    uint readBank = cacheReadBank(ubo.frameCount);
-    uint readInsertCount = ptSunVisibleCandidateCache.Load(sunVisibleCandidateBankInsertCountOffset(readBank));
-    uint available = min(readInsertCount, SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY);
-    if (cacheProposalMode != CACHE_PROPOSAL_CONNECTION_CACHE && available == 0) {
-        ptAnalysisCounters.InterlockedAdd(cacheReuseUnavailableCandidateCountOffset, 1u);
-        return result;
-    }
-
-    int visibilityValidationCount = 0;
-    for (int probe = 0; probe < extraSampleCount; ++probe) {
-        if (visibilityValidationCount >= cacheVisibilityValidationBudget) {
-            break;
-        }
-        ptAnalysisCounters.InterlockedAdd(56, 1u);
-        if (currentHitIsDiagnosticTarget) {
-            ptAnalysisCounters.InterlockedAdd(diagnosticTargetCacheReuseAttemptCountOffset, 1u);
-        }
-
-        CachedSunVisibleCandidate candidate;
-        float sourcePdf = 0.0;
-        bool selectedFromCache = false;
-        bool selectedConnectionProposal = false;
-        if (cacheProposalMode == CACHE_PROPOSAL_CONNECTION_CACHE) {
-            ptAnalysisCounters.InterlockedAdd(cacheConnectionReuseAttemptsOffset, 1u);
-            selectedConnectionProposal =
-                selectCachedSunVisibleConnection(hitPos, N, cacheConnectionRadius,
-                                                  cacheGeneration, cacheMaxRecordAgeFrames,
-                                                  candidate, sourcePdf, rngState);
-            selectedFromCache = selectedConnectionProposal;
-            if (!selectedFromCache && available > 0) {
-                selectedFromCache =
-                    selectGlobalCachedSunVisibleCandidate(hitPos, N, available, readBank,
-                                                          cacheSpatialCandidateTrials,
-                                                          cacheConnectionRadius,
-                                                          cacheGeneration, cacheMaxRecordAgeFrames,
-                                                          candidate, sourcePdf, rngState);
-            }
-        } else if (cacheProposalMode == CACHE_PROPOSAL_GLOBAL_NON_LOCAL) {
-            selectedFromCache =
-                selectGlobalCachedSunVisibleCandidate(hitPos, N, available, readBank,
-                                                      cacheSpatialCandidateTrials,
-                                                      cacheConnectionRadius,
-                                                      cacheGeneration, cacheMaxRecordAgeFrames,
-                                                      candidate, sourcePdf, rngState);
-        } else {
-            selectedFromCache =
-                selectSpatialCachedSunVisibleCandidate(hitPos, N, available, readBank,
-                                                       cacheSpatialCandidateTrials,
-                                                       cacheConnectionRadius,
-                                                       cacheGeneration, cacheMaxRecordAgeFrames,
-                                                       candidate, sourcePdf, rngState);
-        }
-        if (!selectedFromCache) {
-            ptAnalysisCounters.InterlockedAdd(cacheReuseSelectMissCountOffset, 1u);
-            recordFirstHitProbeStats(false, false, float3(0.0, 0.0, 0.0));
-            continue;
-        }
-        ptAnalysisCounters.InterlockedAdd(cacheReuseSelectedCountOffset, 1u);
-        if (currentHitIsDiagnosticTarget) {
-            ptAnalysisCounters.InterlockedAdd(diagnosticTargetCacheSelectedCountOffset, 1u);
-        }
-        if (visibilityValidationCount >= cacheVisibilityValidationBudget) {
-            break;
-        }
-        ++visibilityValidationCount;
-
-        bool accepted = false;
-        int rejectReason = CACHED_REUSE_REJECT_NONE;
-        float3 reusedContribution =
-            evaluateCachedSunVisibleContribution(hitPos, N, V, payload, candidate, cacheConnectionRadius, accepted, rejectReason);
-        if (!accepted) {
-            if (rejectReason == CACHED_REUSE_REJECT_DISTANCE) {
-                ptAnalysisCounters.InterlockedAdd(cacheReuseRejectDistanceCountOffset, 1u);
-            } else if (rejectReason == CACHED_REUSE_REJECT_GEOMETRY) {
-                ptAnalysisCounters.InterlockedAdd(cacheReuseRejectGeometryCountOffset, 1u);
-            } else if (rejectReason == CACHED_REUSE_REJECT_VISIBILITY) {
-                ptAnalysisCounters.InterlockedAdd(cacheReuseRejectVisibilityCountOffset, 1u);
-            }
-            if (currentHitIsDiagnosticTarget) {
-                if (rejectReason == CACHED_REUSE_REJECT_DISTANCE) {
-                    ptAnalysisCounters.InterlockedAdd(diagnosticTargetCacheRejectDistanceCountOffset, 1u);
-                } else if (rejectReason == CACHED_REUSE_REJECT_GEOMETRY) {
-                    ptAnalysisCounters.InterlockedAdd(diagnosticTargetCacheRejectGeometryCountOffset, 1u);
-                } else if (rejectReason == CACHED_REUSE_REJECT_VISIBILITY) {
-                    ptAnalysisCounters.InterlockedAdd(diagnosticTargetCacheRejectVisibilityCountOffset, 1u);
-                }
-            }
-            recordFirstHitProbeStats(true, false, float3(0.0, 0.0, 0.0));
-            continue;
-        }
-        recordSunVisibleConnectionCandidate(hitPos, N, candidate, sourcePdf, cacheGeneration);
-        if (selectedConnectionProposal) {
-            ptAnalysisCounters.InterlockedAdd(cacheConnectionReuseAcceptedOffset, 1u);
-        }
-
-        float3 cachedDirection = normalize(candidate.position - hitPos);
-        float NdotBounceForPdf = max(dot(N, cachedDirection), 0.0);
-        float bsdfPdf = max(NdotBounceForPdf / PI, 0.000001);
-        float cacheMisWeight = computeCachedReuseMisWeight(bsdfPdf, sourcePdf, cacheWeightingMode);
-        uint scaledMisWeight = uint(clamp(cacheMisWeight, 0.0, 1.0) * 65535.0 + 0.5);
-        ptAnalysisCounters.InterlockedAdd(80, scaledMisWeight);
-        ptAnalysisCounters.InterlockedAdd(84, 1u);
-
-        if (cacheWeightingMode == CACHE_WEIGHTING_MIS_APPROX) {
-            float conservativeMisWeight =
-                computeConservativeCachedReuseMisWeight(cacheReuseWeight, cacheMisWeight, cacheMisStrength);
-            reusedContribution = min(reusedContribution * conservativeMisWeight, float3(8.0, 8.0, 8.0));
-        } else {
-            reusedContribution = min(reusedContribution * cacheReuseWeight, float3(8.0, 8.0, 8.0));
-        }
-        result.totalContribution += reusedContribution;
-        result.secondaryDirectSunContribution += reusedContribution;
-        float acceptedDistance = length(candidate.position - hitPos);
-        if (acceptedDistance <= 3.5) {
-            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedDistanceNearCountOffset, 1u);
-        } else if (acceptedDistance <= 7.0) {
-            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedDistanceMidCountOffset, 1u);
-        } else if (acceptedDistance <= 14.0) {
-            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedDistanceFarCountOffset, 1u);
-        } else {
-            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedDistanceVeryFarCountOffset, 1u);
-        }
-
-        float acceptedLuma = pathTracerLuminance(reusedContribution);
-        if (acceptedLuma <= 0.0001) {
-            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedLumaDarkCountOffset, 1u);
-        } else if (acceptedLuma <= 0.001) {
-            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedLumaDimCountOffset, 1u);
-        } else if (acceptedLuma <= 0.01) {
-            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedLumaUsefulCountOffset, 1u);
-        } else {
-            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedLumaBrightCountOffset, 1u);
-        }
-
-        bool sunVisible = acceptedLuma > 0.000001;
-        recordFirstHitProbeStats(true, sunVisible, reusedContribution);
-        ptAnalysisCounters.InterlockedAdd(60, 1u);
-        uint scaledLuma = uint(clamp(acceptedLuma, 0.0, 8.0) * 64.0 + 0.5);
-        ptAnalysisCounters.InterlockedAdd(64, scaledLuma);
-        if (currentHitIsDiagnosticTarget) {
-            ptAnalysisCounters.InterlockedAdd(diagnosticTargetCacheReuseAcceptedCountOffset, 1u);
-            ptAnalysisCounters.InterlockedAdd(diagnosticTargetCacheReuseContributionSumOffset, scaledLuma);
-        }
-        if (visibilityValidationCount >= cacheVisibilityValidationBudget) {
-            break;
-        }
-    }
-
-    result.totalContribution /= float(firstHitDiffuseSampleCount);
-    result.secondaryDirectSunContribution /= float(firstHitDiffuseSampleCount);
+    float reservoirProbeScale = float(candidateCount) / float(candidateCount + 1);
+    result.totalContribution = reservoirTotal * reservoirProbeScale;
+    result.secondaryDirectSunContribution = reservoirSecondarySun * reservoirProbeScale;
     return result;
 }
 
@@ -2147,6 +1196,12 @@ void main() {
     float3 debugFirstHitBounceContribution = float3(0.0, 0.0, 0.0);
     float3 debugSecondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
     float3 debugBaselineContinuationContribution = float3(0.0, 0.0, 0.0);
+    float3 debugReservoirGiContribution = float3(0.0, 0.0, 0.0);
+    float  debugReservoirGiAcceptedLuma = 0.0;
+    float  debugReservoirGiCandidateSurfaceHitRatio = 0.0;
+    float  debugReservoirGiCandidateSunVisibleRatio = 0.0;
+    float  debugReservoirGiCandidatePositiveWeightRatio = 0.0;
+    float  debugReservoirGiSelectedWeight = 0.0;
     float  debugShadowVisibility = 0.0;
     int    debugBounceCount = 0;
     uint   primaryInstanceID = 0;
@@ -2155,35 +1210,24 @@ void main() {
     uint   packedPathTracerFlags = push.padding3;
     bool   environmentNeeEnabled = (packedPathTracerFlags & 0x1) != 0;
     bool   applyFirstHitProbesToFinal = (push.padding3 & PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT) != 0;
-    bool   sunVisibleCandidateCacheEnabled = (packedPathTracerFlags & SUN_VISIBLE_CACHE_ENABLE_BIT) != 0;
-    bool   adaptiveCacheRefresh = (packedPathTracerFlags & ADAPTIVE_CACHE_REFRESH_BIT) != 0;
-    bool   targetedDiagnosticCacheRefresh = (packedPathTracerFlags & TARGETED_DIAGNOSTIC_CACHE_REFRESH_BIT) != 0;
     int    environmentNeeSamplingMode = int((packedPathTracerFlags >> 3) & 0x3);
     int    firstHitDiffuseSampleCount = clamp(int((packedPathTracerFlags >> 5) & 0xF), 1, 8);
     int    candidateCount = int((packedPathTracerFlags >> 9) & 0xF) + 1;
     candidateCount = clamp(candidateCount, 2, 16);
     int    firstHitProbeSamplingMode = int((packedPathTracerFlags >> 13) & 0x7);
-    float  cacheReuseWeight = clamp(push.skyData.x, 0.0, 1.0);
-    float  cacheMisStrength = clamp(push.skyData.w, 0.0, 4.0);
-    int    cacheWeightingMode = int((packedPathTracerFlags >> CACHE_WEIGHTING_MODE_SHIFT) & 0x3);
-    int    cacheRefreshCandidateCount = int((packedPathTracerFlags >> CACHE_REFRESH_COUNT_SHIFT) & 0x7);
-    int    cacheSpatialCandidateTrials = int((packedPathTracerFlags >> CACHE_SPATIAL_TRIAL_COUNT_SHIFT) & 0x3F);
-    cacheSpatialCandidateTrials = clamp(cacheSpatialCandidateTrials, 1, CACHED_REUSE_SPATIAL_CANDIDATE_TRIALS);
-    int    cacheVisibilityBudgetCode = int((packedPathTracerFlags >> CACHE_VISIBILITY_BUDGET_SHIFT) & 0x3);
-    int    cacheVisibilityValidationBudget =
-        (cacheVisibilityBudgetCode == 0) ? 1 :
-        ((cacheVisibilityBudgetCode == 1) ? 2 :
-        ((cacheVisibilityBudgetCode == 2) ? 4 : 7));
-    float  cacheConnectionRadius = clamp(push.skyData.y, 0.5, 64.0);
     uint   packedPathTracerMaterialIndex = uint(push.materialIndex);
-    int    cacheProposalMode = int(packedPathTracerMaterialIndex & 0xFFu);
-    cacheProposalMode = clamp(cacheProposalMode, CACHE_PROPOSAL_SPATIAL_LOCAL, CACHE_PROPOSAL_CONNECTION_CACHE);
-    uint   cacheMaxRecordAgeFrames = max((packedPathTracerMaterialIndex >> 8) & 0x3FFu, 1u); // cacheMaxRecordAgeFrames = max(packedPathTracerMaterialIndex >> 8, 1u)
     int    reservoirGiMode = int((packedPathTracerMaterialIndex >> 18) & 0x3u);
     int    reservoirGiCandidateCount = clamp(int((packedPathTracerMaterialIndex >> 20) & 0x3u) + 1, 1, 4);
     bool   reservoirGiUseCandidateRis = ((packedPathTracerMaterialIndex >> 22) & 0x1u) != 0u;
     int    reservoirGiSpatialNeighborCount = clamp(int((packedPathTracerMaterialIndex >> 23) & 0x7u) + 1, 1, 8);
-    uint   cacheGeneration = uint(max(push.skyData.z, 1.0));
+    int    pathTracerMaxBounceCode = int((packedPathTracerMaterialIndex >> 26) & 0x3u);
+    int    pathTracerMaxBounces = (pathTracerMaxBounceCode == 0) ? 3 :
+                                  ((pathTracerMaxBounceCode == 1) ? 5 : 8);
+    int    directSunBounceMode = int((packedPathTracerMaterialIndex >> 28) & 0x3u);
+    int    reservoirGiCandidateEvaluationMode =
+        clamp(int((packedPathTracerMaterialIndex >> 30) & 0x3u),
+              RESERVOIR_GI_CANDIDATE_TRACE_ONLY,
+              RESERVOIR_GI_CANDIDATE_SHADOWED_SUN);
 
     RayDesc ray;
     ray.Origin    = origin;
@@ -2193,10 +1237,9 @@ void main() {
 
     // Keep a higher hard cap for enclosed/interior transport; Russian roulette below
     // keeps the average path length bounded for performance.
-    static const int MAX_BOUNCES = 8;
     static const int RR_START_BOUNCE = 2;
 
-    for (int bounce = 0; bounce < MAX_BOUNCES; ++bounce)
+    for (int bounce = 0; bounce < pathTracerMaxBounces; ++bounce)
     {
         RayPayload payload;
         payload.hitT = -1.0;
@@ -2219,11 +1262,11 @@ void main() {
                 gBufferNormals[launchID] = float4(0.0, 0.0, 0.0, 0.0);
                 gBufferDepth[launchID]   = -1.0;
                 motionVectors[launchID]  = float2(0.0, 0.0);
-                if (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_SINGLE_FRAME) {
+                if (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL) {
                     ReservoirGiRecord emptyReservoir;
                     emptyReservoir.primaryPosition = origin;
                     emptyReservoir.candidatePosition = origin;
-                    emptyReservoir.candidateNormal = float3(0.0, 0.0, 0.0);
+                    emptyReservoir.primaryNormal = float3(0.0, 0.0, 0.0);
                     emptyReservoir.contribution = float3(0.0, 0.0, 0.0);
                     emptyReservoir.secondaryDirectSun = float3(0.0, 0.0, 0.0);
                     emptyReservoir.weightSum = 0.0;
@@ -2258,6 +1301,7 @@ void main() {
             (firstHitDiffuseSampleCount > 1 ||
              reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_SINGLE_FRAME)) {
             FirstHitDiffuseBounceResult firstHitBounce;
+            bool firstHitBounceUsesReservoirGi = false;
             if (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_SINGLE_FRAME) {
                 firstHitBounce = sampleFirstHitReservoirGiSingleFrame(payload.hitPos, N2, V2, payload,
                                                                       max(firstHitDiffuseSampleCount, 2),
@@ -2265,51 +1309,24 @@ void main() {
                                                                       reservoirGiUseCandidateRis,
                                                                       reservoirGiMode,
                                                                       reservoirGiSpatialNeighborCount,
+                                                                      reservoirGiCandidateEvaluationMode,
                                                                       launchID, launchSize, rngState);
-            } else if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CACHED_SECONDARY_REUSE) {
-                if (sunVisibleCandidateCacheEnabled && adaptiveCacheRefresh) {
-                    refreshSunVisibleCandidateCache(payload.hitPos, N2, V2, payload,
-                                                    cacheRefreshCandidateCount, cacheGeneration,
-                                                    rngState);
-                }
-                bool currentHitIsDiagnosticTarget =
-                    push.cascadeIndex >= 0 &&
-                    ((payload.instanceID >> 14) == uint(push.cascadeIndex));
-                if (sunVisibleCandidateCacheEnabled &&
-                    targetedDiagnosticCacheRefresh &&
-                    currentHitIsDiagnosticTarget) {
-                    refreshDiagnosticTargetSunVisibleCandidateCache(payload.hitPos, N2, V2, payload,
-                                                                    cacheGeneration, rngState);
-                }
-                firstHitBounce = sampleCachedSunVisibleCandidate(payload.hitPos, N2, V2, payload,
-                                                                 firstHitDiffuseSampleCount, cacheReuseWeight,
-                                                                 cacheMisStrength,
-                                                                 cacheWeightingMode,
-                                                                 cacheProposalMode,
-                                                                 cacheSpatialCandidateTrials,
-                                                                 cacheVisibilityValidationBudget,
-                                                                 cacheConnectionRadius,
-                                                                 cacheGeneration, cacheMaxRecordAgeFrames,
-                                                                 currentHitIsDiagnosticTarget, rngState);
+                firstHitBounceUsesReservoirGi = true;
             } else if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CANDIDATE_SUN_BOUNCE) {
                 firstHitBounce = sampleFirstHitCandidateSunBounce(payload.hitPos, N2, V2, payload,
                                                                   firstHitDiffuseSampleCount, candidateCount,
-                                                                  sunVisibleCandidateCacheEnabled, cacheGeneration,
                                                                   rngState);
             } else if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CANDIDATE_AVERAGE_REFERENCE) {
                 firstHitBounce = sampleFirstHitCandidateAverageReference(payload.hitPos, N2, V2, payload,
                                                                          firstHitDiffuseSampleCount, candidateCount,
-                                                                         sunVisibleCandidateCacheEnabled, cacheGeneration,
                                                                          rngState);
             } else if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CANDIDATE_RIS) {
                 firstHitBounce = sampleFirstHitCandidateRis(payload.hitPos, N2, V2, payload,
                                                             firstHitDiffuseSampleCount, candidateCount,
-                                                            sunVisibleCandidateCacheEnabled, cacheGeneration,
                                                             rngState);
             } else {
                 firstHitBounce = sampleFirstHitDiffuseBounce(payload.hitPos, N2, V2, payload,
                                                             firstHitDiffuseSampleCount, firstHitProbeSamplingMode,
-                                                            sunVisibleCandidateCacheEnabled, cacheGeneration,
                                                             rngState);
             }
             if (applyFirstHitProbesToFinal) {
@@ -2318,13 +1335,21 @@ void main() {
             }
             debugFirstHitBounceContribution += firstHitBounce.totalContribution;
             debugSecondaryDirectSunContribution += firstHitBounce.secondaryDirectSunContribution;
+            if (firstHitBounceUsesReservoirGi) {
+                debugReservoirGiContribution += firstHitBounce.totalContribution;
+                debugReservoirGiAcceptedLuma += pathTracerLuminance(firstHitBounce.totalContribution);
+                debugReservoirGiCandidateSurfaceHitRatio = firstHitBounce.reservoirCandidateSurfaceHitRatio;
+                debugReservoirGiCandidateSunVisibleRatio = firstHitBounce.reservoirCandidateSunVisibleRatio;
+                debugReservoirGiCandidatePositiveWeightRatio = firstHitBounce.reservoirCandidatePositiveWeightRatio;
+                debugReservoirGiSelectedWeight = firstHitBounce.reservoirSelectedWeight;
+            }
         }
 
         // ── NEE: direct lighting from directional sun light ────────────────
         // ubo.lightDir points FROM the light TOWARD the scene, so negate for surface-to-light.
         float3 Ldir  = normalize(-ubo.lightDir.xyz);
         float  NdotL = max(dot(N2, Ldir), 0.0);
-        if (NdotL > 0.0)
+        if (directSunEnabledForBounce(bounce, directSunBounceMode) && NdotL > 0.0)
         {
             // Cheap occlusion ray: skip ClosestHit, terminate on first accepted hit.
             RayPayload shadowPayload;
@@ -2480,7 +1505,7 @@ void main() {
         float throughputLum = dot(debugThroughput, float3(0.2126, 0.7152, 0.0722));
         outputColor = float3(throughputLum, throughputLum, throughputLum);
     } else if (push.padding2 == DEBUG_AOV_PATH_BOUNCE_COUNT) {
-        float bounceFraction = float(debugBounceCount) / float(MAX_BOUNCES);
+        float bounceFraction = float(debugBounceCount) / float(pathTracerMaxBounces);
         outputColor = float3(bounceFraction, bounceFraction, bounceFraction);
     } else if (push.padding2 == DEBUG_AOV_PATH_SHADOW_VISIBILITY) {
         outputColor = float3(debugShadowVisibility, debugShadowVisibility, debugShadowVisibility);
@@ -2492,6 +1517,25 @@ void main() {
         outputColor = debugSecondaryDirectSunContribution;
     } else if (push.padding2 == DEBUG_AOV_PATH_BASELINE_CONTINUATION) {
         outputColor = debugBaselineContinuationContribution;
+    } else if (push.padding2 == DEBUG_AOV_PATH_RESERVOIR_GI_CONTRIBUTION) {
+        outputColor = debugReservoirGiContribution;
+    } else if (push.padding2 == DEBUG_AOV_PATH_RESERVOIR_GI_ACCEPTED_LUMA) {
+        outputColor = float3(debugReservoirGiAcceptedLuma, debugReservoirGiAcceptedLuma, debugReservoirGiAcceptedLuma);
+    } else if (push.padding2 == DEBUG_AOV_PATH_RESERVOIR_GI_CANDIDATE_SURFACE_HIT) {
+        outputColor = float3(debugReservoirGiCandidateSurfaceHitRatio,
+                             debugReservoirGiCandidateSurfaceHitRatio,
+                             debugReservoirGiCandidateSurfaceHitRatio);
+    } else if (push.padding2 == DEBUG_AOV_PATH_RESERVOIR_GI_CANDIDATE_SUN_VISIBLE) {
+        outputColor = float3(debugReservoirGiCandidateSunVisibleRatio,
+                             debugReservoirGiCandidateSunVisibleRatio,
+                             debugReservoirGiCandidateSunVisibleRatio);
+    } else if (push.padding2 == DEBUG_AOV_PATH_RESERVOIR_GI_CANDIDATE_POSITIVE_WEIGHT) {
+        outputColor = float3(debugReservoirGiCandidatePositiveWeightRatio,
+                             debugReservoirGiCandidatePositiveWeightRatio,
+                             debugReservoirGiCandidatePositiveWeightRatio);
+    } else if (push.padding2 == DEBUG_AOV_PATH_RESERVOIR_GI_SELECTED_WEIGHT) {
+        float selectedWeight = clamp(debugReservoirGiSelectedWeight, 0.0, 1.0);
+        outputColor = float3(selectedWeight, selectedWeight, selectedWeight);
     }
     float3 appliedFirstHitProbeContribution =
         applyFirstHitProbesToFinal ? debugFirstHitBounceContribution : float3(0.0, 0.0, 0.0);

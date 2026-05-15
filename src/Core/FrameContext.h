@@ -96,24 +96,6 @@ class FrameContext
 	std::vector<Laphria::VulkanUtils::VmaBuffer> ptAnalysisCounterBuffers;
 	std::vector<void *>                          ptAnalysisCounterMapped;
 
-	static constexpr uint32_t       kSunVisibleCandidateCacheCapacity = 4096;
-	static constexpr vk::DeviceSize kSunVisibleCandidateRecordSize = 96;
-	static constexpr vk::DeviceSize kSunVisibleCandidateCacheHeaderSize = 16;
-	static constexpr vk::DeviceSize kSunVisibleCandidateCacheBufferSize =
-	    kSunVisibleCandidateCacheHeaderSize +
-	    kSunVisibleCandidateCacheCapacity * kSunVisibleCandidateRecordSize;
-	std::vector<Laphria::VulkanUtils::VmaBuffer> sunVisibleCandidateCacheBuffers;
-	std::vector<void *>                          sunVisibleCandidateCacheMapped;
-
-	static constexpr uint32_t       kSunVisibleConnectionCacheCapacity = 4096;
-	static constexpr vk::DeviceSize kSunVisibleConnectionCacheRecordSize = 128;
-	static constexpr vk::DeviceSize kSunVisibleConnectionCacheHeaderSize = 16;
-	static constexpr vk::DeviceSize kSunVisibleConnectionCacheBufferSize =
-	    kSunVisibleConnectionCacheHeaderSize +
-	    kSunVisibleConnectionCacheCapacity * kSunVisibleConnectionCacheRecordSize;
-	std::vector<Laphria::VulkanUtils::VmaBuffer> sunVisibleConnectionCacheBuffers;
-	std::vector<void *>                          sunVisibleConnectionCacheMapped;
-
 	static constexpr vk::DeviceSize kReservoirGiHeaderSize = 16;
 	static constexpr vk::DeviceSize kReservoirGiRecordSize = 96;
 	static constexpr uint32_t       kReservoirGiCurrentCapacity = 262144;
@@ -154,8 +136,6 @@ class FrameContext
 	void createAtrousResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
 	void createPathTracerAnalysisResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
 	void createPathTracerAnalysisBuffers(const VulkanDevice &dev);
-	void createSunVisibleCandidateCacheBuffers(const VulkanDevice &dev);
-	void createSunVisibleConnectionCacheBuffers(const VulkanDevice &dev);
 	void createReservoirGiCurrentBuffers(const VulkanDevice &dev, const SwapchainManager &swapchain);
 
 	void createUniformBuffers(const VulkanDevice &dev);

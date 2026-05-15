@@ -45,8 +45,6 @@ FrameContext::~FrameContext()
 
 	destroyBuffersAndReleaseAllocations(uniformBuffers);
 	destroyBuffersAndReleaseAllocations(ptAnalysisCounterBuffers);
-	destroyBuffersAndReleaseAllocations(sunVisibleCandidateCacheBuffers);
-	destroyBuffersAndReleaseAllocations(sunVisibleConnectionCacheBuffers);
 	destroyBuffersAndReleaseAllocations(reservoirGiCurrentBuffers);
 	destroyBuffersAndReleaseAllocations(tlasBuffers);
 	destroyBuffersAndReleaseAllocations(tlasScratchBuffers);
@@ -66,8 +64,6 @@ void FrameContext::init(VulkanDevice &dev, SwapchainManager &swapchain) {
     createPathTracerAnalysisResources(dev, swapchain);
     createReservoirGiCurrentBuffers(dev, swapchain);
     createPathTracerAnalysisBuffers(dev);
-    createSunVisibleCandidateCacheBuffers(dev);
-    createSunVisibleConnectionCacheBuffers(dev);
     // Shadow resources are extent-independent and live for the engine's full lifetime.
     createShadowResources(dev);
 
@@ -683,52 +679,6 @@ void FrameContext::createPathTracerAnalysisBuffers(const VulkanDevice &dev)
         ptAnalysisCounterMapped.push_back(buffer.memory.mapMemory(0, counterBufferSize));
         std::memset(ptAnalysisCounterMapped.back(), 0, static_cast<size_t>(counterBufferSize));
         ptAnalysisCounterBuffers.push_back(std::move(buffer));
-    }
-}
-
-void FrameContext::createSunVisibleCandidateCacheBuffers(const VulkanDevice &dev)
-{
-    sunVisibleCandidateCacheBuffers.clear();
-    sunVisibleCandidateCacheMapped.clear();
-    sunVisibleCandidateCacheBuffers.reserve(MAX_FRAMES_IN_FLIGHT);
-    sunVisibleCandidateCacheMapped.reserve(MAX_FRAMES_IN_FLIGHT);
-
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        VulkanUtils::VmaBuffer buffer{};
-        VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice,
-                                  kSunVisibleCandidateCacheBufferSize,
-                                  vk::BufferUsageFlagBits::eStorageBuffer,
-                                  vk::MemoryPropertyFlagBits::eHostVisible |
-                                      vk::MemoryPropertyFlagBits::eHostCoherent,
-                                  buffer);
-        sunVisibleCandidateCacheMapped.push_back(
-            buffer.memory.mapMemory(0, kSunVisibleCandidateCacheBufferSize));
-        std::memset(sunVisibleCandidateCacheMapped.back(), 0,
-                    static_cast<size_t>(kSunVisibleCandidateCacheBufferSize));
-        sunVisibleCandidateCacheBuffers.push_back(std::move(buffer));
-    }
-}
-
-void FrameContext::createSunVisibleConnectionCacheBuffers(const VulkanDevice &dev)
-{
-    sunVisibleConnectionCacheBuffers.clear();
-    sunVisibleConnectionCacheMapped.clear();
-    sunVisibleConnectionCacheBuffers.reserve(MAX_FRAMES_IN_FLIGHT);
-    sunVisibleConnectionCacheMapped.reserve(MAX_FRAMES_IN_FLIGHT);
-
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        VulkanUtils::VmaBuffer buffer{};
-        VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice,
-                                  kSunVisibleConnectionCacheBufferSize,
-                                  vk::BufferUsageFlagBits::eStorageBuffer,
-                                  vk::MemoryPropertyFlagBits::eHostVisible |
-                                      vk::MemoryPropertyFlagBits::eHostCoherent,
-                                  buffer);
-        sunVisibleConnectionCacheMapped.push_back(
-            buffer.memory.mapMemory(0, kSunVisibleConnectionCacheBufferSize));
-        std::memset(sunVisibleConnectionCacheMapped.back(), 0,
-                    static_cast<size_t>(kSunVisibleConnectionCacheBufferSize));
-        sunVisibleConnectionCacheBuffers.push_back(std::move(buffer));
     }
 }
 

@@ -34,6 +34,8 @@ static const int DEBUG_AOV_PATH_ENVIRONMENT_NEE   = 13;
 static const int DEBUG_AOV_PATH_FIRST_HIT_BOUNCE  = 14;
 static const int DEBUG_AOV_PATH_SECONDARY_SUN     = 15;
 static const int DEBUG_AOV_PATH_BASELINE_CONTINUATION = 16;
+static const int DEBUG_AOV_PATH_RESERVOIR_GI_CONTRIBUTION = 17;
+static const int DEBUG_AOV_PATH_RESERVOIR_GI_ACCEPTED_LUMA = 18;
 
 float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
@@ -163,7 +165,9 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
                    push.debugAov == DEBUG_AOV_PATH_ENVIRONMENT_NEE ||
                    push.debugAov == DEBUG_AOV_PATH_FIRST_HIT_BOUNCE ||
                    push.debugAov == DEBUG_AOV_PATH_SECONDARY_SUN ||
-                   push.debugAov == DEBUG_AOV_PATH_BASELINE_CONTINUATION) {
+                   push.debugAov == DEBUG_AOV_PATH_BASELINE_CONTINUATION ||
+                   push.debugAov == DEBUG_AOV_PATH_RESERVOIR_GI_CONTRIBUTION ||
+                   push.debugAov == DEBUG_AOV_PATH_RESERVOIR_GI_ACCEPTED_LUMA) {
             float3 debugRaw = noisyColor[pixel].rgb;
             outColor = applyAcesTonemap(debugRaw, push.exposureScale);
         } else if (push.debugAov == DEBUG_AOV_PATH_THROUGHPUT ||

@@ -136,7 +136,8 @@ int main()
 	const bool okPtPercentiles = testPathTracerPercentiles();
 	const bool okPtScore = testPathTracerScoreBudgetGate();
 	const bool okPtAovContract = testPathTracerDebugAovContract();
+	const bool okPtReservoirGiMeasurement = testPathTracerReservoirGiMeasurementContract();
 	const bool okPtHistoryClamp = testPathTracerHistoryClampPreservesDimIndirectHistory();
 	const bool okPtPowerHeuristic = testPathTracerPowerHeuristic();
-	return (okTransform && okFrustum && okBroadphase && okPtSweep && okPtPercentiles && okPtScore && okPtAovContract && okPtHistoryClamp && okPtPowerHeuristic) ? 0 : 1;
+	return (okTransform && okFrustum && okBroadphase && okPtSweep && okPtPercentiles && okPtScore && okPtAovContract && okPtReservoirGiMeasurement && okPtHistoryClamp && okPtPowerHeuristic) ? 0 : 1;
 }
