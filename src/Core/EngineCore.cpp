@@ -42,11 +42,111 @@ using namespace Laphria;
 namespace
 {
 constexpr uint32_t    kPtTimestampQueryCountPerFrame         = 8;
-constexpr int         PATH_TRACER_BLACK_ENVIRONMENT_BIT      = 1 << 1;
-constexpr int         PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = 1 << 2;
+constexpr uint32_t    kPtMaterialReservoirProposalShift      = 0u;
+constexpr uint32_t    kPtMaterialReservoirProposalMask       = 0x3u;
+constexpr uint32_t    kPtMaterialReservoirModeShift          = 18u;
+constexpr uint32_t    kPtMaterialReservoirModeMask           = 0x3u;
+constexpr uint32_t    kPtMaterialReservoirCandidateShift     = 20u;
+constexpr uint32_t    kPtMaterialReservoirCandidateMask      = 0x3u;
+constexpr uint32_t    kPtMaterialReservoirRisShift           = 22u;
+constexpr uint32_t    kPtMaterialReservoirSpatialShift       = 23u;
+constexpr uint32_t    kPtMaterialReservoirSpatialMask        = 0x7u;
+constexpr uint32_t    kPtMaterialMaxBounceShift              = 26u;
+constexpr uint32_t    kPtMaterialMaxBounceMask               = 0x3u;
+constexpr uint32_t    kPtMaterialDirectSunShift              = 28u;
+constexpr uint32_t    kPtMaterialDirectSunMask               = 0x3u;
+constexpr uint32_t    kPtMaterialReservoirEvalShift          = 30u;
+constexpr uint32_t    kPtMaterialReservoirEvalMask           = 0x3u;
+constexpr uint32_t    kPtFlagsEnvironmentNeeBit              = 1u << 0u;
+constexpr uint32_t    kPtFlagsBlackEnvironmentBit            = 1u << 1u;
+constexpr uint32_t    kPtFlagsApplyFirstHitProbesBit         = 1u << 2u;
+constexpr uint32_t    kPtFlagsEnvironmentSamplingShift       = 3u;
+constexpr uint32_t    kPtFlagsEnvironmentSamplingMask        = 0x3u;
+constexpr uint32_t    kPtFlagsFirstHitDiffuseSamplesShift    = 5u;
+constexpr uint32_t    kPtFlagsFirstHitDiffuseSamplesMask     = 0xFu;
+constexpr uint32_t    kPtFlagsFirstHitCandidateCountShift    = 9u;
+constexpr uint32_t    kPtFlagsFirstHitCandidateCountMask     = 0xFu;
+constexpr uint32_t    kPtFlagsFirstHitProbeSamplingShift     = 13u;
+constexpr uint32_t    kPtFlagsFirstHitProbeSamplingMask      = 0x7u;
+constexpr int         PATH_TRACER_BLACK_ENVIRONMENT_BIT      = static_cast<int>(kPtFlagsBlackEnvironmentBit);
+constexpr int         PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = static_cast<int>(kPtFlagsApplyFirstHitProbesBit);
 constexpr double      kWindowTitleUpdateIntervalSeconds      = 0.5;
 constexpr const char *kPtBenchmarkCsvFileName                = "path_tracer_benchmark_results.csv";
 constexpr const char *kPtBacklogCsvFileName                  = "path_tracer_backlog.csv";
+
+uint32_t packPathTracerBits(uint32_t value, uint32_t shift, uint32_t mask)
+{
+	return (value & mask) << shift;
+}
+
+uint32_t encodePathTracerMaxBounceCode(int maxBounces)
+{
+	if (maxBounces <= 3)
+	{
+		return 0u;
+	}
+	if (maxBounces <= 5)
+	{
+		return 1u;
+	}
+	return 2u;
+}
+
+UISystem::PathTracerReservoirGiProposalMode
+normalizeReservoirGiProposalMode(UISystem::PathTracerReservoirGiProposalMode mode)
+{
+	const int maxMode = static_cast<int>(UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided);
+	const int clamped = std::clamp(static_cast<int>(mode), 0, maxMode);
+	return static_cast<UISystem::PathTracerReservoirGiProposalMode>(clamped);
+}
+
+uint32_t packPathTracerMaterialSettings(const UISystem::PathTracerSettings &settings)
+{
+	const auto reservoirProposalMode = normalizeReservoirGiProposalMode(settings.reservoirGiProposalMode);
+	return packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.reservoirGiCandidateEvaluationMode, 0, 2)),
+	                          kPtMaterialReservoirEvalShift,
+	                          kPtMaterialReservoirEvalMask) |
+	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.directSunBounceMode, 0, 2)),
+	                          kPtMaterialDirectSunShift,
+	                          kPtMaterialDirectSunMask) |
+	       packPathTracerBits(encodePathTracerMaxBounceCode(settings.pathTracerMaxBounces),
+	                          kPtMaterialMaxBounceShift,
+	                          kPtMaterialMaxBounceMask) |
+	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.reservoirGiSpatialNeighborCount, 1, 8) - 1),
+	                          kPtMaterialReservoirSpatialShift,
+	                          kPtMaterialReservoirSpatialMask) |
+	       (settings.reservoirGiUseCandidateRis ? (1u << kPtMaterialReservoirRisShift) : 0u) |
+	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.reservoirGiCandidateCount, 1, 4) - 1),
+	                          kPtMaterialReservoirCandidateShift,
+	                          kPtMaterialReservoirCandidateMask) |
+	       packPathTracerBits(static_cast<uint32_t>(settings.reservoirGiMode),
+	                          kPtMaterialReservoirModeShift,
+	                          kPtMaterialReservoirModeMask) |
+	       packPathTracerBits(static_cast<uint32_t>(reservoirProposalMode),
+	                          kPtMaterialReservoirProposalShift,
+	                          kPtMaterialReservoirProposalMask);
+}
+
+uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
+{
+	const uint32_t candidateCountMinusOne =
+	    static_cast<uint32_t>(std::clamp(settings.firstHitCandidateCount, 2, 16) - 1);
+	return (settings.enableEnvironmentNEE ? kPtFlagsEnvironmentNeeBit : 0u) |
+	       (settings.blackEnvironment ? kPtFlagsBlackEnvironmentBit : 0u) |
+	       (settings.applyFirstHitProbesToFinal ? kPtFlagsApplyFirstHitProbesBit : 0u) |
+	       packPathTracerBits(static_cast<uint32_t>(settings.environmentNeeSamplingMode),
+	                          kPtFlagsEnvironmentSamplingShift,
+	                          kPtFlagsEnvironmentSamplingMask) |
+	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.firstHitDiffuseSamples, 1, 8)),
+	                          kPtFlagsFirstHitDiffuseSamplesShift,
+	                          kPtFlagsFirstHitDiffuseSamplesMask) |
+	       packPathTracerBits(candidateCountMinusOne,
+	                          kPtFlagsFirstHitCandidateCountShift,
+	                          kPtFlagsFirstHitCandidateCountMask) |
+	       packPathTracerBits(static_cast<uint32_t>(settings.firstHitProbeSamplingMode),
+	                          kPtFlagsFirstHitProbeSamplingShift,
+	                          kPtFlagsFirstHitProbeSamplingMask);
+}
 
 std::filesystem::path resolveProjectRootPath()
 {
@@ -139,8 +239,6 @@ struct SponzaScenarioPreset
 	float       cameraPitch;
 	float       cameraYaw;
 	glm::vec3   lightDirection;
-	glm::vec3   lightRegionTarget;
-	float       lightRegionRadius;
 };
 
 const std::array<SponzaScenarioPreset, 3> &sponzaScenarioPresets()
@@ -151,25 +249,19 @@ const std::array<SponzaScenarioPreset, 3> &sponzaScenarioPresets()
 	        glm::vec3(0.0f, 1.2f, 0.0f),
 	        glm::radians(-8.0f),
 	        glm::radians(180.0f),
-	        glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f)),
-	        glm::vec3(0.0f, 12.0f, -1.5f),
-	        5.0f},
+	        glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f))},
 	    SponzaScenarioPreset{
 	        "Sunlit Courtyard Wall",
 	        glm::vec3(0.0f, 12.0f, -1.5f),
 	        glm::radians(-4.0f),
 	        glm::radians(180.0f),
-	        glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f)),
-	        glm::vec3(0.0f, 12.0f, -1.5f),
-	        5.0f},
+	        glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f))},
 	    SponzaScenarioPreset{
 	        "Mid-Depth Interior",
 	        glm::vec3(-1.0f, 6.5f, 3.0f),
 	        glm::radians(-8.0f),
 	        glm::radians(180.0f),
-	        glm::normalize(glm::vec3(-0.35f, -1.0f, 0.45f)),
-	        glm::vec3(0.0f, 12.0f, -1.5f),
-	        5.0f}};
+	        glm::normalize(glm::vec3(-0.35f, -1.0f, 0.45f))}};
 	return presets;
 }
 
@@ -1283,44 +1375,13 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	                                 *pipelines.rayTracingPipelineLayout, 0,
 	                                 {*rtDescriptorSets[fi], *descriptorSets[fi]}, nullptr);
 
-	const auto &pathTracerSettings = ui.pathTracerSettings;
 	ScenePushConstants rtPush{};
 	rtPush.modelMatrix                       = glm::mat4(1.0f);
 	rtPush.cascadeIndex                      = ptIndirectBounceTargetWallModelId;
-	const auto encodePathTracerMaxBounceCode = [](int maxBounces) -> uint32_t {
-		if (maxBounces <= 3)
-		{
-			return 0u;
-		}
-		if (maxBounces <= 5)
-		{
-			return 1u;
-		}
-		return 2u;
-	};
-	const uint32_t packedPathTracerMaterialIndex =
-	    ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.reservoirGiCandidateEvaluationMode, 0, 2)) & 0x3u) << 30) |
-	    ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.directSunBounceMode, 0, 2)) & 0x3u) << 28) |
-	    ((encodePathTracerMaxBounceCode(ui.pathTracerSettings.pathTracerMaxBounces) & 0x3u) << 26) |
-	    ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.reservoirGiSpatialNeighborCount, 1, 8) - 1) & 0x7u) << 23) |
-	    ((ui.pathTracerSettings.reservoirGiUseCandidateRis ? 1u : 0u) << 22) |
-	    ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.reservoirGiCandidateCount, 1, 4) - 1) & 0x3u) << 20) |
-	    ((static_cast<uint32_t>(ui.pathTracerSettings.reservoirGiMode) & 0x3u) << 18) |
-	    (static_cast<uint32_t>(ui.pathTracerSettings.reservoirGiProposalMode) & 0x3u);
+	const uint32_t packedPathTracerMaterialIndex = packPathTracerMaterialSettings(ui.pathTracerSettings);
 	rtPush.materialIndex = static_cast<int>(packedPathTracerMaterialIndex);
 	rtPush.padding2      = debugAov;
-	rtPush.skyData = glm::vec4(pathTracerSettings.reservoirGiLightRegionTarget,
-	                           std::max(pathTracerSettings.reservoirGiLightRegionRadius, 0.1f));
-	const uint32_t candidateCountMinusOne =
-	    static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.firstHitCandidateCount, 2, 16) - 1);
-	const uint32_t pathTracerFlags =
-	    (ui.pathTracerSettings.enableEnvironmentNEE ? 1u : 0u) |
-	    (ui.pathTracerSettings.blackEnvironment ? static_cast<uint32_t>(PATH_TRACER_BLACK_ENVIRONMENT_BIT) : 0u) |
-	    (ui.pathTracerSettings.applyFirstHitProbesToFinal ? static_cast<uint32_t>(PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT) : 0u) |
-	    ((static_cast<uint32_t>(ui.pathTracerSettings.environmentNeeSamplingMode) & 0x3u) << 3) |
-	    ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.firstHitDiffuseSamples, 1, 8)) & 0xFu) << 5) |
-	    ((candidateCountMinusOne & 0xFu) << 9) |
-	    ((static_cast<uint32_t>(ui.pathTracerSettings.firstHitProbeSamplingMode) & 0x7u) << 13);
+	const uint32_t pathTracerFlags = packPathTracerFlags(ui.pathTracerSettings);
 	rtPush.padding3 = pathTracerFlags;
 	commandBuffer.pushConstants<ScenePushConstants>(*pipelines.rayTracingPipelineLayout,
 	                                                vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
@@ -1745,9 +1806,11 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	ui.pathTracerPerfStats.reservoirGiTemporalRejected            = counters->reservoirGiTemporalRejected;
 	ui.pathTracerPerfStats.reservoirGiSpatialAccepted             = counters->reservoirGiSpatialAccepted;
 	ui.pathTracerPerfStats.reservoirGiSpatialRejected             = counters->reservoirGiSpatialRejected;
-	ui.pathTracerPerfStats.reservoirGiAvgLuma =
-	    (counters->reservoirGiAccepted > 0) ? static_cast<float>(counters->reservoirGiLumaScaledSum) /
-	                                              (static_cast<float>(counters->reservoirGiAccepted) * 64.0f) :
+	ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum =
+	    static_cast<float>(counters->reservoirGiLumaScaledSum) / 64.0f;
+	ui.pathTracerPerfStats.reservoirGiAcceptedAvgLuma =
+	    (counters->reservoirGiAccepted > 0) ? ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum /
+	                                              static_cast<float>(counters->reservoirGiAccepted) :
 	                                          0.0f;
 	const float reservoirCandidateTotal = static_cast<float>(std::max(counters->reservoirGiCandidates, 1u));
 	ui.pathTracerPerfStats.reservoirGiCandidateSurfaceHitRatio =
@@ -2018,8 +2081,6 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		row.cameraPitch                   = scenario.cameraPitch;
 		row.cameraYaw                     = scenario.cameraYaw;
 		row.lightDirection                = scenario.lightDirection;
-		row.reservoirGiLightRegionTarget = scenario.lightRegionTarget;
-		row.reservoirGiLightRegionRadius = scenario.lightRegionRadius;
 	};
 
 	auto makeBaseTransportRow = [&](const SponzaScenarioPreset &scenario,
@@ -2082,11 +2143,6 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		                     "Reservoir 1C Shadowed Sun First Mixed",
 		                     1,
 		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided);
-		auto reservoirLightRegionRow =
-		    makeReservoirRow(scenario,
-		                     "Reservoir 1C Shadowed Sun First Light Region",
-		                     1,
-		                     UISystem::PathTracerReservoirGiProposalMode::LightRegionGuided);
 		auto reservoirMixedTwoCandidateRow =
 		    makeReservoirRow(scenario,
 		                     "Reservoir 2C Shadowed Sun First Mixed",
@@ -2104,7 +2160,6 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		ptExperimentRows.push_back(reservoirSunFirstRow);
 		ptExperimentRows.push_back(reservoirSunGuidedRow);
 		ptExperimentRows.push_back(reservoirMixedRow);
-		ptExperimentRows.push_back(reservoirLightRegionRow);
 		ptExperimentRows.push_back(reservoirMixedTwoCandidateRow);
 		ptExperimentRows.push_back(reservoirMixedTwoCandidateRisRow);
 	}
@@ -2148,8 +2203,6 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
 	settings.firstHitCandidateCount             = row.firstHitCandidateCount;
 	settings.reservoirGiMode                    = row.reservoirGiMode;
 	settings.reservoirGiProposalMode            = row.reservoirGiProposalMode;
-	settings.reservoirGiLightRegionTarget       = row.reservoirGiLightRegionTarget;
-	settings.reservoirGiLightRegionRadius       = row.reservoirGiLightRegionRadius;
 	settings.reservoirGiCandidateCount          = row.reservoirGiCandidateCount;
 	settings.reservoirGiSpatialNeighborCount    = row.reservoirGiSpatialNeighborCount;
 	settings.reservoirGiUseCandidateRis         = row.reservoirGiUseCandidateRis;
@@ -2187,7 +2240,8 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "maxBounces=%d, directSunMode=%d, reservoirEvalMode=%d, "
 	     "reservoirGiMode=%d, reservoirProposalMode=%d, reservoirCandidates=%d, reservoirUseRis=%d, "
 	     "firstHitProbeAvgLuma=%.5f, firstHitSunVisibleAvgLuma=%.5f, "
-	     "reservoirGiCandidateRays=%.1f, reservoirGiAccepted=%.1f, reservoirGiAvgLuma=%.5f, "
+	     "reservoirGiCandidateRays=%.1f, reservoirGiAccepted=%.1f, "
+	     "reservoirGiAcceptedAvgLuma=%.5f, reservoirGiAcceptedLumaSum=%.1f, "
 	     "reservoirGiCandidateSurfaceHit=%.2f%%, reservoirGiCandidateSunVisible=%.2f%%, "
 	     "reservoirGiCandidatePositiveWeight=%.2f%%, reservoirGiZeroWeight=%.1f, "
 	     "reservoirGiSelectedWeightAvg=%.5f, "
@@ -2206,7 +2260,8 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.firstHitProbeSunVisibleAvgLuma * invSamples,
 	     accum.reservoirGiCandidates * invSamples,
 	     accum.reservoirGiAccepted * invSamples,
-	     accum.reservoirGiAvgLuma * invSamples,
+	     accum.reservoirGiAcceptedAvgLuma * invSamples,
+	     accum.reservoirGiAcceptedLumaSum * invSamples,
 	     accum.reservoirGiCandidateSurfaceHitRatio * invSamples * 100.0,
 	     accum.reservoirGiCandidateSunVisibleRatio * invSamples * 100.0,
 	     accum.reservoirGiCandidatePositiveWeightRatio * invSamples * 100.0,
@@ -2245,8 +2300,10 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiCandidates);
 	ptExperimentAccum.reservoirGiAccepted +=
 	    static_cast<double>(stats.reservoirGiAccepted);
-	ptExperimentAccum.reservoirGiAvgLuma +=
-	    static_cast<double>(stats.reservoirGiAvgLuma);
+	ptExperimentAccum.reservoirGiAcceptedAvgLuma +=
+	    static_cast<double>(stats.reservoirGiAcceptedAvgLuma);
+	ptExperimentAccum.reservoirGiAcceptedLumaSum +=
+	    static_cast<double>(stats.reservoirGiAcceptedLumaSum);
 	ptExperimentAccum.reservoirGiCandidateSurfaceHitRatio +=
 	    static_cast<double>(stats.reservoirGiCandidateSurfaceHitRatio);
 	ptExperimentAccum.reservoirGiCandidateSunVisibleRatio +=
@@ -2541,8 +2598,6 @@ void EngineCore::applySponzaValidationPreset(UISystem::PathTracerSponzaValidatio
 	pathTracerSettings.firstHitCandidateCount     = 4;
 	pathTracerSettings.reservoirGiMode            = UISystem::PathTracerReservoirGiMode::SingleFrame;
 	pathTracerSettings.reservoirGiProposalMode    = UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided;
-	pathTracerSettings.reservoirGiLightRegionTarget = preset.lightRegionTarget;
-	pathTracerSettings.reservoirGiLightRegionRadius = preset.lightRegionRadius;
 	pathTracerSettings.reservoirGiCandidateCount = 1;
 	pathTracerSettings.reservoirGiUseCandidateRis = false;
 	pathTracerSettings.reservoirGiCandidateEvaluationMode = 2;

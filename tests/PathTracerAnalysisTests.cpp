@@ -344,13 +344,14 @@ bool testPathTracerDebugAovContract()
 	    "Reservoir GI Proposal",
 	    "Sun Guided",
 	    "Mixed Cosine + Sun Guided",
-	    "Light Region Guided",
 	    "Reservoir Spatial Neighbors",
 	    "Reservoir Candidate Surface Hits",
 	    "Reservoir Candidate Sun Visible",
 	    "Reservoir Candidate Positive Weight",
 	    "Reservoir GI Zero Weight",
 	    "Reservoir GI Selected Weight Avg",
+	    "Reservoir GI Accepted Avg Luma",
+	    "Reservoir GI Accepted Luma Sum",
 	    "Indirect Box Capture Checklist",
 	    "Record these values after the image stabilizes",
 	    "Target Wall Base Luma",
@@ -448,11 +449,12 @@ bool testPathTracerDebugAovContract()
 	    "RESERVOIR_GI_PROPOSAL_COSINE",
 	    "RESERVOIR_GI_PROPOSAL_SUN_GUIDED",
 	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED",
-	    "RESERVOIR_GI_PROPOSAL_LIGHT_REGION_GUIDED",
+	    "PT_MATERIAL_RESERVOIR_PROPOSAL_SHIFT",
+	    "PT_MATERIAL_RESERVOIR_PROPOSAL_MASK",
+	    "PT_MATERIAL_RESERVOIR_MODE_SHIFT",
+	    "PT_FLAGS_ENVIRONMENT_NEE_BIT",
+	    "PT_FLAGS_FIRST_HIT_PROBE_SAMPLING_SHIFT",
 	    "sampleReservoirGiProposalDirection",
-	    "sampleReservoirGiLightRegionDirection",
-	    "uniformSampleCone",
-	    "lightRegionTargetRadius",
 	    "reservoirGiProposalPdf",
 	    "reservoirGiProposalMode",
 	    "ptReservoirGiCurrent",
@@ -532,18 +534,27 @@ bool testPathTracerDebugAovContract()
 	    "reservoirProposalMode=%d",
 	    "reservoirGiCandidateRays=",
 	    "reservoirGiAccepted=",
-	    "reservoirGiAvgLuma=",
+	    "reservoirGiAcceptedAvgLuma=",
+	    "reservoirGiAcceptedLumaSum=",
 	    "reservoirGiTemporalAccepted",
 	    "reservoirGiTemporalRejected",
 	    "reservoirGiSpatialNeighborCount",
 	    "reservoirGiSpatialAccepted",
 	    "reservoirGiSpatialRejected",
-	    "reservoirGiAvgLuma",
+	    "reservoirGiAcceptedAvgLuma",
+	    "reservoirGiAcceptedLumaSum",
 	    "reservoirGiCandidateSurfaceHitRatio",
 	    "reservoirGiCandidateSunVisibleRatio",
 	    "reservoirGiCandidatePositiveWeightRatio",
 	    "reservoirGiSelectedWeightAverage",
 	    "reservoirGiLumaScaledSum",
+	    "normalizeReservoirGiProposalMode",
+	    "packPathTracerMaterialSettings",
+	    "packPathTracerFlags",
+	    "kPtMaterialReservoirProposalShift",
+	    "kPtMaterialReservoirProposalMask",
+	    "kPtFlagsEnvironmentNeeBit",
+	    "kPtFlagsFirstHitProbeSamplingShift",
 	    "targetWallSampleCount",
 	    "firstHitProbeCount",
 	    "firstHitProbeSurfaceHitCount",
@@ -579,12 +590,8 @@ bool testPathTracerDebugAovContract()
 	    "Reservoir 1C Shadowed Sun First",
 	    "Reservoir 1C Shadowed Sun First Sun Guided",
 	    "Reservoir 1C Shadowed Sun First Mixed",
-	    "Reservoir 1C Shadowed Sun First Light Region",
 	    "Reservoir 2C Shadowed Sun First Mixed",
 	    "Reservoir 2C Shadowed Sun First Mixed RIS",
-	    "LightRegionGuided",
-	    "rtPush.skyData = glm::vec4(pathTracerSettings.reservoirGiLightRegionTarget",
-	    "reservoirGiLightRegionRadius",
 	    "ptBenchmarkBasePosition",
 	    "ui.lightDirection",
 	    "makeScenarioRowName",
@@ -592,7 +599,8 @@ bool testPathTracerDebugAovContract()
 	    "reservoirSunFirstRow.reservoirGiCandidateCount = 1",
 	    "uint32_t padding3",
 	    "rtPush.padding3 = pathTracerFlags",
-	    "packedPathTracerMaterialIndex",
+	    "packPathTracerMaterialSettings(ui.pathTracerSettings)",
+	    "packPathTracerFlags(ui.pathTracerSettings)",
 	    "settings.blackEnvironment",
 	    "analysis.applyDebugLightPreset",
 	    "updatePathTracerExperimentSweep",
@@ -652,6 +660,7 @@ bool testPathTracerDebugAovContract()
 	    containsText(engineSource, "Sponza / Reservoir GI Temporal Spatial") ||
 	    containsText(engineSource, "Sponza / Reservoir GI Single Frame 2 Candidates No RIS") ||
 	    containsText(engineSource, "Sponza / Reservoir GI Single Frame 2 Candidates RIS") ||
+	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Light Region") ||
 	    containsText(engineSource, "Cache Chosen Radius 14 Budget 1") ||
 	    containsText(engineSource, "makeCacheChosenRow"))
 	{
@@ -698,6 +707,27 @@ bool testPathTracerDebugAovContract()
 		if (containsText(activeCacheCleanupSources, symbol))
 		{
 			std::cerr << "old sun-visible cache symbol remains in active path tracer source: " << symbol << "\n";
+			return false;
+		}
+	}
+
+	const char *forbiddenLightRegionGuidedSymbols[] = {
+	    "Light Region Guided",
+	    "LightRegionGuided",
+	    "reservoirGiLightRegionTarget",
+	    "reservoirGiLightRegionRadius",
+	    "lightRegionTarget",
+	    "lightRegionRadius",
+	    "RESERVOIR_GI_PROPOSAL_LIGHT_REGION_GUIDED",
+	    "sampleReservoirGiLightRegionDirection",
+	    "uniformSampleCone",
+	    "lightRegionTargetRadius",
+	    "rtPush.skyData = glm::vec4(pathTracerSettings.reservoirGiLightRegionTarget"};
+	for (const char *symbol : forbiddenLightRegionGuidedSymbols)
+	{
+		if (containsText(activeCacheCleanupSources, symbol))
+		{
+			std::cerr << "fixed light-region guided proposal path remains in active source: " << symbol << "\n";
 			return false;
 		}
 	}

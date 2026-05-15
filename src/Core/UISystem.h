@@ -93,8 +93,7 @@ public:
     {
         Cosine = 0,
         SunGuided = 1,
-        MixedCosineSunGuided = 2,
-        LightRegionGuided = 3
+        MixedCosineSunGuided = 2
     };
 
     enum class PathTracerSponzaValidationView
@@ -119,8 +118,6 @@ public:
         int                   firstHitCandidateCount = 4;
         PathTracerReservoirGiMode reservoirGiMode = PathTracerReservoirGiMode::Off;
         PathTracerReservoirGiProposalMode reservoirGiProposalMode = PathTracerReservoirGiProposalMode::Cosine;
-        glm::vec3             reservoirGiLightRegionTarget = glm::vec3(0.0f, 12.0f, -1.5f);
-        float                 reservoirGiLightRegionRadius = 5.0f;
         int                   reservoirGiCandidateCount = 2;
         int                   reservoirGiSpatialNeighborCount = 4;
         bool                  reservoirGiUseCandidateRis = true;
@@ -180,7 +177,8 @@ public:
         uint32_t reservoirGiTemporalRejected = 0;
         uint32_t reservoirGiSpatialAccepted = 0;
         uint32_t reservoirGiSpatialRejected = 0;
-        float reservoirGiAvgLuma = 0.0f;
+        float reservoirGiAcceptedAvgLuma = 0.0f;
+        float reservoirGiAcceptedLumaSum = 0.0f;
         float reservoirGiCandidateSurfaceHitRatio = 0.0f;
         float reservoirGiCandidateSunVisibleRatio = 0.0f;
         float reservoirGiCandidatePositiveWeightRatio = 0.0f;

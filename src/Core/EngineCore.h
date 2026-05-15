@@ -108,8 +108,6 @@ class EngineCore
 		    UISystem::PathTracerReservoirGiMode::Off;
 		UISystem::PathTracerReservoirGiProposalMode reservoirGiProposalMode =
 		    UISystem::PathTracerReservoirGiProposalMode::Cosine;
-		glm::vec3 reservoirGiLightRegionTarget{0.0f, 12.0f, -1.5f};
-		float reservoirGiLightRegionRadius = 5.0f;
 		int reservoirGiCandidateCount = 2;
 		int reservoirGiSpatialNeighborCount = 4;
 		bool reservoirGiUseCandidateRis = true;
@@ -134,7 +132,8 @@ class EngineCore
 		double firstHitProbeSunVisibleAvgLuma = 0.0;
 		double reservoirGiCandidates = 0.0;
 		double reservoirGiAccepted = 0.0;
-		double reservoirGiAvgLuma = 0.0;
+		double reservoirGiAcceptedAvgLuma = 0.0;
+		double reservoirGiAcceptedLumaSum = 0.0;
 		double reservoirGiCandidateSurfaceHitRatio = 0.0;
 		double reservoirGiCandidateSunVisibleRatio = 0.0;
 		double reservoirGiCandidatePositiveWeightRatio = 0.0;

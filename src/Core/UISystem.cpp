@@ -1141,8 +1141,7 @@ void UISystem::drawPathTracerDebugLab() {
         const char *reservoirGiProposalModes[] = {
             "Cosine",
             "Sun Guided",
-            "Mixed Cosine + Sun Guided",
-            "Light Region Guided"};
+            "Mixed Cosine + Sun Guided"};
         int reservoirGiProposalMode = static_cast<int>(pathTracerSettings.reservoirGiProposalMode);
         if (ImGui::Combo("Reservoir GI Proposal", &reservoirGiProposalMode,
                          reservoirGiProposalModes, IM_ARRAYSIZE(reservoirGiProposalModes))) {
@@ -1171,7 +1170,8 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::Text("Reservoir GI Spatial: accepted %u | rejected %u",
                     pathTracerPerfStats.reservoirGiSpatialAccepted,
                     pathTracerPerfStats.reservoirGiSpatialRejected);
-        ImGui::Text("Reservoir GI Avg Luma: %.5f", pathTracerPerfStats.reservoirGiAvgLuma);
+        ImGui::Text("Reservoir GI Accepted Avg Luma: %.5f", pathTracerPerfStats.reservoirGiAcceptedAvgLuma);
+        ImGui::Text("Reservoir GI Accepted Luma Sum: %.1f", pathTracerPerfStats.reservoirGiAcceptedLumaSum);
     }
 
     if (ImGui::CollapsingHeader("Core Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
