@@ -139,6 +139,8 @@ struct SponzaScenarioPreset
 	float       cameraPitch;
 	float       cameraYaw;
 	glm::vec3   lightDirection;
+	glm::vec3   lightRegionTarget;
+	float       lightRegionRadius;
 };
 
 const std::array<SponzaScenarioPreset, 3> &sponzaScenarioPresets()
@@ -149,19 +151,25 @@ const std::array<SponzaScenarioPreset, 3> &sponzaScenarioPresets()
 	        glm::vec3(0.0f, 1.2f, 0.0f),
 	        glm::radians(-8.0f),
 	        glm::radians(180.0f),
-	        glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f))},
+	        glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f)),
+	        glm::vec3(0.0f, 12.0f, -1.5f),
+	        5.0f},
 	    SponzaScenarioPreset{
 	        "Sunlit Courtyard Wall",
 	        glm::vec3(0.0f, 12.0f, -1.5f),
 	        glm::radians(-4.0f),
 	        glm::radians(180.0f),
-	        glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f))},
+	        glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f)),
+	        glm::vec3(0.0f, 12.0f, -1.5f),
+	        5.0f},
 	    SponzaScenarioPreset{
 	        "Mid-Depth Interior",
 	        glm::vec3(-1.0f, 6.5f, 3.0f),
 	        glm::radians(-8.0f),
 	        glm::radians(180.0f),
-	        glm::normalize(glm::vec3(-0.35f, -1.0f, 0.45f))}};
+	        glm::normalize(glm::vec3(-0.35f, -1.0f, 0.45f)),
+	        glm::vec3(0.0f, 12.0f, -1.5f),
+	        5.0f}};
 	return presets;
 }
 
@@ -1275,6 +1283,7 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	                                 *pipelines.rayTracingPipelineLayout, 0,
 	                                 {*rtDescriptorSets[fi], *descriptorSets[fi]}, nullptr);
 
+	const auto &pathTracerSettings = ui.pathTracerSettings;
 	ScenePushConstants rtPush{};
 	rtPush.modelMatrix                       = glm::mat4(1.0f);
 	rtPush.cascadeIndex                      = ptIndirectBounceTargetWallModelId;
@@ -1296,10 +1305,12 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	    ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.reservoirGiSpatialNeighborCount, 1, 8) - 1) & 0x7u) << 23) |
 	    ((ui.pathTracerSettings.reservoirGiUseCandidateRis ? 1u : 0u) << 22) |
 	    ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.reservoirGiCandidateCount, 1, 4) - 1) & 0x3u) << 20) |
-	    ((static_cast<uint32_t>(ui.pathTracerSettings.reservoirGiMode) & 0x3u) << 18);
+	    ((static_cast<uint32_t>(ui.pathTracerSettings.reservoirGiMode) & 0x3u) << 18) |
+	    (static_cast<uint32_t>(ui.pathTracerSettings.reservoirGiProposalMode) & 0x3u);
 	rtPush.materialIndex = static_cast<int>(packedPathTracerMaterialIndex);
 	rtPush.padding2      = debugAov;
-	rtPush.skyData       = glm::vec4(0.0f);
+	rtPush.skyData = glm::vec4(pathTracerSettings.reservoirGiLightRegionTarget,
+	                           std::max(pathTracerSettings.reservoirGiLightRegionRadius, 0.1f));
 	const uint32_t candidateCountMinusOne =
 	    static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.firstHitCandidateCount, 2, 16) - 1);
 	const uint32_t pathTracerFlags =
@@ -2002,11 +2013,13 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 	};
 	auto applyScenarioPreset = [](PathTracerExperimentRow    &row,
 	                              const SponzaScenarioPreset &scenario) {
-		row.scenarioName   = scenario.name;
-		row.cameraPosition = scenario.cameraPosition;
-		row.cameraPitch    = scenario.cameraPitch;
-		row.cameraYaw      = scenario.cameraYaw;
-		row.lightDirection = scenario.lightDirection;
+		row.scenarioName                  = scenario.name;
+		row.cameraPosition                = scenario.cameraPosition;
+		row.cameraPitch                   = scenario.cameraPitch;
+		row.cameraYaw                     = scenario.cameraYaw;
+		row.lightDirection                = scenario.lightDirection;
+		row.reservoirGiLightRegionTarget = scenario.lightRegionTarget;
+		row.reservoirGiLightRegionRadius = scenario.lightRegionRadius;
 	};
 
 	auto makeBaseTransportRow = [&](const SponzaScenarioPreset &scenario,
@@ -2030,7 +2043,9 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 
 	auto makeReservoirRow = [&](const SponzaScenarioPreset &scenario,
 	                            const char                 *variant,
-	                            int                         directSunMode) {
+	                            int                         directSunMode,
+	                            UISystem::PathTracerReservoirGiProposalMode proposalMode =
+	                                UISystem::PathTracerReservoirGiProposalMode::Cosine) {
 		PathTracerExperimentRow row{};
 		row.name = makeScenarioRowName(scenario, variant);
 		applyScenarioPreset(row, scenario);
@@ -2038,6 +2053,7 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		row.blackEnvironment                   = false;
 		row.applyDebugLightPreset              = false;
 		row.reservoirGiMode                    = UISystem::PathTracerReservoirGiMode::SingleFrame;
+		row.reservoirGiProposalMode            = proposalMode;
 		row.firstHitDiffuseSamples             = 2;
 		row.firstHitCandidateCount             = 4;
 		row.reservoirGiCandidateCount          = 1;
@@ -2056,11 +2072,41 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		    makeReservoirRow(scenario, "Reservoir 1C Shadowed Sun First", 1);
 		reservoirSunFirstRow.directSunBounceMode       = 1;
 		reservoirSunFirstRow.reservoirGiCandidateCount = 1;
+		auto reservoirSunGuidedRow =
+		    makeReservoirRow(scenario,
+		                     "Reservoir 1C Shadowed Sun First Sun Guided",
+		                     1,
+		                     UISystem::PathTracerReservoirGiProposalMode::SunGuided);
+		auto reservoirMixedRow =
+		    makeReservoirRow(scenario,
+		                     "Reservoir 1C Shadowed Sun First Mixed",
+		                     1,
+		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided);
+		auto reservoirLightRegionRow =
+		    makeReservoirRow(scenario,
+		                     "Reservoir 1C Shadowed Sun First Light Region",
+		                     1,
+		                     UISystem::PathTracerReservoirGiProposalMode::LightRegionGuided);
+		auto reservoirMixedTwoCandidateRow =
+		    makeReservoirRow(scenario,
+		                     "Reservoir 2C Shadowed Sun First Mixed",
+		                     1,
+		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided);
+		reservoirMixedTwoCandidateRow.reservoirGiCandidateCount = 2;
+		auto reservoirMixedTwoCandidateRisRow = reservoirMixedTwoCandidateRow;
+		reservoirMixedTwoCandidateRisRow.name =
+		    makeScenarioRowName(scenario, "Reservoir 2C Shadowed Sun First Mixed RIS");
+		reservoirMixedTwoCandidateRisRow.reservoirGiUseCandidateRis = true;
 
 		ptExperimentRows.push_back(makeBaseTransportRow(scenario, "Base 8 Sun All", 0));
 		ptExperimentRows.push_back(makeBaseTransportRow(scenario, "Base 8 Sun First", 1));
 		ptExperimentRows.push_back(makeReservoirRow(scenario, "Reservoir 1C Shadowed Sun All", 0));
 		ptExperimentRows.push_back(reservoirSunFirstRow);
+		ptExperimentRows.push_back(reservoirSunGuidedRow);
+		ptExperimentRows.push_back(reservoirMixedRow);
+		ptExperimentRows.push_back(reservoirLightRegionRow);
+		ptExperimentRows.push_back(reservoirMixedTwoCandidateRow);
+		ptExperimentRows.push_back(reservoirMixedTwoCandidateRisRow);
 	}
 
 	ptExperimentSweepActive     = !ptExperimentRows.empty();
@@ -2101,6 +2147,9 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
 	settings.firstHitDiffuseSamples             = row.firstHitDiffuseSamples;
 	settings.firstHitCandidateCount             = row.firstHitCandidateCount;
 	settings.reservoirGiMode                    = row.reservoirGiMode;
+	settings.reservoirGiProposalMode            = row.reservoirGiProposalMode;
+	settings.reservoirGiLightRegionTarget       = row.reservoirGiLightRegionTarget;
+	settings.reservoirGiLightRegionRadius       = row.reservoirGiLightRegionRadius;
 	settings.reservoirGiCandidateCount          = row.reservoirGiCandidateCount;
 	settings.reservoirGiSpatialNeighborCount    = row.reservoirGiSpatialNeighborCount;
 	settings.reservoirGiUseCandidateRis         = row.reservoirGiUseCandidateRis;
@@ -2136,7 +2185,7 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	const double invSamples = (accum.sampleCount > 0) ? (1.0 / static_cast<double>(accum.sampleCount)) : 0.0;
 	LOGI("PT Experiment Row Summary: name=\"%s\", samples=%u, mode=%d, "
 	     "maxBounces=%d, directSunMode=%d, reservoirEvalMode=%d, "
-	     "reservoirGiMode=%d, reservoirCandidates=%d, reservoirUseRis=%d, "
+	     "reservoirGiMode=%d, reservoirProposalMode=%d, reservoirCandidates=%d, reservoirUseRis=%d, "
 	     "firstHitProbeAvgLuma=%.5f, firstHitSunVisibleAvgLuma=%.5f, "
 	     "reservoirGiCandidateRays=%.1f, reservoirGiAccepted=%.1f, reservoirGiAvgLuma=%.5f, "
 	     "reservoirGiCandidateSurfaceHit=%.2f%%, reservoirGiCandidateSunVisible=%.2f%%, "
@@ -2150,6 +2199,7 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     row.directSunBounceMode,
 	     row.reservoirGiCandidateEvaluationMode,
 	     static_cast<int>(row.reservoirGiMode),
+	     static_cast<int>(row.reservoirGiProposalMode),
 	     row.reservoirGiCandidateCount,
 	     row.reservoirGiUseCandidateRis ? 1 : 0,
 	     accum.firstHitProbeAvgLuma * invSamples,
@@ -2490,6 +2540,9 @@ void EngineCore::applySponzaValidationPreset(UISystem::PathTracerSponzaValidatio
 	pathTracerSettings.firstHitDiffuseSamples     = 2;
 	pathTracerSettings.firstHitCandidateCount     = 4;
 	pathTracerSettings.reservoirGiMode            = UISystem::PathTracerReservoirGiMode::SingleFrame;
+	pathTracerSettings.reservoirGiProposalMode    = UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided;
+	pathTracerSettings.reservoirGiLightRegionTarget = preset.lightRegionTarget;
+	pathTracerSettings.reservoirGiLightRegionRadius = preset.lightRegionRadius;
 	pathTracerSettings.reservoirGiCandidateCount = 1;
 	pathTracerSettings.reservoirGiUseCandidateRis = false;
 	pathTracerSettings.reservoirGiCandidateEvaluationMode = 2;

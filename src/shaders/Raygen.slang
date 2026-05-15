@@ -65,6 +65,10 @@ static const int PATH_TRACER_RESERVOIR_GI_OFF = 0;
 static const int PATH_TRACER_RESERVOIR_GI_SINGLE_FRAME = 1;
 static const int PATH_TRACER_RESERVOIR_GI_TEMPORAL = 2;
 static const int PATH_TRACER_RESERVOIR_GI_TEMPORAL_SPATIAL = 3;
+static const int RESERVOIR_GI_PROPOSAL_COSINE = 0;
+static const int RESERVOIR_GI_PROPOSAL_SUN_GUIDED = 1;
+static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED = 2;
+static const int RESERVOIR_GI_PROPOSAL_LIGHT_REGION_GUIDED = 3;
 static const int DIRECT_SUN_BOUNCE_ALL = 0;
 static const int DIRECT_SUN_BOUNCE_FIRST_ONLY = 1;
 static const int DIRECT_SUN_BOUNCE_FIRST_TWO = 2;
@@ -483,6 +487,89 @@ bool directSunEnabledForBounce(int bounce, int directSunBounceMode)
            (directSunBounceMode == DIRECT_SUN_BOUNCE_FIRST_TWO && bounce <= 1);
 }
 
+float3 uniformSampleCone(float2 xi, float cosThetaMax, float3 axis)
+{
+    float cosTheta = lerp(cosThetaMax, 1.0, xi.x);
+    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    float phi = 2.0 * PI * xi.y;
+
+    float3 up = abs(axis.y) < 0.999 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+    float3 tangent = normalize(cross(up, axis));
+    float3 bitangent = cross(axis, tangent);
+    return normalize(tangent * (sinTheta * cos(phi)) +
+                     axis * cosTheta +
+                     bitangent * (sinTheta * sin(phi)));
+}
+
+FirstHitProbeSample sampleReservoirGiLightRegionDirection(float3 N, float3 hitPos, float2 xi)
+{
+    FirstHitProbeSample sample;
+    sample.direction = cosineSampleHemisphere(xi, N);
+    sample.pdf = max(dot(N, sample.direction), 0.0) / PI;
+
+    float3 lightRegionTarget = push.skyData.xyz;
+    float lightRegionTargetRadius = max(push.skyData.w, 0.1);
+    float3 toTarget = lightRegionTarget - hitPos;
+    float targetDistSq = dot(toTarget, toTarget);
+    if (targetDistSq <= 0.0001) {
+        return sample;
+    }
+
+    float targetDist = sqrt(targetDistSq);
+    float3 targetAxis = toTarget / targetDist;
+    if (dot(N, targetAxis) <= 0.02) {
+        return sample;
+    }
+
+    float sinThetaMax = saturate(lightRegionTargetRadius / max(targetDist, lightRegionTargetRadius));
+    float cosThetaMax = sqrt(max(0.0, 1.0 - sinThetaMax * sinThetaMax));
+    cosThetaMax = min(cosThetaMax, 0.94);
+    sample.direction = uniformSampleCone(xi, cosThetaMax, targetAxis);
+    if (dot(N, sample.direction) <= 0.0) {
+        sample.direction = cosineSampleHemisphere(xi, N);
+        sample.pdf = max(dot(N, sample.direction), 0.0) / PI;
+        return sample;
+    }
+
+    sample.pdf = 1.0 / max(2.0 * PI * (1.0 - cosThetaMax), 0.0001);
+    return sample;
+}
+
+FirstHitProbeSample sampleReservoirGiProposalDirection(float3 N,
+                                                       float3 hitPos,
+                                                       int reservoirGiProposalMode,
+                                                       inout uint rngState)
+{
+    float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
+    float selector = randomFloat(rngState);
+    float3 guideAxis = firstHitSunBounceGuideAxis(N);
+
+    float3 cosineDirection = cosineSampleHemisphere(xi, N);
+    float3 guidedDirection = cosineSampleHemisphere(xi, guideAxis);
+    FirstHitProbeSample sample;
+    if (reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_SUN_GUIDED) {
+        sample.direction = guidedDirection;
+        sample.pdf = max(dot(guideAxis, sample.direction), 0.0) / PI;
+        return sample;
+    }
+
+    if (reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED) {
+        sample.direction = (selector < 0.5) ? cosineDirection : guidedDirection;
+        float cosinePdf = max(dot(N, sample.direction), 0.0) / PI;
+        float guidedPdf = max(dot(guideAxis, sample.direction), 0.0) / PI;
+        sample.pdf = 0.5 * cosinePdf + 0.5 * guidedPdf;
+        return sample;
+    }
+
+    if (reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_LIGHT_REGION_GUIDED) {
+        return sampleReservoirGiLightRegionDirection(N, hitPos, xi);
+    }
+
+    sample.direction = cosineDirection;
+    sample.pdf = max(dot(N, sample.direction), 0.0) / PI;
+    return sample;
+}
+
 float3 evaluateDirectSunContributionInternal(float3 hitPos, float3 N, float3 V,
                                              float3 throughput, RayPayload payload,
                                              bool traceVisibility)
@@ -868,6 +955,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
                                                                  int firstHitDiffuseSampleCount,
                                                                  int candidateCount,
                                                                  bool useCandidateRis,
+                                                                 int reservoirGiProposalMode,
                                                                  int reservoirGiMode,
                                                                  int reservoirGiSpatialNeighborCount,
                                                                  int reservoirGiCandidateEvaluationMode,
@@ -930,10 +1018,12 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     uint candidatePositiveWeightCount = 0u;
 
     for (int c = 0; c < candidateCount; ++c) {
-        float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
-        float3 bounceDir = cosineSampleHemisphere(xi, N);
+        FirstHitProbeSample reservoirGiProposal =
+            sampleReservoirGiProposalDirection(N, hitPos, reservoirGiProposalMode, rngState);
+        float3 bounceDir = reservoirGiProposal.direction;
         float NdotBounce = max(dot(N, bounceDir), 0.0);
-        float pdf = NdotBounce / PI;
+        float reservoirGiProposalPdf = reservoirGiProposal.pdf;
+        float pdf = reservoirGiProposalPdf;
         if (!isFinitePositive(pdf) || !isSaneReservoirGiVector(bounceDir, 1.1)) {
             continue;
         }
@@ -1217,6 +1307,9 @@ void main() {
     int    firstHitProbeSamplingMode = int((packedPathTracerFlags >> 13) & 0x7);
     uint   packedPathTracerMaterialIndex = uint(push.materialIndex);
     int    reservoirGiMode = int((packedPathTracerMaterialIndex >> 18) & 0x3u);
+    int    reservoirGiProposalMode = clamp(int(packedPathTracerMaterialIndex & 0x3u),
+                                           RESERVOIR_GI_PROPOSAL_COSINE,
+                                           RESERVOIR_GI_PROPOSAL_LIGHT_REGION_GUIDED);
     int    reservoirGiCandidateCount = clamp(int((packedPathTracerMaterialIndex >> 20) & 0x3u) + 1, 1, 4);
     bool   reservoirGiUseCandidateRis = ((packedPathTracerMaterialIndex >> 22) & 0x1u) != 0u;
     int    reservoirGiSpatialNeighborCount = clamp(int((packedPathTracerMaterialIndex >> 23) & 0x7u) + 1, 1, 8);
@@ -1307,6 +1400,7 @@ void main() {
                                                                       max(firstHitDiffuseSampleCount, 2),
                                                                       reservoirGiCandidateCount,
                                                                       reservoirGiUseCandidateRis,
+                                                                      reservoirGiProposalMode,
                                                                       reservoirGiMode,
                                                                       reservoirGiSpatialNeighborCount,
                                                                       reservoirGiCandidateEvaluationMode,

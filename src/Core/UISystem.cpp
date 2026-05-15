@@ -1138,6 +1138,17 @@ void UISystem::drawPathTracerDebugLab() {
             pathTracerSettings.reservoirGiMode =
                 static_cast<PathTracerReservoirGiMode>(reservoirGiMode);
         }
+        const char *reservoirGiProposalModes[] = {
+            "Cosine",
+            "Sun Guided",
+            "Mixed Cosine + Sun Guided",
+            "Light Region Guided"};
+        int reservoirGiProposalMode = static_cast<int>(pathTracerSettings.reservoirGiProposalMode);
+        if (ImGui::Combo("Reservoir GI Proposal", &reservoirGiProposalMode,
+                         reservoirGiProposalModes, IM_ARRAYSIZE(reservoirGiProposalModes))) {
+            pathTracerSettings.reservoirGiProposalMode =
+                static_cast<PathTracerReservoirGiProposalMode>(reservoirGiProposalMode);
+        }
         ImGui::SliderInt("Reservoir GI Candidates", &pathTracerSettings.reservoirGiCandidateCount, 1, 4);
         ImGui::SliderInt("Reservoir Spatial Neighbors", &pathTracerSettings.reservoirGiSpatialNeighborCount, 1, 8);
         ImGui::Checkbox("Reservoir GI Candidate RIS", &pathTracerSettings.reservoirGiUseCandidateRis);

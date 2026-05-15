@@ -89,6 +89,14 @@ public:
         TemporalSpatial = 3
     };
 
+    enum class PathTracerReservoirGiProposalMode
+    {
+        Cosine = 0,
+        SunGuided = 1,
+        MixedCosineSunGuided = 2,
+        LightRegionGuided = 3
+    };
+
     enum class PathTracerSponzaValidationView
     {
         DarkCourtyard = 0,
@@ -110,6 +118,9 @@ public:
         int                   firstHitDiffuseSamples = 1;
         int                   firstHitCandidateCount = 4;
         PathTracerReservoirGiMode reservoirGiMode = PathTracerReservoirGiMode::Off;
+        PathTracerReservoirGiProposalMode reservoirGiProposalMode = PathTracerReservoirGiProposalMode::Cosine;
+        glm::vec3             reservoirGiLightRegionTarget = glm::vec3(0.0f, 12.0f, -1.5f);
+        float                 reservoirGiLightRegionRadius = 5.0f;
         int                   reservoirGiCandidateCount = 2;
         int                   reservoirGiSpatialNeighborCount = 4;
         bool                  reservoirGiUseCandidateRis = true;

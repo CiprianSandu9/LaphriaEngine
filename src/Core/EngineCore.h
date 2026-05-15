@@ -106,6 +106,10 @@ class EngineCore
 		UISystem::FirstHitProbeSamplingMode probeMode = UISystem::FirstHitProbeSamplingMode::CosineHemisphere;
 		UISystem::PathTracerReservoirGiMode reservoirGiMode =
 		    UISystem::PathTracerReservoirGiMode::Off;
+		UISystem::PathTracerReservoirGiProposalMode reservoirGiProposalMode =
+		    UISystem::PathTracerReservoirGiProposalMode::Cosine;
+		glm::vec3 reservoirGiLightRegionTarget{0.0f, 12.0f, -1.5f};
+		float reservoirGiLightRegionRadius = 5.0f;
 		int reservoirGiCandidateCount = 2;
 		int reservoirGiSpatialNeighborCount = 4;
 		bool reservoirGiUseCandidateRis = true;
