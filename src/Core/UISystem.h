@@ -82,6 +82,13 @@ public:
         MisApproximation = 1
     };
 
+    enum class PathTracerCacheProposalMode
+    {
+        SpatialLocal = 0,
+        GlobalNonLocal = 1,
+        ConnectionCache = 2
+    };
+
     struct PathTracerSettings
     {
         float                 resolutionScale = 1.0f;
@@ -97,12 +104,15 @@ public:
         int                   firstHitDiffuseSamples = 1;
         int                   firstHitCandidateCount = 4;
         float                 cacheReuseWeight = 0.126f;
+        float                 cacheConnectionRadius = 3.5f;
         PathTracerCacheWeightingMode cacheWeightingMode = PathTracerCacheWeightingMode::CalibratedWeight;
+        PathTracerCacheProposalMode cacheProposalMode = PathTracerCacheProposalMode::SpatialLocal;
         float                 cacheMisStrength = 1.5f;
         bool                  adaptiveCacheRefresh = true;
         bool                  targetedDiagnosticCacheRefresh = false;
         int                   cacheRefreshCandidateCount = 1;
         int                   cacheSpatialCandidateTrials = 8;
+        int                   cacheVisibilityValidationBudget = 7;
         int                   cacheMaxRecordAgeFrames = 180;
         float                 targetFrameMs = 16.6f;
         bool                  enableReprojection = true;
@@ -148,6 +158,34 @@ public:
         float firstHitProbeSunVisibleContributionAverage = 0.0f;
         uint32_t cachedCandidateCount = 0;
         uint32_t residentCachedCandidateCount = 0;
+        uint32_t cacheReadBank = 0;
+        uint32_t cacheWriteBank = 0;
+        uint32_t cacheReadBankInsertCount = 0;
+        uint32_t cacheWriteBankInsertCount = 0;
+        uint32_t cacheReadBankResidentCandidateCount = 0;
+        uint32_t cacheWriteBankResidentCandidateCount = 0;
+        uint32_t cacheReusePathEntryCount = 0;
+        uint32_t cacheReuseExtraSampleZeroCount = 0;
+        uint32_t cacheReuseUnavailableCandidateCount = 0;
+        uint32_t cacheReuseSelectedCount = 0;
+        uint32_t cacheReuseSelectMissCount = 0;
+        uint32_t cacheReuseRejectDistanceCount = 0;
+        uint32_t cacheReuseRejectGeometryCount = 0;
+        uint32_t cacheReuseRejectVisibilityCount = 0;
+        uint32_t cacheReuseSelectLoadSuccessCount = 0;
+        uint32_t cacheReuseSelectLoadMissCount = 0;
+        uint32_t cacheReuseSelectRejectDistanceCount = 0;
+        uint32_t cacheReuseSelectRejectGeometryCount = 0;
+        uint32_t cacheReuseAcceptedDistanceNearCount = 0;
+        uint32_t cacheReuseAcceptedDistanceMidCount = 0;
+        uint32_t cacheReuseAcceptedDistanceFarCount = 0;
+        uint32_t cacheReuseAcceptedDistanceVeryFarCount = 0;
+        uint32_t cacheReuseAcceptedLumaDarkCount = 0;
+        uint32_t cacheReuseAcceptedLumaDimCount = 0;
+        uint32_t cacheReuseAcceptedLumaUsefulCount = 0;
+        uint32_t cacheReuseAcceptedLumaBrightCount = 0;
+        uint32_t cacheConnectionReuseAttempts = 0;
+        uint32_t cacheConnectionReuseAccepted = 0;
         uint32_t cacheReuseAttemptCount = 0;
         uint32_t cacheReuseAcceptedCount = 0;
         float cacheReuseAcceptedRatio = 0.0f;
@@ -174,8 +212,10 @@ public:
         bool                         benchmarkActive = false;
         bool                         runBaselineSweep = false;
         bool                         runGiCacheWeightSweep = false;
+        bool                         runSponzaGiPerfSweep = false;
         bool                         clearSunVisibleCacheRequested = false;
         bool                         loadIndirectBounceTestScene = false;
+        bool                         loadSponzaGiValidationPreset = false;
         PathTracerDebugLightPreset   debugLightPreset = PathTracerDebugLightPreset::HardBounce;
         bool                         applyDebugLightPreset = false;
         bool                         freezeCameraInputDuringBenchmark = true;

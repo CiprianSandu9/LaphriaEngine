@@ -24,6 +24,7 @@ struct RayPayload {
 [[vk::binding(4, 0)]] RWTexture2D<float2> motionVectors;      // screen-space UV offset current→previous
 [[vk::binding(9, 0)]] RWByteAddressBuffer ptAnalysisCounters;
 [[vk::binding(10, 0)]] RWByteAddressBuffer ptSunVisibleCandidateCache;
+[[vk::binding(11, 0)]] RWByteAddressBuffer ptSunVisibleConnectionCache;
 
 // Set 1 — global UBO
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
@@ -31,6 +32,7 @@ struct RayPayload {
 [[vk::push_constant]] ScenePushConstants push;
 
 static const int SUN_VISIBLE_CANDIDATE_CACHE_BINDING = 10;
+static const int SUN_VISIBLE_CONNECTION_CACHE_BINDING = 11;
 static const uint SUN_VISIBLE_CANDIDATE_CACHE_CAPACITY = 4096;
 static const uint SUN_VISIBLE_CANDIDATE_CACHE_BANK_COUNT = 2;
 static const uint SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY =
@@ -38,6 +40,13 @@ static const uint SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY =
 static const uint SUN_VISIBLE_CANDIDATE_CACHE_FRAME_SLOT_COUNT = 2;
 static const uint SUN_VISIBLE_CANDIDATE_CACHE_HEADER_SIZE = 16;
 static const uint SUN_VISIBLE_CANDIDATE_RECORD_SIZE = 96;
+static const uint SUN_VISIBLE_CONNECTION_CACHE_CAPACITY = 4096;
+static const uint SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT = 2;
+static const uint SUN_VISIBLE_CONNECTION_CACHE_BANK_CAPACITY =
+    SUN_VISIBLE_CONNECTION_CACHE_CAPACITY / SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT;
+static const uint SUN_VISIBLE_CONNECTION_CACHE_FRAME_SLOT_COUNT = 2;
+static const uint SUN_VISIBLE_CONNECTION_CACHE_HEADER_SIZE = 16;
+static const uint SUN_VISIBLE_CONNECTION_RECORD_SIZE = 128;
 
 static const int DEBUG_AOV_PATH_RAW_FINAL_COLOR   = 6;
 static const int DEBUG_AOV_PATH_DIRECT_LIGHTING   = 7;
@@ -58,20 +67,25 @@ static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_SUN_BOUNCE = 2;
 static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_AVERAGE_REFERENCE = 3;
 static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_RIS = 4;
 static const int FIRST_HIT_PROBE_SAMPLING_CACHED_SECONDARY_REUSE = 5;
-static const int PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = 1 << 2;
+static const uint PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = 1u << 2;
 static const uint SUN_VISIBLE_CACHE_ENABLE_BIT = 1u << 16;
 static const uint ADAPTIVE_CACHE_REFRESH_BIT = 1u << 17;
 static const uint CACHE_WEIGHTING_MODE_SHIFT = 18;
 static const uint CACHE_REFRESH_COUNT_SHIFT = 20;
 static const uint CACHE_SPATIAL_TRIAL_COUNT_SHIFT = 23;
 static const uint TARGETED_DIAGNOSTIC_CACHE_REFRESH_BIT = 1u << 29;
+static const uint CACHE_VISIBILITY_BUDGET_SHIFT = 30;
 static const int CACHE_WEIGHTING_CALIBRATED = 0;
 static const int CACHE_WEIGHTING_MIS_APPROX = 1;
-static const float CACHED_REUSE_MAX_CONNECTION_DISTANCE = 3.5;
+static const int CACHE_PROPOSAL_SPATIAL_LOCAL = 0;
+static const int CACHE_PROPOSAL_GLOBAL_NON_LOCAL = 1;
+static const int CACHE_PROPOSAL_CONNECTION_CACHE = 2;
+static const float CACHED_REUSE_DEFAULT_CONNECTION_DISTANCE = 3.5;
 static const uint CACHED_REUSE_MAX_RECORD_AGE_FRAMES = 180;
 static const int CACHED_REUSE_SPATIAL_CANDIDATE_TRIALS = 32;
 static const int CACHED_REUSE_GLOBAL_FALLBACK_TRIALS = 8;
-static const float CACHED_REUSE_SPATIAL_CELL_SIZE = CACHED_REUSE_MAX_CONNECTION_DISTANCE;
+static const int CACHED_REUSE_MAX_RADIUS_CELLS = 8;
+static const float CACHED_REUSE_SPATIAL_CELL_SIZE = CACHED_REUSE_DEFAULT_CONNECTION_DISTANCE;
 static const uint CACHED_REUSE_SPATIAL_BUCKET_SIZE = 128u;
 static const uint SUN_VISIBLE_CACHE_SLOT_EMPTY = 0u;
 static const uint SUN_VISIBLE_CACHE_SLOT_WRITING = 1u;
@@ -85,6 +99,28 @@ static const uint diagnosticTargetCacheRejectGeometryCountOffset = 108u;
 static const uint diagnosticTargetCacheRejectVisibilityCountOffset = 112u;
 static const uint diagnosticTargetCacheReuseAcceptedCountOffset = 116u;
 static const uint diagnosticTargetCacheReuseContributionSumOffset = 120u;
+static const uint cacheReusePathEntryCountOffset = 124u;
+static const uint cacheReuseExtraSampleZeroCountOffset = 128u;
+static const uint cacheReuseUnavailableCandidateCountOffset = 132u;
+static const uint cacheReuseSelectedCountOffset = 136u;
+static const uint cacheReuseSelectMissCountOffset = 140u;
+static const uint cacheReuseRejectDistanceCountOffset = 144u;
+static const uint cacheReuseRejectGeometryCountOffset = 148u;
+static const uint cacheReuseRejectVisibilityCountOffset = 152u;
+static const uint cacheReuseSelectLoadSuccessCountOffset = 156u;
+static const uint cacheReuseSelectLoadMissCountOffset = 160u;
+static const uint cacheReuseSelectRejectDistanceCountOffset = 164u;
+static const uint cacheReuseSelectRejectGeometryCountOffset = 168u;
+static const uint cacheReuseAcceptedDistanceNearCountOffset = 172u;
+static const uint cacheReuseAcceptedDistanceMidCountOffset = 176u;
+static const uint cacheReuseAcceptedDistanceFarCountOffset = 180u;
+static const uint cacheReuseAcceptedDistanceVeryFarCountOffset = 184u;
+static const uint cacheReuseAcceptedLumaDarkCountOffset = 188u;
+static const uint cacheReuseAcceptedLumaDimCountOffset = 192u;
+static const uint cacheReuseAcceptedLumaUsefulCountOffset = 196u;
+static const uint cacheReuseAcceptedLumaBrightCountOffset = 200u;
+static const uint cacheConnectionReuseAttemptsOffset = 204u;
+static const uint cacheConnectionReuseAcceptedOffset = 208u;
 
 static const int CACHED_REUSE_REJECT_NONE = 0;
 static const int CACHED_REUSE_REJECT_DISTANCE = 1;
@@ -278,6 +314,41 @@ uint cacheRecordSourcePdfBits(uint offset) { return ptSunVisibleCandidateCache.L
 float cacheRecordSourcePdf(uint offset) { return asfloat(ptSunVisibleCandidateCache.Load(offset + 80)); }
 uint cacheRecordSlotState(uint offset) { return ptSunVisibleCandidateCache.Load(offset + 84); }
 
+uint sunVisibleConnectionRecordOffset(uint slot)
+{
+    return SUN_VISIBLE_CONNECTION_CACHE_HEADER_SIZE +
+           slot * SUN_VISIBLE_CONNECTION_RECORD_SIZE;
+}
+
+uint sunVisibleConnectionBankInsertCountOffset(uint bank)
+{
+    return min(bank, SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT - 1u) * 4u;
+}
+
+uint connectionCacheWriteBank(uint currentFrame)
+{
+    return (currentFrame / SUN_VISIBLE_CONNECTION_CACHE_FRAME_SLOT_COUNT) %
+           SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT;
+}
+
+uint connectionCacheReadBank(uint currentFrame)
+{
+    uint frameSlotGeneration = currentFrame / SUN_VISIBLE_CONNECTION_CACHE_FRAME_SLOT_COUNT;
+    return (frameSlotGeneration + SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT - 1u) %
+           SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT;
+}
+
+uint sunVisibleConnectionBankSlot(uint bank, uint bankSlot)
+{
+    return min(bank, SUN_VISIBLE_CONNECTION_CACHE_BANK_COUNT - 1u) *
+               SUN_VISIBLE_CONNECTION_CACHE_BANK_CAPACITY +
+           (bankSlot % SUN_VISIBLE_CONNECTION_CACHE_BANK_CAPACITY);
+}
+
+uint connectionRecordFrameId(uint offset) { return ptSunVisibleConnectionCache.Load(offset + 104); }
+uint connectionRecordGeneration(uint offset) { return ptSunVisibleConnectionCache.Load(offset + 108); }
+uint connectionRecordSlotState(uint offset) { return ptSunVisibleConnectionCache.Load(offset + 112); }
+
 bool isFinitePositive(float value)
 {
     return value > 0.0 && abs(value) < 3.402823e+38;
@@ -297,6 +368,20 @@ float3 loadFloat3FromCache(uint offset)
                   asfloat(ptSunVisibleCandidateCache.Load(offset + 8)));
 }
 
+void storeFloat3ToConnectionCache(uint offset, float3 value)
+{
+    ptSunVisibleConnectionCache.Store(offset + 0, asuint(value.x));
+    ptSunVisibleConnectionCache.Store(offset + 4, asuint(value.y));
+    ptSunVisibleConnectionCache.Store(offset + 8, asuint(value.z));
+}
+
+float3 loadFloat3FromConnectionCache(uint offset)
+{
+    return float3(asfloat(ptSunVisibleConnectionCache.Load(offset + 0)),
+                  asfloat(ptSunVisibleConnectionCache.Load(offset + 4)),
+                  asfloat(ptSunVisibleConnectionCache.Load(offset + 8)));
+}
+
 void storeSunVisibleCandidateMaterial(uint offset, RayPayload payload)
 {
     storeFloat3ToCache(offset + 32, payload.albedo);
@@ -310,6 +395,13 @@ void invalidateSunVisibleCacheSlotForWrite(uint offset, uint currentFrame)
     ptSunVisibleCandidateCache.Store(offset + 84, SUN_VISIBLE_CACHE_SLOT_WRITING);
     ptSunVisibleCandidateCache.Store(offset + 72, currentFrame);
     ptSunVisibleCandidateCache.Store(offset + 76, 0u);
+}
+
+void invalidateSunVisibleConnectionSlotForWrite(uint offset, uint currentFrame)
+{
+    ptSunVisibleConnectionCache.Store(offset + 112, SUN_VISIBLE_CACHE_SLOT_WRITING);
+    ptSunVisibleConnectionCache.Store(offset + 104, currentFrame);
+    ptSunVisibleConnectionCache.Store(offset + 108, 0u);
 }
 
 RayPayload makeCachedSunVisiblePayload(CachedSunVisibleCandidate candidate)
@@ -390,6 +482,54 @@ bool isSaneCachedSunVisibleCandidate(CachedSunVisibleCandidate candidate)
     return positionOk && normalOk && albedoOk && f0Ok && materialOk;
 }
 
+bool recordSunVisibleConnectionCandidate(float3 hitPos,
+                                         float3 N,
+                                         CachedSunVisibleCandidate candidate,
+                                         float sourcePdf,
+                                         uint currentCacheGeneration)
+{
+    if (!isFinitePositive(sourcePdf) || !isSaneCachedSunVisibleCandidate(candidate)) {
+        return false;
+    }
+
+    uint insertIndex = 0;
+    uint writeBank = connectionCacheWriteBank(ubo.frameCount);
+    uint insertCountOffset = sunVisibleConnectionBankInsertCountOffset(writeBank);
+    ptSunVisibleConnectionCache.InterlockedAdd(insertCountOffset, 1u, insertIndex);
+    uint slot = sunVisibleConnectionBankSlot(writeBank, insertIndex);
+    uint offset = sunVisibleConnectionRecordOffset(slot);
+
+    uint previousState = 0u;
+    ptSunVisibleConnectionCache.InterlockedCompareExchange(offset + 112,
+                                                           SUN_VISIBLE_CACHE_SLOT_READY,
+                                                           SUN_VISIBLE_CACHE_SLOT_WRITING,
+                                                           previousState);
+    if (previousState != SUN_VISIBLE_CACHE_SLOT_READY) {
+        ptSunVisibleConnectionCache.InterlockedCompareExchange(offset + 112,
+                                                               SUN_VISIBLE_CACHE_SLOT_EMPTY,
+                                                               SUN_VISIBLE_CACHE_SLOT_WRITING,
+                                                               previousState);
+        if (previousState != SUN_VISIBLE_CACHE_SLOT_EMPTY) {
+            return false;
+        }
+    }
+
+    invalidateSunVisibleConnectionSlotForWrite(offset, ubo.frameCount);
+    storeFloat3ToConnectionCache(offset + 0, hitPos);
+    storeFloat3ToConnectionCache(offset + 16, normalize(N));
+    storeFloat3ToConnectionCache(offset + 32, candidate.position);
+    storeFloat3ToConnectionCache(offset + 48, normalize(candidate.normal));
+    storeFloat3ToConnectionCache(offset + 64, candidate.albedo);
+    storeFloat3ToConnectionCache(offset + 80, candidate.F0);
+    ptSunVisibleConnectionCache.Store(offset + 92, asuint(candidate.roughness));
+    ptSunVisibleConnectionCache.Store(offset + 96, asuint(candidate.metallic));
+    ptSunVisibleConnectionCache.Store(offset + 100, asuint(max(sourcePdf, 0.000001)));
+    ptSunVisibleConnectionCache.Store(offset + 108, currentCacheGeneration);
+    ptSunVisibleConnectionCache.Store(offset + 104, ubo.frameCount);
+    ptSunVisibleConnectionCache.Store(offset + 112, SUN_VISIBLE_CACHE_SLOT_READY);
+    return true;
+}
+
 bool loadSunVisibleCandidate(uint slot,
                              uint currentFrame,
                              uint currentCacheGeneration,
@@ -442,6 +582,69 @@ bool loadSunVisibleCandidate(uint slot,
     }
 
     return luma > 0.000001 && frameId < currentFrame && isSaneCachedSunVisibleCandidate(candidate);
+}
+
+bool loadSunVisibleConnection(uint slot,
+                              uint currentFrame,
+                              uint currentCacheGeneration,
+                              uint maxRecordAgeFrames,
+                              out float3 primaryPosition,
+                              out float3 primaryNormal,
+                              out CachedSunVisibleCandidate candidate,
+                              out float sourcePdf)
+{
+    uint offset = sunVisibleConnectionRecordOffset(slot);
+    primaryPosition = float3(0.0, 0.0, 0.0);
+    primaryNormal = float3(0.0, 1.0, 0.0);
+    candidate.position = float3(0.0, 0.0, 0.0);
+    candidate.normal = float3(0.0, 1.0, 0.0);
+    candidate.albedo = float3(0.0, 0.0, 0.0);
+    candidate.F0 = float3(0.0, 0.0, 0.0);
+    candidate.roughness = 1.0;
+    candidate.metallic = 0.0;
+    sourcePdf = 0.0;
+
+    uint initialState = connectionRecordSlotState(offset);
+    if (initialState != SUN_VISIBLE_CACHE_SLOT_READY) {
+        return false;
+    }
+
+    uint frameId = connectionRecordFrameId(offset);
+    uint generation = connectionRecordGeneration(offset);
+    uint sourcePdfBits = ptSunVisibleConnectionCache.Load(offset + 100);
+    sourcePdf = asfloat(sourcePdfBits);
+    bool ageOk =
+        currentFrame >= SUN_VISIBLE_CONNECTION_CACHE_FRAME_SLOT_COUNT &&
+        frameId + SUN_VISIBLE_CONNECTION_CACHE_FRAME_SLOT_COUNT == currentFrame;
+    bool generationOk = generation == currentCacheGeneration;
+    if (!ageOk || !generationOk || !isFinitePositive(sourcePdf)) {
+        return false;
+    }
+
+    primaryPosition = loadFloat3FromConnectionCache(offset + 0);
+    primaryNormal = loadFloat3FromConnectionCache(offset + 16);
+    candidate.position = loadFloat3FromConnectionCache(offset + 32);
+    candidate.normal = loadFloat3FromConnectionCache(offset + 48);
+    candidate.albedo = loadFloat3FromConnectionCache(offset + 64);
+    candidate.F0 = loadFloat3FromConnectionCache(offset + 80);
+    candidate.roughness = asfloat(ptSunVisibleConnectionCache.Load(offset + 92));
+    candidate.metallic = asfloat(ptSunVisibleConnectionCache.Load(offset + 96));
+
+    uint finalState = connectionRecordSlotState(offset);
+    uint finalFrameId = connectionRecordFrameId(offset);
+    uint finalGeneration = connectionRecordGeneration(offset);
+    uint finalSourcePdfBits = ptSunVisibleConnectionCache.Load(offset + 100);
+    if (finalState != initialState ||
+        finalFrameId != frameId ||
+        finalGeneration != generation ||
+        finalSourcePdfBits != sourcePdfBits) {
+        return false;
+    }
+
+    float primaryNormalLenSq = dot(primaryNormal, primaryNormal);
+    bool primaryOk = all(abs(primaryPosition) < float3(100000.0, 100000.0, 100000.0)) &&
+                     primaryNormalLenSq > 0.25 && primaryNormalLenSq < 1.25;
+    return primaryOk && isSaneCachedSunVisibleCandidate(candidate);
 }
 
 float3 firstHitSunBounceGuideAxis(float3 N)
@@ -912,6 +1115,7 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateRis(float3 hitPos, float3 N, 
 float3 evaluateCachedSunVisibleContribution(float3 hitPos, float3 N, float3 V,
                                              RayPayload primaryPayload,
                                              CachedSunVisibleCandidate candidate,
+                                             float cacheConnectionRadius,
                                              out bool accepted,
                                              out int CachedReuseRejectReason)
 {
@@ -920,8 +1124,7 @@ float3 evaluateCachedSunVisibleContribution(float3 hitPos, float3 N, float3 V,
 
     float3 toCached = candidate.position - hitPos;
     float rawDistanceSq = dot(toCached, toCached);
-    float maxConnectionDistanceSq =
-        CACHED_REUSE_MAX_CONNECTION_DISTANCE * CACHED_REUSE_MAX_CONNECTION_DISTANCE;
+    float maxConnectionDistanceSq = cacheConnectionRadius * cacheConnectionRadius;
     if (!(rawDistanceSq > 0.000001) || rawDistanceSq > maxConnectionDistanceSq) {
         CachedReuseRejectReason = CACHED_REUSE_REJECT_DISTANCE;
         return float3(0.0, 0.0, 0.0);
@@ -1000,12 +1203,14 @@ float computeConservativeCachedReuseMisWeight(float cacheReuseWeight,
     return min(max(rawMisWeight, 0.0), ceiling);
 }
 
-bool candidateWithinConnectionRadius(float3 hitPos, CachedSunVisibleCandidate candidate, out float distanceSq)
+bool candidateWithinConnectionRadius(float3 hitPos,
+                                     CachedSunVisibleCandidate candidate,
+                                     float cacheConnectionRadius,
+                                     out float distanceSq)
 {
     float3 delta = candidate.position - hitPos;
     distanceSq = dot(delta, delta);
-    float maxConnectionDistanceSq =
-        CACHED_REUSE_MAX_CONNECTION_DISTANCE * CACHED_REUSE_MAX_CONNECTION_DISTANCE;
+    float maxConnectionDistanceSq = cacheConnectionRadius * cacheConnectionRadius;
     return distanceSq > 0.000001 && distanceSq <= maxConnectionDistanceSq;
 }
 
@@ -1027,16 +1232,19 @@ void considerCachedSunVisibleCandidate(float3 hitPos,
                                        float3 N,
                                        CachedSunVisibleCandidate candidate,
                                        float sourcePdf,
+                                       float cacheConnectionRadius,
                                        inout bool foundCandidate,
                                        inout float bestDistanceSq,
                                        inout CachedSunVisibleCandidate selectedCandidate,
                                        inout float selectedSourcePdf)
 {
     float distanceSq = 0.0;
-    if (!candidateWithinConnectionRadius(hitPos, candidate, distanceSq)) {
+    if (!candidateWithinConnectionRadius(hitPos, candidate, cacheConnectionRadius, distanceSq)) {
+        ptAnalysisCounters.InterlockedAdd(cacheReuseSelectRejectDistanceCountOffset, 1u);
         return;
     }
     if (!candidateGeometryCompatible(hitPos, N, candidate)) {
+        ptAnalysisCounters.InterlockedAdd(cacheReuseSelectRejectGeometryCountOffset, 1u);
         return;
     }
 
@@ -1053,6 +1261,7 @@ bool selectSpatialCachedSunVisibleCandidate(float3 hitPos,
                                             uint available,
                                             uint readBank,
                                             int spatialCandidateTrials,
+                                            float cacheConnectionRadius,
                                             uint cacheGeneration,
                                             uint cacheMaxRecordAgeFrames,
                                             out CachedSunVisibleCandidate selectedCandidate,
@@ -1063,13 +1272,18 @@ bool selectSpatialCachedSunVisibleCandidate(float3 hitPos,
     float bestDistanceSq = 3.402823e+38;
     selectedSourcePdf = 0.0;
     int3 centerCell = spatialCacheCell(hitPos);
+    int cacheRadiusCellCount =
+        clamp(int(ceil(cacheConnectionRadius / CACHED_REUSE_SPATIAL_CELL_SIZE)), 1, CACHED_REUSE_MAX_RADIUS_CELLS);
+    int cellDiameter = cacheRadiusCellCount * 2 + 1;
+    int cellSearchCount = cellDiameter * cellDiameter * cellDiameter;
 
     int trialCount = min(clamp(spatialCandidateTrials, 1, CACHED_REUSE_SPATIAL_CANDIDATE_TRIALS), int(available));
     for (int trial = 0; trial < trialCount; ++trial) {
-        uint neighborIndex = uint(trial) % 27u;
-        int3 neighborOffset = int3(int(neighborIndex % 3u) - 1,
-                                   int((neighborIndex / 3u) % 3u) - 1,
-                                   int(neighborIndex / 9u) - 1);
+        int neighborIndex =
+            (int(randomFloat(rngState) * float(cellSearchCount)) + trial) % cellSearchCount;
+        int3 neighborOffset = int3((neighborIndex % cellDiameter) - cacheRadiusCellCount,
+                                   ((neighborIndex / cellDiameter) % cellDiameter) - cacheRadiusCellCount,
+                                   (neighborIndex / (cellDiameter * cellDiameter)) - cacheRadiusCellCount);
         int3 candidateCell = centerCell + neighborOffset;
         uint bucketSlot = uint(randomFloat(rngState) * float(CACHED_REUSE_SPATIAL_BUCKET_SIZE));
         bucketSlot = (bucketSlot + uint(trial)) % CACHED_REUSE_SPATIAL_BUCKET_SIZE;
@@ -1077,25 +1291,131 @@ bool selectSpatialCachedSunVisibleCandidate(float3 hitPos,
         CachedSunVisibleCandidate candidate;
         float sourcePdf = 0.0;
         if (!loadSunVisibleCandidate(slot, ubo.frameCount, cacheGeneration, cacheMaxRecordAgeFrames, candidate, sourcePdf)) {
+            ptAnalysisCounters.InterlockedAdd(cacheReuseSelectLoadMissCountOffset, 1u);
             continue;
         }
+        ptAnalysisCounters.InterlockedAdd(cacheReuseSelectLoadSuccessCountOffset, 1u);
 
-        considerCachedSunVisibleCandidate(hitPos, N, candidate, sourcePdf, foundCandidate,
+        considerCachedSunVisibleCandidate(hitPos, N, candidate, sourcePdf, cacheConnectionRadius, foundCandidate,
                                           bestDistanceSq, selectedCandidate, selectedSourcePdf);
     }
 
-    int fallbackTrialCount = min(CACHED_REUSE_GLOBAL_FALLBACK_TRIALS, int(available));
+    int fallbackTrialCount = CACHED_REUSE_GLOBAL_FALLBACK_TRIALS;
     for (int trial = 0; trial < fallbackTrialCount; ++trial) {
-        uint bankSlot = min(uint(randomFloat(rngState) * float(available)), available - 1);
+        uint bankSlot =
+            uint(randomFloat(rngState) * float(SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY)) %
+            SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY;
         uint slot = sunVisibleCandidateBankSlot(readBank, bankSlot);
         CachedSunVisibleCandidate candidate;
         float sourcePdf = 0.0;
         if (!loadSunVisibleCandidate(slot, ubo.frameCount, cacheGeneration, cacheMaxRecordAgeFrames, candidate, sourcePdf)) {
+            ptAnalysisCounters.InterlockedAdd(cacheReuseSelectLoadMissCountOffset, 1u);
+            continue;
+        }
+        ptAnalysisCounters.InterlockedAdd(cacheReuseSelectLoadSuccessCountOffset, 1u);
+
+        considerCachedSunVisibleCandidate(hitPos, N, candidate, sourcePdf, cacheConnectionRadius, foundCandidate,
+                                          bestDistanceSq, selectedCandidate, selectedSourcePdf);
+    }
+
+    return foundCandidate;
+}
+
+bool selectGlobalCachedSunVisibleCandidate(float3 hitPos,
+                                           float3 N,
+                                           uint available,
+                                           uint readBank,
+                                           int candidateTrials,
+                                           float cacheConnectionRadius,
+                                           uint cacheGeneration,
+                                           uint cacheMaxRecordAgeFrames,
+                                           out CachedSunVisibleCandidate selectedCandidate,
+                                           out float selectedSourcePdf,
+                                           inout uint rngState)
+{
+    bool foundCandidate = false;
+    float bestDistanceSq = 1.0e30;
+    selectedSourcePdf = 0.0;
+
+    int trialCount = clamp(candidateTrials, 1, CACHED_REUSE_SPATIAL_CANDIDATE_TRIALS);
+    for (int trial = 0; trial < trialCount; ++trial) {
+        uint bankSlot =
+            uint(randomFloat(rngState) * float(SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY)) %
+            SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY;
+        uint slot = sunVisibleCandidateBankSlot(readBank, bankSlot);
+
+        CachedSunVisibleCandidate candidate;
+        float sourcePdf = 0.0;
+        if (!loadSunVisibleCandidate(slot, ubo.frameCount, cacheGeneration, cacheMaxRecordAgeFrames, candidate, sourcePdf)) {
+            ptAnalysisCounters.InterlockedAdd(cacheReuseSelectLoadMissCountOffset, 1u);
+            continue;
+        }
+        ptAnalysisCounters.InterlockedAdd(cacheReuseSelectLoadSuccessCountOffset, 1u);
+
+        considerCachedSunVisibleCandidate(hitPos, N, candidate, sourcePdf, cacheConnectionRadius,
+                                          foundCandidate, bestDistanceSq, selectedCandidate, selectedSourcePdf);
+    }
+
+    return foundCandidate;
+}
+
+bool selectCachedSunVisibleConnection(float3 hitPos,
+                                      float3 N,
+                                      float cacheConnectionRadius,
+                                      uint cacheGeneration,
+                                      uint cacheMaxRecordAgeFrames,
+                                      out CachedSunVisibleCandidate selectedCandidate,
+                                      out float selectedSourcePdf,
+                                      inout uint rngState)
+{
+    selectedCandidate.position = float3(0.0, 0.0, 0.0);
+    selectedCandidate.normal = float3(0.0, 1.0, 0.0);
+    selectedCandidate.albedo = float3(0.0, 0.0, 0.0);
+    selectedCandidate.F0 = float3(0.0, 0.0, 0.0);
+    selectedCandidate.roughness = 1.0;
+    selectedCandidate.metallic = 0.0;
+    selectedSourcePdf = 0.0;
+
+    uint readBank = connectionCacheReadBank(ubo.frameCount);
+    uint readInsertCount = ptSunVisibleConnectionCache.Load(sunVisibleConnectionBankInsertCountOffset(readBank));
+    uint available = min(readInsertCount, SUN_VISIBLE_CONNECTION_CACHE_BANK_CAPACITY);
+    if (available == 0) {
+        return false;
+    }
+
+    bool foundCandidate = false;
+    float bestPrimaryDistanceSq = 1.0e30;
+    float primaryReuseRadius = min(cacheConnectionRadius, CACHED_REUSE_DEFAULT_CONNECTION_DISTANCE);
+    int trialCount = min(CACHED_REUSE_SPATIAL_CANDIDATE_TRIALS, int(available));
+    for (int trial = 0; trial < trialCount; ++trial) {
+        uint bankSlot =
+            uint(randomFloat(rngState) * float(max(available, 1u))) % max(available, 1u);
+        bankSlot = (bankSlot + uint(trial)) % max(available, 1u);
+        uint slot = sunVisibleConnectionBankSlot(readBank, bankSlot);
+
+        float3 primaryPosition;
+        float3 primaryNormal;
+        CachedSunVisibleCandidate candidate;
+        float sourcePdf = 0.0;
+        if (!loadSunVisibleConnection(slot, ubo.frameCount, cacheGeneration, cacheMaxRecordAgeFrames,
+                                      primaryPosition, primaryNormal, candidate, sourcePdf)) {
             continue;
         }
 
-        considerCachedSunVisibleCandidate(hitPos, N, candidate, sourcePdf, foundCandidate,
-                                          bestDistanceSq, selectedCandidate, selectedSourcePdf);
+        float3 primaryDelta = primaryPosition - hitPos;
+        float primaryDistanceSq = dot(primaryDelta, primaryDelta);
+        if (primaryDistanceSq > primaryReuseRadius * primaryReuseRadius) {
+            continue;
+        }
+        if (dot(normalize(primaryNormal), normalize(N)) <= 0.5) {
+            continue;
+        }
+        if (!foundCandidate || primaryDistanceSq < bestPrimaryDistanceSq) {
+            foundCandidate = true;
+            bestPrimaryDistanceSq = primaryDistanceSq;
+            selectedCandidate = candidate;
+            selectedSourcePdf = sourcePdf;
+        }
     }
 
     return foundCandidate;
@@ -1107,7 +1427,10 @@ FirstHitDiffuseBounceResult sampleCachedSunVisibleCandidate(float3 hitPos, float
                                                             float cacheReuseWeight,
                                                             float cacheMisStrength,
                                                             int cacheWeightingMode,
+                                                            int cacheProposalMode,
                                                             int cacheSpatialCandidateTrials,
+                                                            int cacheVisibilityValidationBudget,
+                                                            float cacheConnectionRadius,
                                                             uint cacheGeneration,
                                                             uint cacheMaxRecordAgeFrames,
                                                             bool currentHitIsDiagnosticTarget,
@@ -1116,20 +1439,27 @@ FirstHitDiffuseBounceResult sampleCachedSunVisibleCandidate(float3 hitPos, float
     FirstHitDiffuseBounceResult result;
     result.totalContribution = float3(0.0, 0.0, 0.0);
     result.secondaryDirectSunContribution = float3(0.0, 0.0, 0.0);
+    ptAnalysisCounters.InterlockedAdd(cacheReusePathEntryCountOffset, 1u);
 
     int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
     if (extraSampleCount <= 0) {
+        ptAnalysisCounters.InterlockedAdd(cacheReuseExtraSampleZeroCountOffset, 1u);
         return result;
     }
 
     uint readBank = cacheReadBank(ubo.frameCount);
     uint readInsertCount = ptSunVisibleCandidateCache.Load(sunVisibleCandidateBankInsertCountOffset(readBank));
     uint available = min(readInsertCount, SUN_VISIBLE_CANDIDATE_CACHE_BANK_CAPACITY);
-    if (available == 0) {
+    if (cacheProposalMode != CACHE_PROPOSAL_CONNECTION_CACHE && available == 0) {
+        ptAnalysisCounters.InterlockedAdd(cacheReuseUnavailableCandidateCountOffset, 1u);
         return result;
     }
 
+    int visibilityValidationCount = 0;
     for (int probe = 0; probe < extraSampleCount; ++probe) {
+        if (visibilityValidationCount >= cacheVisibilityValidationBudget) {
+            break;
+        }
         ptAnalysisCounters.InterlockedAdd(56, 1u);
         if (currentHitIsDiagnosticTarget) {
             ptAnalysisCounters.InterlockedAdd(diagnosticTargetCacheReuseAttemptCountOffset, 1u);
@@ -1137,22 +1467,64 @@ FirstHitDiffuseBounceResult sampleCachedSunVisibleCandidate(float3 hitPos, float
 
         CachedSunVisibleCandidate candidate;
         float sourcePdf = 0.0;
-        if (!selectSpatialCachedSunVisibleCandidate(hitPos, N, available, readBank,
-                                                    cacheSpatialCandidateTrials,
-                                                    cacheGeneration, cacheMaxRecordAgeFrames,
-                                                    candidate, sourcePdf, rngState)) {
+        bool selectedFromCache = false;
+        bool selectedConnectionProposal = false;
+        if (cacheProposalMode == CACHE_PROPOSAL_CONNECTION_CACHE) {
+            ptAnalysisCounters.InterlockedAdd(cacheConnectionReuseAttemptsOffset, 1u);
+            selectedConnectionProposal =
+                selectCachedSunVisibleConnection(hitPos, N, cacheConnectionRadius,
+                                                  cacheGeneration, cacheMaxRecordAgeFrames,
+                                                  candidate, sourcePdf, rngState);
+            selectedFromCache = selectedConnectionProposal;
+            if (!selectedFromCache && available > 0) {
+                selectedFromCache =
+                    selectGlobalCachedSunVisibleCandidate(hitPos, N, available, readBank,
+                                                          cacheSpatialCandidateTrials,
+                                                          cacheConnectionRadius,
+                                                          cacheGeneration, cacheMaxRecordAgeFrames,
+                                                          candidate, sourcePdf, rngState);
+            }
+        } else if (cacheProposalMode == CACHE_PROPOSAL_GLOBAL_NON_LOCAL) {
+            selectedFromCache =
+                selectGlobalCachedSunVisibleCandidate(hitPos, N, available, readBank,
+                                                      cacheSpatialCandidateTrials,
+                                                      cacheConnectionRadius,
+                                                      cacheGeneration, cacheMaxRecordAgeFrames,
+                                                      candidate, sourcePdf, rngState);
+        } else {
+            selectedFromCache =
+                selectSpatialCachedSunVisibleCandidate(hitPos, N, available, readBank,
+                                                       cacheSpatialCandidateTrials,
+                                                       cacheConnectionRadius,
+                                                       cacheGeneration, cacheMaxRecordAgeFrames,
+                                                       candidate, sourcePdf, rngState);
+        }
+        if (!selectedFromCache) {
+            ptAnalysisCounters.InterlockedAdd(cacheReuseSelectMissCountOffset, 1u);
             recordFirstHitProbeStats(false, false, float3(0.0, 0.0, 0.0));
             continue;
         }
+        ptAnalysisCounters.InterlockedAdd(cacheReuseSelectedCountOffset, 1u);
         if (currentHitIsDiagnosticTarget) {
             ptAnalysisCounters.InterlockedAdd(diagnosticTargetCacheSelectedCountOffset, 1u);
         }
+        if (visibilityValidationCount >= cacheVisibilityValidationBudget) {
+            break;
+        }
+        ++visibilityValidationCount;
 
         bool accepted = false;
         int rejectReason = CACHED_REUSE_REJECT_NONE;
         float3 reusedContribution =
-            evaluateCachedSunVisibleContribution(hitPos, N, V, payload, candidate, accepted, rejectReason);
+            evaluateCachedSunVisibleContribution(hitPos, N, V, payload, candidate, cacheConnectionRadius, accepted, rejectReason);
         if (!accepted) {
+            if (rejectReason == CACHED_REUSE_REJECT_DISTANCE) {
+                ptAnalysisCounters.InterlockedAdd(cacheReuseRejectDistanceCountOffset, 1u);
+            } else if (rejectReason == CACHED_REUSE_REJECT_GEOMETRY) {
+                ptAnalysisCounters.InterlockedAdd(cacheReuseRejectGeometryCountOffset, 1u);
+            } else if (rejectReason == CACHED_REUSE_REJECT_VISIBILITY) {
+                ptAnalysisCounters.InterlockedAdd(cacheReuseRejectVisibilityCountOffset, 1u);
+            }
             if (currentHitIsDiagnosticTarget) {
                 if (rejectReason == CACHED_REUSE_REJECT_DISTANCE) {
                     ptAnalysisCounters.InterlockedAdd(diagnosticTargetCacheRejectDistanceCountOffset, 1u);
@@ -1164,6 +1536,10 @@ FirstHitDiffuseBounceResult sampleCachedSunVisibleCandidate(float3 hitPos, float
             }
             recordFirstHitProbeStats(true, false, float3(0.0, 0.0, 0.0));
             continue;
+        }
+        recordSunVisibleConnectionCandidate(hitPos, N, candidate, sourcePdf, cacheGeneration);
+        if (selectedConnectionProposal) {
+            ptAnalysisCounters.InterlockedAdd(cacheConnectionReuseAcceptedOffset, 1u);
         }
 
         float3 cachedDirection = normalize(candidate.position - hitPos);
@@ -1183,14 +1559,39 @@ FirstHitDiffuseBounceResult sampleCachedSunVisibleCandidate(float3 hitPos, float
         }
         result.totalContribution += reusedContribution;
         result.secondaryDirectSunContribution += reusedContribution;
-        bool sunVisible = pathTracerLuminance(reusedContribution) > 0.000001;
+        float acceptedDistance = length(candidate.position - hitPos);
+        if (acceptedDistance <= 3.5) {
+            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedDistanceNearCountOffset, 1u);
+        } else if (acceptedDistance <= 7.0) {
+            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedDistanceMidCountOffset, 1u);
+        } else if (acceptedDistance <= 14.0) {
+            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedDistanceFarCountOffset, 1u);
+        } else {
+            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedDistanceVeryFarCountOffset, 1u);
+        }
+
+        float acceptedLuma = pathTracerLuminance(reusedContribution);
+        if (acceptedLuma <= 0.0001) {
+            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedLumaDarkCountOffset, 1u);
+        } else if (acceptedLuma <= 0.001) {
+            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedLumaDimCountOffset, 1u);
+        } else if (acceptedLuma <= 0.01) {
+            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedLumaUsefulCountOffset, 1u);
+        } else {
+            ptAnalysisCounters.InterlockedAdd(cacheReuseAcceptedLumaBrightCountOffset, 1u);
+        }
+
+        bool sunVisible = acceptedLuma > 0.000001;
         recordFirstHitProbeStats(true, sunVisible, reusedContribution);
         ptAnalysisCounters.InterlockedAdd(60, 1u);
-        uint scaledLuma = uint(clamp(pathTracerLuminance(reusedContribution), 0.0, 8.0) * 64.0 + 0.5);
+        uint scaledLuma = uint(clamp(acceptedLuma, 0.0, 8.0) * 64.0 + 0.5);
         ptAnalysisCounters.InterlockedAdd(64, scaledLuma);
         if (currentHitIsDiagnosticTarget) {
             ptAnalysisCounters.InterlockedAdd(diagnosticTargetCacheReuseAcceptedCountOffset, 1u);
             ptAnalysisCounters.InterlockedAdd(diagnosticTargetCacheReuseContributionSumOffset, scaledLuma);
+        }
+        if (visibilityValidationCount >= cacheVisibilityValidationBudget) {
+            break;
         }
     }
 
@@ -1269,7 +1670,7 @@ void main() {
     uint   primaryInstanceID = 0;
     bool   primarySurfaceHit = false;
     float  pendingSkyMissMisWeight = 1.0;
-    uint   packedPathTracerFlags = uint(push.padding3);
+    uint   packedPathTracerFlags = push.padding3;
     bool   environmentNeeEnabled = (packedPathTracerFlags & 0x1) != 0;
     bool   applyFirstHitProbesToFinal = (push.padding3 & PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT) != 0;
     bool   sunVisibleCandidateCacheEnabled = (packedPathTracerFlags & SUN_VISIBLE_CACHE_ENABLE_BIT) != 0;
@@ -1286,7 +1687,16 @@ void main() {
     int    cacheRefreshCandidateCount = int((packedPathTracerFlags >> CACHE_REFRESH_COUNT_SHIFT) & 0x7);
     int    cacheSpatialCandidateTrials = int((packedPathTracerFlags >> CACHE_SPATIAL_TRIAL_COUNT_SHIFT) & 0x3F);
     cacheSpatialCandidateTrials = clamp(cacheSpatialCandidateTrials, 1, CACHED_REUSE_SPATIAL_CANDIDATE_TRIALS);
-    uint   cacheMaxRecordAgeFrames = uint(max(push.skyData.y, 1.0));
+    int    cacheVisibilityBudgetCode = int((packedPathTracerFlags >> CACHE_VISIBILITY_BUDGET_SHIFT) & 0x3);
+    int    cacheVisibilityValidationBudget =
+        (cacheVisibilityBudgetCode == 0) ? 1 :
+        ((cacheVisibilityBudgetCode == 1) ? 2 :
+        ((cacheVisibilityBudgetCode == 2) ? 4 : 7));
+    float  cacheConnectionRadius = clamp(push.skyData.y, 0.5, 64.0);
+    uint   packedPathTracerMaterialIndex = uint(push.materialIndex);
+    int    cacheProposalMode = int(packedPathTracerMaterialIndex & 0xFFu);
+    cacheProposalMode = clamp(cacheProposalMode, CACHE_PROPOSAL_SPATIAL_LOCAL, CACHE_PROPOSAL_CONNECTION_CACHE);
+    uint   cacheMaxRecordAgeFrames = max(packedPathTracerMaterialIndex >> 8, 1u);
     uint   cacheGeneration = uint(max(push.skyData.z, 1.0));
 
     RayDesc ray;
@@ -1366,7 +1776,10 @@ void main() {
                                                                  firstHitDiffuseSampleCount, cacheReuseWeight,
                                                                  cacheMisStrength,
                                                                  cacheWeightingMode,
+                                                                 cacheProposalMode,
                                                                  cacheSpatialCandidateTrials,
+                                                                 cacheVisibilityValidationBudget,
+                                                                 cacheConnectionRadius,
                                                                  cacheGeneration, cacheMaxRecordAgeFrames,
                                                                  currentHitIsDiagnosticTarget, rngState);
             } else if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CANDIDATE_SUN_BOUNCE) {

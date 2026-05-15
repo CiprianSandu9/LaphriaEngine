@@ -178,6 +178,28 @@ struct PathTracerAnalysisCounters
 	uint32_t diagnosticTargetCacheRejectVisibilityCount = 0;
 	uint32_t diagnosticTargetCacheReuseAcceptedCount = 0;
 	uint32_t diagnosticTargetCacheReuseContributionSum = 0;
+	uint32_t cacheReusePathEntryCount = 0;
+	uint32_t cacheReuseExtraSampleZeroCount = 0;
+	uint32_t cacheReuseUnavailableCandidateCount = 0;
+	uint32_t cacheReuseSelectedCount = 0;
+	uint32_t cacheReuseSelectMissCount = 0;
+	uint32_t cacheReuseRejectDistanceCount = 0;
+	uint32_t cacheReuseRejectGeometryCount = 0;
+	uint32_t cacheReuseRejectVisibilityCount = 0;
+	uint32_t cacheReuseSelectLoadSuccessCount = 0;
+	uint32_t cacheReuseSelectLoadMissCount = 0;
+	uint32_t cacheReuseSelectRejectDistanceCount = 0;
+	uint32_t cacheReuseSelectRejectGeometryCount = 0;
+	uint32_t cacheReuseAcceptedDistanceNearCount = 0;
+	uint32_t cacheReuseAcceptedDistanceMidCount = 0;
+	uint32_t cacheReuseAcceptedDistanceFarCount = 0;
+	uint32_t cacheReuseAcceptedDistanceVeryFarCount = 0;
+	uint32_t cacheReuseAcceptedLumaDarkCount = 0;
+	uint32_t cacheReuseAcceptedLumaDimCount = 0;
+	uint32_t cacheReuseAcceptedLumaUsefulCount = 0;
+	uint32_t cacheReuseAcceptedLumaBrightCount = 0;
+	uint32_t cacheConnectionReuseAttempts = 0;
+	uint32_t cacheConnectionReuseAccepted = 0;
 };
 
 struct SkinningPushConstants
@@ -194,7 +216,7 @@ struct ScenePushConstants
 	alignas(4) int materialIndex;
 	alignas(4) int cascadeIndex;        // which CSM cascade is being rendered (shadow pass); padding for main pass
 	alignas(4) int padding2;
-	alignas(4) int padding3;
+	alignas(4) uint32_t padding3;
 	alignas(16) glm::vec4 skyData;        // xyz = color, w = threshold
 };
 

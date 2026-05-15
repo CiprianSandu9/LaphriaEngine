@@ -19,7 +19,7 @@ struct RayPayload {
 
 [[vk::push_constant]] ScenePushConstants push;
 
-static const int PATH_TRACER_BLACK_ENVIRONMENT_BIT = 1 << 1;
+static const uint PATH_TRACER_BLACK_ENVIRONMENT_BIT = 1u << 1;
 
 [shader("miss")]
 void main(inout RayPayload payload) {

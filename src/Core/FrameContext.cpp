@@ -46,6 +46,7 @@ FrameContext::~FrameContext()
 	destroyBuffersAndReleaseAllocations(uniformBuffers);
 	destroyBuffersAndReleaseAllocations(ptAnalysisCounterBuffers);
 	destroyBuffersAndReleaseAllocations(sunVisibleCandidateCacheBuffers);
+	destroyBuffersAndReleaseAllocations(sunVisibleConnectionCacheBuffers);
 	destroyBuffersAndReleaseAllocations(tlasBuffers);
 	destroyBuffersAndReleaseAllocations(tlasScratchBuffers);
 	destroyBuffersAndReleaseAllocations(tlasInstanceBuffers);
@@ -64,6 +65,7 @@ void FrameContext::init(VulkanDevice &dev, SwapchainManager &swapchain) {
     createPathTracerAnalysisResources(dev, swapchain);
     createPathTracerAnalysisBuffers(dev);
     createSunVisibleCandidateCacheBuffers(dev);
+    createSunVisibleConnectionCacheBuffers(dev);
     // Shadow resources are extent-independent and live for the engine's full lifetime.
     createShadowResources(dev);
 
@@ -696,6 +698,29 @@ void FrameContext::createSunVisibleCandidateCacheBuffers(const VulkanDevice &dev
         std::memset(sunVisibleCandidateCacheMapped.back(), 0,
                     static_cast<size_t>(kSunVisibleCandidateCacheBufferSize));
         sunVisibleCandidateCacheBuffers.push_back(std::move(buffer));
+    }
+}
+
+void FrameContext::createSunVisibleConnectionCacheBuffers(const VulkanDevice &dev)
+{
+    sunVisibleConnectionCacheBuffers.clear();
+    sunVisibleConnectionCacheMapped.clear();
+    sunVisibleConnectionCacheBuffers.reserve(MAX_FRAMES_IN_FLIGHT);
+    sunVisibleConnectionCacheMapped.reserve(MAX_FRAMES_IN_FLIGHT);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VulkanUtils::VmaBuffer buffer{};
+        VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice,
+                                  kSunVisibleConnectionCacheBufferSize,
+                                  vk::BufferUsageFlagBits::eStorageBuffer,
+                                  vk::MemoryPropertyFlagBits::eHostVisible |
+                                      vk::MemoryPropertyFlagBits::eHostCoherent,
+                                  buffer);
+        sunVisibleConnectionCacheMapped.push_back(
+            buffer.memory.mapMemory(0, kSunVisibleConnectionCacheBufferSize));
+        std::memset(sunVisibleConnectionCacheMapped.back(), 0,
+                    static_cast<size_t>(kSunVisibleConnectionCacheBufferSize));
+        sunVisibleConnectionCacheBuffers.push_back(std::move(buffer));
     }
 }
 

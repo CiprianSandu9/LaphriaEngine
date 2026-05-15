@@ -1068,131 +1068,93 @@ void UISystem::drawPathTracerMainControls() {
 }
 
 void UISystem::drawPathTracerDebugLab() {
-    if (!ImGui::CollapsingHeader("Path Tracer Debug Lab", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!ImGui::CollapsingHeader("Path Tracer Diagnostics", ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
     }
 
     static constexpr const char *cachedSecondaryReuse = "Cached Secondary Reuse";
-    ImGui::Checkbox("Enable Analysis Mode", &pathTracerAnalysisSettings.enableAnalysisMode);
-    ImGui::Checkbox("Environment NEE", &pathTracerSettings.enableEnvironmentNEE);
-    ImGui::Checkbox("Black Environment", &pathTracerSettings.blackEnvironment);
-    ImGui::Checkbox("Apply First-Hit Probes", &pathTracerSettings.applyFirstHitProbesToFinal);
-    ImGui::Checkbox("Enable Sun-Visible Cache", &pathTracerSettings.enableSunVisibleCandidateCache);
 
-    const char *envNeeSamplingModes[] = {"Cosine Hemisphere", "Sky Biased"};
-    int envNeeSamplingMode = static_cast<int>(pathTracerSettings.environmentNeeSamplingMode);
-    if (ImGui::Combo("Env NEE Sampling", &envNeeSamplingMode, envNeeSamplingModes, IM_ARRAYSIZE(envNeeSamplingModes))) {
-        pathTracerSettings.environmentNeeSamplingMode = static_cast<EnvironmentNeeSamplingMode>(envNeeSamplingMode);
-    }
-    const char *firstHitProbeSamplingModes[] = {
-        "Cosine Hemisphere",
-        "Naive Sun Guide",
-        "Candidate Sun Bounce",
-        "Candidate Average Reference",
-        "Candidate RIS",
-        cachedSecondaryReuse};
-    int firstHitProbeSamplingMode = static_cast<int>(pathTracerSettings.firstHitProbeSamplingMode);
-    if (ImGui::Combo("First-Hit Probe Sampling", &firstHitProbeSamplingMode,
-                     firstHitProbeSamplingModes, IM_ARRAYSIZE(firstHitProbeSamplingModes))) {
-        pathTracerSettings.firstHitProbeSamplingMode =
-            static_cast<FirstHitProbeSamplingMode>(firstHitProbeSamplingMode);
-    }
-    ImGui::SliderInt("First-Hit Diffuse Samples", &pathTracerSettings.firstHitDiffuseSamples, 1, 8);
-    ImGui::SliderInt("First-Hit Candidate Count", &pathTracerSettings.firstHitCandidateCount, 2, 16);
-    ImGui::SliderFloat("Cache Reuse Weight", &pathTracerSettings.cacheReuseWeight, 0.0f, 1.0f, "%.3f");
-    ImGui::SliderFloat("Cache MIS Strength", &pathTracerSettings.cacheMisStrength, 0.0f, 4.0f, "%.2f");
-    ImGui::Checkbox("Adaptive Cache Refresh", &pathTracerSettings.adaptiveCacheRefresh);
-    ImGui::Checkbox("Targeted Diagnostic Refresh", &pathTracerSettings.targetedDiagnosticCacheRefresh);
-    ImGui::SliderInt("Cache Refresh", &pathTracerSettings.cacheRefreshCandidateCount, 0, 4);
-    ImGui::SliderInt("Cache Max Age", &pathTracerSettings.cacheMaxRecordAgeFrames, 1, 600);
+    if (ImGui::CollapsingHeader("Core Diagnostics", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Enable Analysis Mode", &pathTracerAnalysisSettings.enableAnalysisMode);
+        ImGui::Checkbox("Environment NEE", &pathTracerSettings.enableEnvironmentNEE);
+        ImGui::Checkbox("Black Environment", &pathTracerSettings.blackEnvironment);
+        ImGui::Checkbox("Apply First-Hit Probes", &pathTracerSettings.applyFirstHitProbesToFinal);
+        ImGui::Checkbox("Enable Sun-Visible Cache", &pathTracerSettings.enableSunVisibleCandidateCache);
 
-    const char *cacheWeightingModes[] = {"Calibrated Weight", "MIS Approximation"};
-    int cacheWeightingModeIdx = static_cast<int>(pathTracerSettings.cacheWeightingMode);
-    if (ImGui::Combo("Cache Weighting", &cacheWeightingModeIdx, cacheWeightingModes, IM_ARRAYSIZE(cacheWeightingModes))) {
-        pathTracerSettings.cacheWeightingMode =
-            static_cast<UISystem::PathTracerCacheWeightingMode>(cacheWeightingModeIdx);
-    }
+        const char *envNeeSamplingModes[] = {"Cosine Hemisphere", "Sky Biased"};
+        int envNeeSamplingMode = static_cast<int>(pathTracerSettings.environmentNeeSamplingMode);
+        if (ImGui::Combo("Env NEE Sampling", &envNeeSamplingMode, envNeeSamplingModes, IM_ARRAYSIZE(envNeeSamplingModes))) {
+            pathTracerSettings.environmentNeeSamplingMode = static_cast<EnvironmentNeeSamplingMode>(envNeeSamplingMode);
+        }
+        const char *firstHitProbeSamplingModes[] = {
+            "Cosine Hemisphere",
+            "Naive Sun Guide",
+            "Candidate Sun Bounce",
+            "Candidate Average Reference",
+            "Candidate RIS",
+            cachedSecondaryReuse};
+        int firstHitProbeSamplingMode = static_cast<int>(pathTracerSettings.firstHitProbeSamplingMode);
+        if (ImGui::Combo("First-Hit Probe Sampling", &firstHitProbeSamplingMode,
+                         firstHitProbeSamplingModes, IM_ARRAYSIZE(firstHitProbeSamplingModes))) {
+            pathTracerSettings.firstHitProbeSamplingMode =
+                static_cast<FirstHitProbeSamplingMode>(firstHitProbeSamplingMode);
+        }
+        ImGui::SliderInt("First-Hit Diffuse Samples", &pathTracerSettings.firstHitDiffuseSamples, 1, 8);
+        ImGui::SliderInt("First-Hit Candidate Count", &pathTracerSettings.firstHitCandidateCount, 2, 16);
+        ImGui::SliderFloat("Cache Reuse Weight", &pathTracerSettings.cacheReuseWeight, 0.0f, 1.0f, "%.3f");
+        ImGui::SliderFloat("Cache Connection Radius", &pathTracerSettings.cacheConnectionRadius, 0.5f, 32.0f, "%.2f m");
+        ImGui::SliderFloat("Cache MIS Strength", &pathTracerSettings.cacheMisStrength, 0.0f, 4.0f, "%.2f");
+        ImGui::Checkbox("Adaptive Cache Refresh", &pathTracerSettings.adaptiveCacheRefresh);
+        ImGui::Checkbox("Targeted Diagnostic Refresh", &pathTracerSettings.targetedDiagnosticCacheRefresh);
+        ImGui::SliderInt("Cache Refresh", &pathTracerSettings.cacheRefreshCandidateCount, 0, 4);
+        ImGui::SliderInt("Cache Max Age", &pathTracerSettings.cacheMaxRecordAgeFrames, 1, 600);
 
-    if (ImGui::Button("Load Indirect Bounce Test Scene")) {
-        pathTracerAnalysisSettings.loadIndirectBounceTestScene = true;
-        pathTracerAnalysisSettings.enableAnalysisMode = true;
-        pathTracerSettings.enableEnvironmentNEE = true;
-        pathTracerSettings.blackEnvironment = true;
-        pathTracerSettings.applyFirstHitProbesToFinal = true;
-        pathTracerSettings.enableSunVisibleCandidateCache = true;
-        pathTracerSettings.adaptiveCacheRefresh = true;
-        pathTracerSettings.targetedDiagnosticCacheRefresh = false;
-        pathTracerSettings.environmentNeeSamplingMode = EnvironmentNeeSamplingMode::SkyBiased;
-        pathTracerSettings.firstHitProbeSamplingMode = FirstHitProbeSamplingMode::CachedSecondaryReuse;
-        pathTracerSettings.firstHitDiffuseSamples = 8;
-        pathTracerSettings.firstHitCandidateCount = 4;
-        pathTracerSettings.cacheRefreshCandidateCount = 1;
-        pathTracerSettings.cacheSpatialCandidateTrials = 8;
-        pathTracerSettings.cacheMaxRecordAgeFrames = 180;
-        pathTracerSettings.cacheWeightingMode = PathTracerCacheWeightingMode::CalibratedWeight;
-        pathTracerSettings.cacheMisStrength = 1.5f;
-        pathTracerAnalysisSettings.debugLightPreset = PathTracerDebugLightPreset::HardBounce;
-        pathTracerAnalysisSettings.applyDebugLightPreset = true;
-        pathTracerAnalysisSettings.debugAov = PathTracerDebugAov::PathRawFinalColor;
-    }
-    if (ImGui::Button("Run GI Cache Weight Sweep")) {
-        pathTracerAnalysisSettings.runGiCacheWeightSweep = true;
-        pathTracerAnalysisSettings.loadIndirectBounceTestScene = true;
-        pathTracerAnalysisSettings.enableAnalysisMode = true;
-    }
+        const char *cacheWeightingModes[] = {"Calibrated Weight", "MIS Approximation"};
+        int cacheWeightingModeIdx = static_cast<int>(pathTracerSettings.cacheWeightingMode);
+        if (ImGui::Combo("Cache Weighting", &cacheWeightingModeIdx, cacheWeightingModes, IM_ARRAYSIZE(cacheWeightingModes))) {
+            pathTracerSettings.cacheWeightingMode =
+                static_cast<UISystem::PathTracerCacheWeightingMode>(cacheWeightingModeIdx);
+        }
 
-    const char *lightPresets[] = {"Hard Bounce", "Medium Bounce", "Easy Bounce"};
-    int lightPresetIdx = static_cast<int>(pathTracerAnalysisSettings.debugLightPreset);
-    if (ImGui::Combo("Light Preset", &lightPresetIdx, lightPresets, IM_ARRAYSIZE(lightPresets))) {
-        pathTracerAnalysisSettings.debugLightPreset = static_cast<PathTracerDebugLightPreset>(lightPresetIdx);
-    }
-    if (ImGui::Button("Apply Light Preset")) {
-        pathTracerAnalysisSettings.applyDebugLightPreset = true;
-        pathTracerAnalysisSettings.enableAnalysisMode = true;
+        const char *debugAovs[] = {
+            "Final Color",
+            "Reprojection Validity",
+            "History Alpha",
+            "Motion Magnitude",
+            "Temporal Variance",
+            "A-Trous Iteration",
+            "Raw Final Color",
+            "Direct Lighting",
+            "Indirect Lighting",
+            "Sky Contribution",
+            "Throughput",
+            "Bounce Count",
+            "Shadow Visibility",
+            "Environment NEE Contribution",
+            "First-Hit Bounce Contribution",
+            "Secondary Direct Sun Contribution",
+            "Baseline Continuation Contribution"};
+        int debugAovIdx = static_cast<int>(pathTracerAnalysisSettings.debugAov);
+        if (ImGui::Combo("Debug AOV", &debugAovIdx, debugAovs, IM_ARRAYSIZE(debugAovs))) {
+            pathTracerAnalysisSettings.debugAov = static_cast<PathTracerDebugAov>(debugAovIdx);
+        }
+
+        ImGui::SliderInt("Debug A-Trous Iteration", &pathTracerAnalysisSettings.debugAtrousIteration, 0, 4);
     }
 
-    const char *debugAovs[] = {
-        "Final Color",
-        "Reprojection Validity",
-        "History Alpha",
-        "Motion Magnitude",
-        "Temporal Variance",
-        "A-Trous Iteration",
-        "Raw Final Color",
-        "Direct Lighting",
-        "Indirect Lighting",
-        "Sky Contribution",
-        "Throughput",
-        "Bounce Count",
-        "Shadow Visibility",
-        "Environment NEE Contribution",
-        "First-Hit Bounce Contribution",
-        "Secondary Direct Sun Contribution",
-        "Baseline Continuation Contribution"};
-    int debugAovIdx = static_cast<int>(pathTracerAnalysisSettings.debugAov);
-    if (ImGui::Combo("Debug AOV", &debugAovIdx, debugAovs, IM_ARRAYSIZE(debugAovs))) {
-        pathTracerAnalysisSettings.debugAov = static_cast<PathTracerDebugAov>(debugAovIdx);
+    if (ImGui::CollapsingHeader("Core Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text("First-Hit Probe Rays: %u", pathTracerPerfStats.firstHitProbeCount);
+        ImGui::Text("First-Hit Probe Surface Hits: %u (%.2f%%)",
+                    pathTracerPerfStats.firstHitProbeSurfaceHitCount,
+                    pathTracerPerfStats.firstHitProbeSurfaceHitRatio * 100.0f);
+        ImGui::Text("First-Hit Probe Sun Visible: %u (%.2f%%)",
+                    pathTracerPerfStats.firstHitProbeSunVisibleCount,
+                    pathTracerPerfStats.firstHitProbeSunVisibleRatio * 100.0f);
+        ImGui::Text("First-Hit Probe Avg Luma: %.5f",
+                    pathTracerPerfStats.firstHitProbeContributionAverage);
+        ImGui::Text("First-Hit Probe Sun-Visible Avg Luma: %.5f",
+                    pathTracerPerfStats.firstHitProbeSunVisibleContributionAverage);
     }
-
-    ImGui::SliderInt("Debug A-Trous Iteration", &pathTracerAnalysisSettings.debugAtrousIteration, 0, 4);
-    ImGui::Text("Target Wall Avg Luma: %.5f (%u px)",
-                pathTracerPerfStats.targetWallLuminanceAverage,
-                pathTracerPerfStats.targetWallSampleCount);
-    ImGui::Text("Target Wall Base Luma: %.5f",
-                pathTracerPerfStats.targetWallBaseLuminanceAverage);
-    ImGui::Text("Target Wall Probe Added Luma: %.5f",
-                pathTracerPerfStats.targetWallFirstHitProbeContributionAverage);
-    ImGui::Text("First-Hit Probe Rays: %u", pathTracerPerfStats.firstHitProbeCount);
-    ImGui::Text("First-Hit Probe Surface Hits: %u (%.2f%%)",
-                pathTracerPerfStats.firstHitProbeSurfaceHitCount,
-                pathTracerPerfStats.firstHitProbeSurfaceHitRatio * 100.0f);
-    ImGui::Text("First-Hit Probe Sun Visible: %u (%.2f%%)",
-                pathTracerPerfStats.firstHitProbeSunVisibleCount,
-                pathTracerPerfStats.firstHitProbeSunVisibleRatio * 100.0f);
-    ImGui::Text("First-Hit Probe Avg Luma: %.5f",
-                pathTracerPerfStats.firstHitProbeContributionAverage);
-    ImGui::Text("First-Hit Probe Sun-Visible Avg Luma: %.5f",
-                pathTracerPerfStats.firstHitProbeSunVisibleContributionAverage);
 
     if (ImGui::CollapsingHeader("Sun-Visible Cache")) {
         if (ImGui::Button("Clear Sun-Visible Cache")) {
@@ -1203,13 +1165,66 @@ void UISystem::drawPathTracerDebugLab() {
             ImGui::SetTooltip("Successful new inserts for the latest frame; this can be 0 when the bounded cache is already full.");
         }
         ImGui::Text("Resident Cached Candidates: %u", pathTracerPerfStats.residentCachedCandidateCount);
+        ImGui::Text("Cache Banks: read %u (%u inserts, %u residents) | write %u (%u inserts, %u residents)",
+                    pathTracerPerfStats.cacheReadBank,
+                    pathTracerPerfStats.cacheReadBankInsertCount,
+                    pathTracerPerfStats.cacheReadBankResidentCandidateCount,
+                    pathTracerPerfStats.cacheWriteBank,
+                    pathTracerPerfStats.cacheWriteBankInsertCount,
+                    pathTracerPerfStats.cacheWriteBankResidentCandidateCount);
+        ImGui::Text("Cache Reuse Path: entries %u | no samples %u | unavailable %u",
+                    pathTracerPerfStats.cacheReusePathEntryCount,
+                    pathTracerPerfStats.cacheReuseExtraSampleZeroCount,
+                    pathTracerPerfStats.cacheReuseUnavailableCandidateCount);
+        ImGui::Text("Cache Reuse Selection: selected %u | miss %u | reject D/G/V %u/%u/%u",
+                    pathTracerPerfStats.cacheReuseSelectedCount,
+                    pathTracerPerfStats.cacheReuseSelectMissCount,
+                    pathTracerPerfStats.cacheReuseRejectDistanceCount,
+                    pathTracerPerfStats.cacheReuseRejectGeometryCount,
+                    pathTracerPerfStats.cacheReuseRejectVisibilityCount);
+        ImGui::Text("Cache Reuse Selector: loaded %u | load miss %u | pre-reject D/G %u/%u",
+                    pathTracerPerfStats.cacheReuseSelectLoadSuccessCount,
+                    pathTracerPerfStats.cacheReuseSelectLoadMissCount,
+                    pathTracerPerfStats.cacheReuseSelectRejectDistanceCount,
+                    pathTracerPerfStats.cacheReuseSelectRejectGeometryCount);
         ImGui::Text("Cache Reuse Attempts: %u", pathTracerPerfStats.cacheReuseAttemptCount);
         ImGui::Text("Cache Reuse Accepted: %u (%.2f%%)",
                     pathTracerPerfStats.cacheReuseAcceptedCount,
                     pathTracerPerfStats.cacheReuseAcceptedRatio * 100.0f);
         ImGui::Text("Cache Reuse Avg Luma: %.5f",
                     pathTracerPerfStats.cacheReuseContributionAverage);
+        ImGui::Text("Cache Accepted Distance Buckets: <=3.5 %u | <=7 %u | <=14 %u | >14 %u",
+                    pathTracerPerfStats.cacheReuseAcceptedDistanceNearCount,
+                    pathTracerPerfStats.cacheReuseAcceptedDistanceMidCount,
+                    pathTracerPerfStats.cacheReuseAcceptedDistanceFarCount,
+                    pathTracerPerfStats.cacheReuseAcceptedDistanceVeryFarCount);
+        ImGui::Text("Cache Accepted Luma Buckets: <=0.0001 %u | <=0.001 %u | <=0.01 %u | >0.01 %u",
+                    pathTracerPerfStats.cacheReuseAcceptedLumaDarkCount,
+                    pathTracerPerfStats.cacheReuseAcceptedLumaDimCount,
+                    pathTracerPerfStats.cacheReuseAcceptedLumaUsefulCount,
+                    pathTracerPerfStats.cacheReuseAcceptedLumaBrightCount);
+        ImGui::Text("Connection Cache Reuse: attempts %u | accepted %u",
+                    pathTracerPerfStats.cacheConnectionReuseAttempts,
+                    pathTracerPerfStats.cacheConnectionReuseAccepted);
         ImGui::SliderInt("Spatial Candidate Trials", &pathTracerSettings.cacheSpatialCandidateTrials, 1, 32);
+        const char *cacheProposalModes[] = {"Spatial Local", "Global Non-Local", "Connection Cache"};
+        int cacheProposalModeIdx = static_cast<int>(pathTracerSettings.cacheProposalMode);
+        if (ImGui::Combo("Cache Proposal Mode", &cacheProposalModeIdx,
+                         cacheProposalModes, IM_ARRAYSIZE(cacheProposalModes))) {
+            pathTracerSettings.cacheProposalMode =
+                static_cast<PathTracerCacheProposalMode>(cacheProposalModeIdx);
+        }
+        const char *cacheVisibilityBudgetLabels[] = {"1", "2", "4", "7"};
+        const int cacheVisibilityBudgetValues[] = {1, 2, 4, 7};
+        int cacheVisibilityBudgetIndex =
+            (pathTracerSettings.cacheVisibilityValidationBudget <= 1) ? 0 :
+            (pathTracerSettings.cacheVisibilityValidationBudget <= 2) ? 1 :
+            (pathTracerSettings.cacheVisibilityValidationBudget <= 4) ? 2 : 3;
+        if (ImGui::Combo("Cache Visibility Budget", &cacheVisibilityBudgetIndex,
+                         cacheVisibilityBudgetLabels, IM_ARRAYSIZE(cacheVisibilityBudgetLabels))) {
+            pathTracerSettings.cacheVisibilityValidationBudget =
+                cacheVisibilityBudgetValues[cacheVisibilityBudgetIndex];
+        }
         ImGui::Text("Diagnostic Target Cache Reuse Attempts: %u", pathTracerPerfStats.diagnosticTargetCacheReuseAttemptCount);
         ImGui::Text("Diagnostic Target Cache Selected: %u", pathTracerPerfStats.diagnosticTargetCacheSelectedCount);
         ImGui::Text("Diagnostic Target Cache Reject Distance: %u", pathTracerPerfStats.diagnosticTargetCacheRejectDistanceCount);
@@ -1226,21 +1241,83 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::Text("Cache MIS Avg Weight: %.5f", pathTracerPerfStats.cacheMisWeightAverage);
     }
 
-    if (ImGui::CollapsingHeader("Capture Checklist")) {
-        ImGui::TextWrapped("Record these values after the image stabilizes:");
-        ImGui::Text("Target Wall Avg Luma");
-        ImGui::Text("First-Hit Probe Sun Visible");
-        ImGui::Text("First-Hit Probe Sun-Visible Avg Luma");
-        ImGui::Text("First-Hit Probe Avg Luma");
+    if (ImGui::CollapsingHeader("Scenario: Indirect Bounce Box")) {
+        if (ImGui::Button("Load Indirect Bounce Test Scene")) {
+            pathTracerAnalysisSettings.loadIndirectBounceTestScene = true;
+            pathTracerAnalysisSettings.enableAnalysisMode = true;
+            pathTracerSettings.enableEnvironmentNEE = true;
+            pathTracerSettings.blackEnvironment = true;
+            pathTracerSettings.applyFirstHitProbesToFinal = true;
+            pathTracerSettings.enableSunVisibleCandidateCache = true;
+            pathTracerSettings.adaptiveCacheRefresh = true;
+            pathTracerSettings.targetedDiagnosticCacheRefresh = false;
+            pathTracerSettings.environmentNeeSamplingMode = EnvironmentNeeSamplingMode::SkyBiased;
+            pathTracerSettings.firstHitProbeSamplingMode = FirstHitProbeSamplingMode::CachedSecondaryReuse;
+            pathTracerSettings.firstHitDiffuseSamples = 8;
+            pathTracerSettings.firstHitCandidateCount = 4;
+            pathTracerSettings.cacheRefreshCandidateCount = 1;
+            pathTracerSettings.cacheSpatialCandidateTrials = 8;
+            pathTracerSettings.cacheVisibilityValidationBudget = 7;
+            pathTracerSettings.cacheMaxRecordAgeFrames = 180;
+            pathTracerSettings.cacheConnectionRadius = 3.5f;
+            pathTracerSettings.cacheWeightingMode = PathTracerCacheWeightingMode::CalibratedWeight;
+            pathTracerSettings.cacheMisStrength = 1.5f;
+            pathTracerAnalysisSettings.debugLightPreset = PathTracerDebugLightPreset::HardBounce;
+            pathTracerAnalysisSettings.applyDebugLightPreset = true;
+            pathTracerAnalysisSettings.debugAov = PathTracerDebugAov::PathRawFinalColor;
+        }
+        if (ImGui::Button("Run GI Cache Weight Sweep")) {
+            pathTracerAnalysisSettings.runGiCacheWeightSweep = true;
+            pathTracerAnalysisSettings.loadIndirectBounceTestScene = true;
+            pathTracerAnalysisSettings.enableAnalysisMode = true;
+        }
+
+        const char *lightPresets[] = {"Hard Bounce", "Medium Bounce", "Easy Bounce"};
+        int lightPresetIdx = static_cast<int>(pathTracerAnalysisSettings.debugLightPreset);
+        if (ImGui::Combo("Light Preset", &lightPresetIdx, lightPresets, IM_ARRAYSIZE(lightPresets))) {
+            pathTracerAnalysisSettings.debugLightPreset = static_cast<PathTracerDebugLightPreset>(lightPresetIdx);
+        }
+        if (ImGui::Button("Apply Light Preset")) {
+            pathTracerAnalysisSettings.applyDebugLightPreset = true;
+            pathTracerAnalysisSettings.enableAnalysisMode = true;
+        }
+
+        ImGui::Text("Target Wall Avg Luma: %.5f (%u px)",
+                    pathTracerPerfStats.targetWallLuminanceAverage,
+                    pathTracerPerfStats.targetWallSampleCount);
+        ImGui::Text("Target Wall Base Luma: %.5f",
+                    pathTracerPerfStats.targetWallBaseLuminanceAverage);
+        ImGui::Text("Target Wall Probe Added Luma: %.5f",
+                    pathTracerPerfStats.targetWallFirstHitProbeContributionAverage);
+
+        if (ImGui::CollapsingHeader("Indirect Box Capture Checklist")) {
+            ImGui::TextWrapped("Record these values after the image stabilizes:");
+            ImGui::Text("Target Wall Avg Luma");
+            ImGui::Text("First-Hit Probe Sun Visible");
+            ImGui::Text("First-Hit Probe Sun-Visible Avg Luma");
+            ImGui::Text("First-Hit Probe Avg Luma");
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Scenario: Sponza GI Validation")) {
+        if (ImGui::Button("Load Sponza GI Validation Preset")) {
+            pathTracerAnalysisSettings.loadSponzaGiValidationPreset = true;
+            pathTracerAnalysisSettings.enableAnalysisMode = true;
+        }
+        if (ImGui::Button("Run Sponza GI Perf Sweep")) {
+            pathTracerAnalysisSettings.loadSponzaGiValidationPreset = true;
+            pathTracerAnalysisSettings.runSponzaGiPerfSweep = true;
+            pathTracerAnalysisSettings.enableAnalysisMode = true;
+        }
+        ImGui::Checkbox("Lock Benchmark Scene (sponza_runtime.glb)", &pathTracerAnalysisSettings.lockBenchmarkScene);
     }
 }
 
 void UISystem::drawPathTracerBenchmarkControls() {
-    if (!ImGui::CollapsingHeader("PT Benchmark")) {
+    if (!ImGui::CollapsingHeader("Benchmark Automation")) {
         return;
     }
 
-    ImGui::Checkbox("Lock Benchmark Scene (sponza_runtime.glb)", &pathTracerAnalysisSettings.lockBenchmarkScene);
     ImGui::Checkbox("Benchmark Active", &pathTracerAnalysisSettings.benchmarkActive);
     ImGui::Checkbox("Run Baseline Sweep", &pathTracerAnalysisSettings.runBaselineSweep);
     ImGui::Checkbox("Run Physical Sanity Checks", &pathTracerAnalysisSettings.runPhysicalSanityChecks);
@@ -1282,7 +1359,7 @@ void UISystem::drawPathTracerBenchmarkControls() {
 }
 
 void UISystem::drawPathTracerStats() {
-    if (!ImGui::CollapsingHeader("PT Stats", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!ImGui::CollapsingHeader("Frame Stats", ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
     }
 
@@ -1343,6 +1420,7 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         pathTracerSettings.firstHitDiffuseSamples = std::clamp(pathTracerSettings.firstHitDiffuseSamples, 1, 8);
         pathTracerSettings.firstHitCandidateCount = std::clamp(pathTracerSettings.firstHitCandidateCount, 2, 16);
         pathTracerSettings.cacheReuseWeight = std::clamp(pathTracerSettings.cacheReuseWeight, 0.0f, 1.0f);
+        pathTracerSettings.cacheConnectionRadius = std::clamp(pathTracerSettings.cacheConnectionRadius, 0.5f, 64.0f);
         pathTracerSettings.cacheMisStrength = std::clamp(pathTracerSettings.cacheMisStrength, 0.0f, 4.0f);
         pathTracerSettings.cacheRefreshCandidateCount = std::clamp(pathTracerSettings.cacheRefreshCandidateCount, 0, 4);
         pathTracerSettings.cacheMaxRecordAgeFrames = std::clamp(pathTracerSettings.cacheMaxRecordAgeFrames, 1, 600);

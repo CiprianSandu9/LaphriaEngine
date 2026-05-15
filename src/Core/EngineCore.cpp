@@ -311,8 +311,12 @@ void EngineCore::mainLoop() {
 
         glfwPollEvents();
         loadPathTracerIndirectBounceTestSceneIfRequested();
+        loadPathTracerSponzaGiValidationPresetIfRequested();
         if (ui.pathTracerAnalysisSettings.runGiCacheWeightSweep) {
             startPathTracerGiCacheWeightSweep();
+        }
+        if (ui.pathTracerAnalysisSettings.runSponzaGiPerfSweep) {
+            startPathTracerSponzaGiPerfSweep();
         }
         applyPathTracerDebugLightPreset();
         loadPathTracerBenchmarkSceneIfNeeded();
@@ -629,6 +633,19 @@ void EngineCore::createRayTracingDescriptorSets() {
             .descriptorType = vk::DescriptorType::eStorageBuffer,
             .pBufferInfo = &sunVisibleCandidateCacheInfo
         };
+        vk::DescriptorBufferInfo sunVisibleConnectionCacheInfo{
+            .buffer = *frames.sunVisibleConnectionCacheBuffers[i],
+            .offset = 0,
+            .range = FrameContext::kSunVisibleConnectionCacheBufferSize
+        };
+        vk::WriteDescriptorSet sunVisibleConnectionCacheWrite{
+            .dstSet = *rtDescriptorSets[i],
+            .dstBinding = 11,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .pBufferInfo = &sunVisibleConnectionCacheInfo
+        };
 
         std::vector<vk::WriteDescriptorSet> descriptorWrites;
         descriptorWrites.push_back(tlasWrite);
@@ -638,6 +655,7 @@ void EngineCore::createRayTracingDescriptorSets() {
         descriptorWrites.push_back(mvWrite);
         descriptorWrites.push_back(analysisCounterWrite);
         descriptorWrites.push_back(sunVisibleCandidateCacheWrite);
+        descriptorWrites.push_back(sunVisibleConnectionCacheWrite);
 
         // Now we extract ALL global vertices, indices, materials, and textures
         // across all Scene Nodes that have been uploaded into VRAM by ResourceManager
@@ -1158,10 +1176,14 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     ScenePushConstants rtPush{};
     rtPush.modelMatrix = glm::mat4(1.0f);
     rtPush.cascadeIndex = ptIndirectBounceTargetWallModelId;
+    const uint32_t packedPathTracerMaterialIndex =
+        (static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.cacheMaxRecordAgeFrames, 1, 600)) << 8) |
+        (static_cast<uint32_t>(ui.pathTracerSettings.cacheProposalMode) & 0xFFu);
+    rtPush.materialIndex = static_cast<int>(packedPathTracerMaterialIndex);
     rtPush.padding2 = debugAov;
     rtPush.skyData = glm::vec4(
         std::clamp(ui.pathTracerSettings.cacheReuseWeight, 0.0f, 1.0f),
-        static_cast<float>(std::clamp(ui.pathTracerSettings.cacheMaxRecordAgeFrames, 1, 600)),
+        std::clamp(ui.pathTracerSettings.cacheConnectionRadius, 0.5f, 64.0f),
         static_cast<float>(sunVisibleCacheGeneration),
         std::clamp(ui.pathTracerSettings.cacheMisStrength, 0.0f, 4.0f));
     const uint32_t candidateCountMinusOne =
@@ -1172,6 +1194,13 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     constexpr uint32_t CACHE_REFRESH_COUNT_SHIFT = 20;
     constexpr uint32_t CACHE_SPATIAL_TRIAL_COUNT_SHIFT = 23;
     constexpr uint32_t TARGETED_DIAGNOSTIC_CACHE_REFRESH_BIT = 1u << 29;
+    constexpr uint32_t CACHE_VISIBILITY_BUDGET_SHIFT = 30;
+    const int cacheVisibilityBudget =
+        std::clamp(ui.pathTracerSettings.cacheVisibilityValidationBudget, 1, 7);
+    const uint32_t cacheVisibilityBudgetCode =
+        (cacheVisibilityBudget <= 1) ? 0u :
+        (cacheVisibilityBudget <= 2) ? 1u :
+        (cacheVisibilityBudget <= 4) ? 2u : 3u;
     const uint32_t pathTracerFlags =
         (ui.pathTracerSettings.enableEnvironmentNEE ? 1u : 0u) |
         (ui.pathTracerSettings.blackEnvironment ? static_cast<uint32_t>(PATH_TRACER_BLACK_ENVIRONMENT_BIT) : 0u) |
@@ -1185,8 +1214,9 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
         ((static_cast<uint32_t>(ui.pathTracerSettings.firstHitProbeSamplingMode) & 0x7u) << 13) |
         ((static_cast<uint32_t>(ui.pathTracerSettings.cacheWeightingMode) & 0x3u) << CACHE_WEIGHTING_MODE_SHIFT) |
         ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.cacheRefreshCandidateCount, 0, 4)) & 0x7u) << CACHE_REFRESH_COUNT_SHIFT) |
-        ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.cacheSpatialCandidateTrials, 1, 32)) & 0x3Fu) << CACHE_SPATIAL_TRIAL_COUNT_SHIFT);
-    rtPush.padding3 = static_cast<int>(pathTracerFlags);
+        ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.cacheSpatialCandidateTrials, 1, 32)) & 0x3Fu) << CACHE_SPATIAL_TRIAL_COUNT_SHIFT) |
+        ((cacheVisibilityBudgetCode & 0x3u) << CACHE_VISIBILITY_BUDGET_SHIFT);
+    rtPush.padding3 = pathTracerFlags;
     commandBuffer.pushConstants<ScenePushConstants>(*pipelines.rayTracingPipelineLayout,
                                                     vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
                                                     0, rtPush);
@@ -1584,6 +1614,34 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
             : 0.0f;
     ui.pathTracerPerfStats.cachedCandidateCount = counters->cachedCandidateInsertCount;
     ui.pathTracerPerfStats.residentCachedCandidateCount = 0;
+    ui.pathTracerPerfStats.cacheReadBank = 0;
+    ui.pathTracerPerfStats.cacheWriteBank = 0;
+    ui.pathTracerPerfStats.cacheReadBankInsertCount = 0;
+    ui.pathTracerPerfStats.cacheWriteBankInsertCount = 0;
+    ui.pathTracerPerfStats.cacheReadBankResidentCandidateCount = 0;
+    ui.pathTracerPerfStats.cacheWriteBankResidentCandidateCount = 0;
+    ui.pathTracerPerfStats.cacheReusePathEntryCount = counters->cacheReusePathEntryCount;
+    ui.pathTracerPerfStats.cacheReuseExtraSampleZeroCount = counters->cacheReuseExtraSampleZeroCount;
+    ui.pathTracerPerfStats.cacheReuseUnavailableCandidateCount = counters->cacheReuseUnavailableCandidateCount;
+    ui.pathTracerPerfStats.cacheReuseSelectedCount = counters->cacheReuseSelectedCount;
+    ui.pathTracerPerfStats.cacheReuseSelectMissCount = counters->cacheReuseSelectMissCount;
+    ui.pathTracerPerfStats.cacheReuseRejectDistanceCount = counters->cacheReuseRejectDistanceCount;
+    ui.pathTracerPerfStats.cacheReuseRejectGeometryCount = counters->cacheReuseRejectGeometryCount;
+    ui.pathTracerPerfStats.cacheReuseRejectVisibilityCount = counters->cacheReuseRejectVisibilityCount;
+    ui.pathTracerPerfStats.cacheReuseSelectLoadSuccessCount = counters->cacheReuseSelectLoadSuccessCount;
+    ui.pathTracerPerfStats.cacheReuseSelectLoadMissCount = counters->cacheReuseSelectLoadMissCount;
+    ui.pathTracerPerfStats.cacheReuseSelectRejectDistanceCount = counters->cacheReuseSelectRejectDistanceCount;
+    ui.pathTracerPerfStats.cacheReuseSelectRejectGeometryCount = counters->cacheReuseSelectRejectGeometryCount;
+    ui.pathTracerPerfStats.cacheReuseAcceptedDistanceNearCount = counters->cacheReuseAcceptedDistanceNearCount;
+    ui.pathTracerPerfStats.cacheReuseAcceptedDistanceMidCount = counters->cacheReuseAcceptedDistanceMidCount;
+    ui.pathTracerPerfStats.cacheReuseAcceptedDistanceFarCount = counters->cacheReuseAcceptedDistanceFarCount;
+    ui.pathTracerPerfStats.cacheReuseAcceptedDistanceVeryFarCount = counters->cacheReuseAcceptedDistanceVeryFarCount;
+    ui.pathTracerPerfStats.cacheReuseAcceptedLumaDarkCount = counters->cacheReuseAcceptedLumaDarkCount;
+    ui.pathTracerPerfStats.cacheReuseAcceptedLumaDimCount = counters->cacheReuseAcceptedLumaDimCount;
+    ui.pathTracerPerfStats.cacheReuseAcceptedLumaUsefulCount = counters->cacheReuseAcceptedLumaUsefulCount;
+    ui.pathTracerPerfStats.cacheReuseAcceptedLumaBrightCount = counters->cacheReuseAcceptedLumaBrightCount;
+    ui.pathTracerPerfStats.cacheConnectionReuseAttempts = counters->cacheConnectionReuseAttempts;
+    ui.pathTracerPerfStats.cacheConnectionReuseAccepted = counters->cacheConnectionReuseAccepted;
     if (frameSlot < frames.sunVisibleCandidateCacheMapped.size() && frames.sunVisibleCandidateCacheMapped[frameSlot]) {
         const auto *cacheBytes = static_cast<const std::byte *>(frames.sunVisibleCandidateCacheMapped[frameSlot]);
         const auto loadU32 = [](const std::byte *src) {
@@ -1598,10 +1656,19 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
             return value;
         };
 
-        const uint32_t currentFrame = frames.frameCount;
+        constexpr uint32_t kCacheBankCount = 2u;
+        constexpr uint32_t kCacheFrameSlotCount = 2u;
+        constexpr uint32_t kCacheBankCapacity = FrameContext::kSunVisibleCandidateCacheCapacity / kCacheBankCount;
+        const uint32_t currentFrame = (frames.frameCount > 0u) ? (frames.frameCount - 1u) : 0u;
+        const uint32_t frameSlotGeneration = currentFrame / kCacheFrameSlotCount;
+        const uint32_t cacheReadBank = (frameSlotGeneration + kCacheBankCount - 1u) % kCacheBankCount;
+        const uint32_t cacheWriteBank = frameSlotGeneration % kCacheBankCount;
         const uint32_t maxRecordAgeFrames =
             static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.cacheMaxRecordAgeFrames, 1, 600));
         uint32_t residentCount = 0;
+        std::array<uint32_t, kCacheBankCount> bankResidents{};
+        const uint32_t readBankInsertCount = loadU32(cacheBytes + cacheReadBank * 4u);
+        const uint32_t writeBankInsertCount = loadU32(cacheBytes + cacheWriteBank * 4u);
         for (uint32_t slot = 0; slot < FrameContext::kSunVisibleCandidateCacheCapacity; ++slot) {
             const std::byte *record =
                 cacheBytes + static_cast<size_t>(FrameContext::kSunVisibleCandidateCacheHeaderSize) +
@@ -1619,9 +1686,17 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
                 sourcePdf > 0.0f &&
                 std::isfinite(sourcePdf)) {
                 ++residentCount;
+                const uint32_t bank = std::min(slot / kCacheBankCapacity, kCacheBankCount - 1u);
+                ++bankResidents[bank];
             }
         }
         ui.pathTracerPerfStats.residentCachedCandidateCount = residentCount;
+        ui.pathTracerPerfStats.cacheReadBank = cacheReadBank;
+        ui.pathTracerPerfStats.cacheWriteBank = cacheWriteBank;
+        ui.pathTracerPerfStats.cacheReadBankInsertCount = readBankInsertCount;
+        ui.pathTracerPerfStats.cacheWriteBankInsertCount = writeBankInsertCount;
+        ui.pathTracerPerfStats.cacheReadBankResidentCandidateCount = bankResidents[cacheReadBank];
+        ui.pathTracerPerfStats.cacheWriteBankResidentCandidateCount = bankResidents[cacheWriteBank];
     }
     ui.pathTracerPerfStats.cacheReuseAttemptCount = counters->cacheReuseAttemptCount;
     ui.pathTracerPerfStats.cacheReuseAcceptedCount = counters->cacheReuseAcceptedCount;
@@ -1892,6 +1967,7 @@ void EngineCore::startPathTracerGiCacheWeightSweep()
             .name = name,
             .probeMode = UISystem::FirstHitProbeSamplingMode::CachedSecondaryReuse,
             .cacheReuseWeight = 0.126f,
+            .cacheConnectionRadius = 3.5f,
             .cacheMisStrength = 1.5f,
             .cacheWeightingMode = UISystem::PathTracerCacheWeightingMode::MisApproximation,
             .adaptiveCacheRefresh = true,
@@ -1922,11 +1998,115 @@ void EngineCore::startPathTracerGiCacheWeightSweep()
     }
 }
 
+void EngineCore::startPathTracerSponzaGiPerfSweep()
+{
+    auto &analysis = ui.pathTracerAnalysisSettings;
+    analysis.runSponzaGiPerfSweep = false;
+    analysis.enableAnalysisMode = true;
+    analysis.lockBenchmarkScene = true;
+    analysis.benchmarkActive = false;
+    analysis.runBaselineSweep = false;
+    analysis.runGiCacheWeightSweep = false;
+    analysis.applyDebugLightPreset = false;
+    ui.renderMode = RenderMode::PathTracer;
+    vulkan.logicalDevice.waitIdle();
+    clearPathTracerExperimentCache();
+
+    auto makeSponzaCachedRow = [](const char *name,
+                                  int firstHitSamples,
+                                  int spatialTrials,
+                                  bool adaptiveRefresh) {
+        return PathTracerExperimentRow{
+            .name = name,
+            .probeMode = UISystem::FirstHitProbeSamplingMode::CachedSecondaryReuse,
+            .cacheReuseWeight = 0.126f,
+            .cacheMisStrength = 1.5f,
+            .cacheWeightingMode = UISystem::PathTracerCacheWeightingMode::MisApproximation,
+            .adaptiveCacheRefresh = adaptiveRefresh,
+            .targetedDiagnosticCacheRefresh = false,
+            .enableSunVisibleCandidateCache = true,
+            .blackEnvironment = false,
+            .applyDebugLightPreset = false,
+            .cacheRefreshCandidateCount = 1,
+            .cacheSpatialCandidateTrials = spatialTrials,
+            .cacheVisibilityValidationBudget = 7,
+            .firstHitDiffuseSamples = firstHitSamples,
+            .firstHitCandidateCount = 4,
+            .debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor};
+    };
+
+    auto makeSponzaRadiusRow = [&](const char *name, float radius) {
+        auto row = makeSponzaCachedRow(name, 8, 1, true);
+        row.cacheConnectionRadius = radius;
+        return row;
+    };
+
+    auto makeSponzaVisibilityBudgetRow = [&](const char *name, int visibilityBudget) {
+        auto row = makeSponzaCachedRow(name, 8, 1, true);
+        row.cacheConnectionRadius = 14.0f;
+        row.cacheVisibilityValidationBudget = visibilityBudget;
+        return row;
+    };
+
+    auto chosenRow = makeSponzaCachedRow("Sponza / Chosen Radius 14 Budget 1", 8, 1, true);
+    chosenRow.cacheConnectionRadius = 14.0f;
+    chosenRow.cacheVisibilityValidationBudget = 1;
+
+    auto globalNonLocalRow =
+        makeSponzaVisibilityBudgetRow("Sponza / Global Non-Local Radius 14 Budget 1", 1);
+    globalNonLocalRow.cacheProposalMode =
+        UISystem::PathTracerCacheProposalMode::GlobalNonLocal;
+
+    auto connectionCacheRow =
+        makeSponzaVisibilityBudgetRow("Sponza / Connection Cache Radius 14 Budget 1", 1);
+    connectionCacheRow.cacheProposalMode =
+        UISystem::PathTracerCacheProposalMode::ConnectionCache;
+    connectionCacheRow.clearCacheBeforeRow = false;
+
+    auto noRefreshRow = makeSponzaCachedRow("Sponza / Cached Reuse No Refresh", 8, 8, false);
+    noRefreshRow.clearCacheBeforeRow = false;
+
+    ptExperimentRows = {
+        makeSponzaCachedRow("Sponza / No First-Hit GI", 1, 1, false),
+        chosenRow,
+        globalNonLocalRow,
+        connectionCacheRow,
+        makeSponzaCachedRow("Sponza / Cached Reuse Samples 2", 2, 1, true),
+        makeSponzaCachedRow("Sponza / Cached Reuse Trials 1", 8, 1, true),
+        makeSponzaCachedRow("Sponza / Cached Reuse Trials 4", 8, 4, true),
+        makeSponzaCachedRow("Sponza / Cached Reuse Trials 8", 8, 8, true),
+        noRefreshRow,
+        makeSponzaRadiusRow("Sponza / Radius 3.5", 3.5f),
+        makeSponzaRadiusRow("Sponza / Radius 7.0", 7.0f),
+        makeSponzaRadiusRow("Sponza / Radius 14.0", 14.0f),
+        makeSponzaRadiusRow("Sponza / Radius 28.0", 28.0f),
+        makeSponzaVisibilityBudgetRow("Sponza / Radius 14 Budget 1", 1),
+        makeSponzaVisibilityBudgetRow("Sponza / Radius 14 Budget 2", 2),
+        makeSponzaVisibilityBudgetRow("Sponza / Radius 14 Budget 4", 4)};
+
+    ptExperimentSweepActive = !ptExperimentRows.empty();
+    ptExperimentRowIndex = 0;
+    ptExperimentWarmupRemaining = std::max(1, analysis.warmupFrames);
+    ptExperimentSampleRemaining = std::max(1, analysis.sampleFrames);
+    ptExperimentAccum = {};
+
+    if (ptExperimentSweepActive) {
+        LOGI("PT Experiment Sweep: starting Sponza GI perf sweep (%zu rows, warmup=%d, samples=%d)",
+             ptExperimentRows.size(), ptExperimentWarmupRemaining, ptExperimentSampleRemaining);
+        applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
+    }
+}
+
 void EngineCore::clearPathTracerExperimentCache()
 {
     for (void *mapped : frames.sunVisibleCandidateCacheMapped) {
         if (mapped) {
             std::memset(mapped, 0, static_cast<size_t>(FrameContext::kSunVisibleCandidateCacheBufferSize));
+        }
+    }
+    for (void *mapped : frames.sunVisibleConnectionCacheMapped) {
+        if (mapped) {
+            std::memset(mapped, 0, static_cast<size_t>(FrameContext::kSunVisibleConnectionCacheBufferSize));
         }
     }
 }
@@ -1947,6 +2127,34 @@ void EngineCore::clearSunVisibleCandidateCache(const char *reason)
     }
     ui.pathTracerPerfStats.cachedCandidateCount = 0;
     ui.pathTracerPerfStats.residentCachedCandidateCount = 0;
+    ui.pathTracerPerfStats.cacheReadBank = 0;
+    ui.pathTracerPerfStats.cacheWriteBank = 0;
+    ui.pathTracerPerfStats.cacheReadBankInsertCount = 0;
+    ui.pathTracerPerfStats.cacheWriteBankInsertCount = 0;
+    ui.pathTracerPerfStats.cacheReadBankResidentCandidateCount = 0;
+    ui.pathTracerPerfStats.cacheWriteBankResidentCandidateCount = 0;
+    ui.pathTracerPerfStats.cacheReusePathEntryCount = 0;
+    ui.pathTracerPerfStats.cacheReuseExtraSampleZeroCount = 0;
+    ui.pathTracerPerfStats.cacheReuseUnavailableCandidateCount = 0;
+    ui.pathTracerPerfStats.cacheReuseSelectedCount = 0;
+    ui.pathTracerPerfStats.cacheReuseSelectMissCount = 0;
+    ui.pathTracerPerfStats.cacheReuseRejectDistanceCount = 0;
+    ui.pathTracerPerfStats.cacheReuseRejectGeometryCount = 0;
+    ui.pathTracerPerfStats.cacheReuseRejectVisibilityCount = 0;
+    ui.pathTracerPerfStats.cacheReuseSelectLoadSuccessCount = 0;
+    ui.pathTracerPerfStats.cacheReuseSelectLoadMissCount = 0;
+    ui.pathTracerPerfStats.cacheReuseSelectRejectDistanceCount = 0;
+    ui.pathTracerPerfStats.cacheReuseSelectRejectGeometryCount = 0;
+    ui.pathTracerPerfStats.cacheReuseAcceptedDistanceNearCount = 0;
+    ui.pathTracerPerfStats.cacheReuseAcceptedDistanceMidCount = 0;
+    ui.pathTracerPerfStats.cacheReuseAcceptedDistanceFarCount = 0;
+    ui.pathTracerPerfStats.cacheReuseAcceptedDistanceVeryFarCount = 0;
+    ui.pathTracerPerfStats.cacheReuseAcceptedLumaDarkCount = 0;
+    ui.pathTracerPerfStats.cacheReuseAcceptedLumaDimCount = 0;
+    ui.pathTracerPerfStats.cacheReuseAcceptedLumaUsefulCount = 0;
+    ui.pathTracerPerfStats.cacheReuseAcceptedLumaBrightCount = 0;
+    ui.pathTracerPerfStats.cacheConnectionReuseAttempts = 0;
+    ui.pathTracerPerfStats.cacheConnectionReuseAccepted = 0;
     ui.pathTracerPerfStats.cacheReuseAttemptCount = 0;
     ui.pathTracerPerfStats.cacheReuseAcceptedCount = 0;
     ui.pathTracerPerfStats.cacheReuseAcceptedRatio = 0.0f;
@@ -1992,7 +2200,7 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
     auto &settings = ui.pathTracerSettings;
     auto &analysis = ui.pathTracerAnalysisSettings;
     settings.enableEnvironmentNEE = true;
-    settings.blackEnvironment = true;
+    settings.blackEnvironment = row.blackEnvironment;
     settings.applyFirstHitProbesToFinal = true;
     settings.enableSunVisibleCandidateCache = row.enableSunVisibleCandidateCache;
     settings.environmentNeeSamplingMode = UISystem::EnvironmentNeeSamplingMode::SkyBiased;
@@ -2000,18 +2208,23 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
     settings.firstHitDiffuseSamples = row.firstHitDiffuseSamples;
     settings.firstHitCandidateCount = row.firstHitCandidateCount;
     settings.cacheReuseWeight = row.cacheReuseWeight;
+    settings.cacheConnectionRadius = row.cacheConnectionRadius;
     settings.cacheMisStrength = row.cacheMisStrength;
     settings.cacheWeightingMode = row.cacheWeightingMode;
+    settings.cacheProposalMode = row.cacheProposalMode;
     settings.adaptiveCacheRefresh = row.adaptiveCacheRefresh;
     settings.targetedDiagnosticCacheRefresh = row.targetedDiagnosticCacheRefresh;
     settings.cacheRefreshCandidateCount = row.cacheRefreshCandidateCount;
     settings.cacheSpatialCandidateTrials = row.cacheSpatialCandidateTrials;
+    settings.cacheVisibilityValidationBudget = row.cacheVisibilityValidationBudget;
     analysis.debugLightPreset = row.lightPreset;
-    analysis.applyDebugLightPreset = true;
+    analysis.applyDebugLightPreset = row.applyDebugLightPreset;
     analysis.debugAov = row.debugAov;
     analysis.debugAtrousIteration = 0;
     analysis.enableAnalysisMode = true;
-    applyPathTracerDebugLightPreset();
+    if (row.applyDebugLightPreset) {
+        applyPathTracerDebugLightPreset();
+    }
     if (row.clearCacheBeforeRow) {
         clearSunVisibleCandidateCache("experiment row reset");
     }
@@ -2021,11 +2234,21 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow &row,
                                             const PathTracerExperimentAccumulator &accum) const
 {
     const double invSamples = (accum.sampleCount > 0) ? (1.0 / static_cast<double>(accum.sampleCount)) : 0.0;
-    LOGI("PT Experiment Row: name=\"%s\", samples=%u, mode=%d, cacheWeight=%.3f, "
-         "misStrength=%.2f, weighting=%d, refresh=%s, targetRefresh=%s, refreshCandidates=%d, spatialTrials=%d, "
+    LOGI("PT Experiment Row: name=\"%s\", samples=%u, mode=%d, cacheWeight=%.3f, proposalMode=%d, "
+         "connectionRadius=%.2f, misStrength=%.2f, weighting=%d, refresh=%s, targetRefresh=%s, refreshCandidates=%d, spatialTrials=%d, visibilityBudget=%d, "
          "targetWallFinalLuma=%.5f, targetWallBaseLuma=%.5f, targetWallProbeAddedLuma=%.5f, "
          "firstHitProbeAvgLuma=%.5f, firstHitSunVisibleAvgLuma=%.5f, "
-         "residentCachedCandidates=%.1f, cacheReuseAccepted=%.2f%%, cacheReuseAvgLuma=%.5f, "
+         "residentCachedCandidates=%.1f, readBank=%.1f, writeBank=%.1f, "
+         "readBankInserts=%.1f, writeBankInserts=%.1f, readBankResidents=%.1f, writeBankResidents=%.1f, "
+         "cacheReusePathEntries=%.1f, cacheReuseExtraSampleZero=%.1f, cacheReuseUnavailable=%.1f, "
+         "cacheReuseAttempts=%.1f, cacheReuseSelected=%.1f, cacheReuseSelectMiss=%.1f, "
+         "cacheReuseRejectDistance=%.1f, cacheReuseRejectGeometry=%.1f, cacheReuseRejectVisibility=%.1f, "
+         "cacheReuseSelectLoaded=%.1f, cacheReuseSelectLoadMiss=%.1f, "
+         "cacheReuseSelectRejectDistance=%.1f, cacheReuseSelectRejectGeometry=%.1f, "
+         "cacheReuseAcceptedDistanceBuckets=%.1f/%.1f/%.1f/%.1f, "
+         "cacheReuseAcceptedLumaBuckets=%.1f/%.1f/%.1f/%.1f, "
+         "cacheConnectionReuseAttempts=%.1f, cacheConnectionReuseAccepted=%.1f, "
+         "cacheReuseAccepted=%.2f%%, cacheReuseAvgLuma=%.5f, "
          "diagnosticTargetCacheReuseAttempts=%.1f, "
          "diagnosticTargetCacheSelected=%.1f, diagnosticTargetCacheRejectDistance=%.1f, "
          "diagnosticTargetCacheRejectGeometry=%.1f, diagnosticTargetCacheRejectVisibility=%.1f, "
@@ -2036,18 +2259,50 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow &row,
          accum.sampleCount,
          static_cast<int>(row.probeMode),
          row.cacheReuseWeight,
+         static_cast<int>(row.cacheProposalMode),
+         row.cacheConnectionRadius,
          row.cacheMisStrength,
          static_cast<int>(row.cacheWeightingMode),
          row.adaptiveCacheRefresh ? "on" : "off",
          row.targetedDiagnosticCacheRefresh ? "on" : "off",
          row.cacheRefreshCandidateCount,
          row.cacheSpatialCandidateTrials,
+         row.cacheVisibilityValidationBudget,
          accum.targetWallLuma * invSamples,
          accum.targetWallBaseLuma * invSamples,
          accum.targetWallProbeAddedLuma * invSamples,
          accum.firstHitProbeAvgLuma * invSamples,
          accum.firstHitProbeSunVisibleAvgLuma * invSamples,
          accum.residentCachedCandidates * invSamples,
+         accum.cacheReadBank * invSamples,
+         accum.cacheWriteBank * invSamples,
+         accum.cacheReadBankInserts * invSamples,
+         accum.cacheWriteBankInserts * invSamples,
+         accum.cacheReadBankResidents * invSamples,
+         accum.cacheWriteBankResidents * invSamples,
+         accum.cacheReusePathEntries * invSamples,
+         accum.cacheReuseExtraSampleZero * invSamples,
+         accum.cacheReuseUnavailable * invSamples,
+         accum.cacheReuseAttempts * invSamples,
+         accum.cacheReuseSelected * invSamples,
+         accum.cacheReuseSelectMiss * invSamples,
+         accum.cacheReuseRejectDistance * invSamples,
+         accum.cacheReuseRejectGeometry * invSamples,
+         accum.cacheReuseRejectVisibility * invSamples,
+         accum.cacheReuseSelectLoaded * invSamples,
+         accum.cacheReuseSelectLoadMiss * invSamples,
+         accum.cacheReuseSelectRejectDistance * invSamples,
+         accum.cacheReuseSelectRejectGeometry * invSamples,
+         accum.cacheReuseAcceptedDistanceNear * invSamples,
+         accum.cacheReuseAcceptedDistanceMid * invSamples,
+         accum.cacheReuseAcceptedDistanceFar * invSamples,
+         accum.cacheReuseAcceptedDistanceVeryFar * invSamples,
+         accum.cacheReuseAcceptedLumaDark * invSamples,
+         accum.cacheReuseAcceptedLumaDim * invSamples,
+         accum.cacheReuseAcceptedLumaUseful * invSamples,
+         accum.cacheReuseAcceptedLumaBright * invSamples,
+         accum.cacheConnectionReuseAttempts * invSamples,
+         accum.cacheConnectionReuseAccepted * invSamples,
          accum.cacheReuseAcceptedRatio * invSamples * 100.0,
          accum.cacheReuseAvgLuma * invSamples,
          accum.diagnosticTargetCacheReuseAttempts * invSamples,
@@ -2087,6 +2342,45 @@ void EngineCore::updatePathTracerExperimentSweep()
     ptExperimentAccum.firstHitProbeAvgLuma += stats.firstHitProbeContributionAverage;
     ptExperimentAccum.firstHitProbeSunVisibleAvgLuma += stats.firstHitProbeSunVisibleContributionAverage;
     ptExperimentAccum.residentCachedCandidates += static_cast<double>(stats.residentCachedCandidateCount);
+    ptExperimentAccum.cacheReadBank += static_cast<double>(stats.cacheReadBank);
+    ptExperimentAccum.cacheWriteBank += static_cast<double>(stats.cacheWriteBank);
+    ptExperimentAccum.cacheReadBankInserts += static_cast<double>(stats.cacheReadBankInsertCount);
+    ptExperimentAccum.cacheWriteBankInserts += static_cast<double>(stats.cacheWriteBankInsertCount);
+    ptExperimentAccum.cacheReadBankResidents += static_cast<double>(stats.cacheReadBankResidentCandidateCount);
+    ptExperimentAccum.cacheWriteBankResidents += static_cast<double>(stats.cacheWriteBankResidentCandidateCount);
+    ptExperimentAccum.cacheReusePathEntries += static_cast<double>(stats.cacheReusePathEntryCount);
+    ptExperimentAccum.cacheReuseExtraSampleZero += static_cast<double>(stats.cacheReuseExtraSampleZeroCount);
+    ptExperimentAccum.cacheReuseUnavailable += static_cast<double>(stats.cacheReuseUnavailableCandidateCount);
+    ptExperimentAccum.cacheReuseAttempts += static_cast<double>(stats.cacheReuseAttemptCount);
+    ptExperimentAccum.cacheReuseSelected += static_cast<double>(stats.cacheReuseSelectedCount);
+    ptExperimentAccum.cacheReuseSelectMiss += static_cast<double>(stats.cacheReuseSelectMissCount);
+    ptExperimentAccum.cacheReuseRejectDistance += static_cast<double>(stats.cacheReuseRejectDistanceCount);
+    ptExperimentAccum.cacheReuseRejectGeometry += static_cast<double>(stats.cacheReuseRejectGeometryCount);
+    ptExperimentAccum.cacheReuseRejectVisibility += static_cast<double>(stats.cacheReuseRejectVisibilityCount);
+    ptExperimentAccum.cacheReuseSelectLoaded += static_cast<double>(stats.cacheReuseSelectLoadSuccessCount);
+    ptExperimentAccum.cacheReuseSelectLoadMiss += static_cast<double>(stats.cacheReuseSelectLoadMissCount);
+    ptExperimentAccum.cacheReuseSelectRejectDistance += static_cast<double>(stats.cacheReuseSelectRejectDistanceCount);
+    ptExperimentAccum.cacheReuseSelectRejectGeometry += static_cast<double>(stats.cacheReuseSelectRejectGeometryCount);
+    ptExperimentAccum.cacheReuseAcceptedDistanceNear +=
+        static_cast<double>(stats.cacheReuseAcceptedDistanceNearCount);
+    ptExperimentAccum.cacheReuseAcceptedDistanceMid +=
+        static_cast<double>(stats.cacheReuseAcceptedDistanceMidCount);
+    ptExperimentAccum.cacheReuseAcceptedDistanceFar +=
+        static_cast<double>(stats.cacheReuseAcceptedDistanceFarCount);
+    ptExperimentAccum.cacheReuseAcceptedDistanceVeryFar +=
+        static_cast<double>(stats.cacheReuseAcceptedDistanceVeryFarCount);
+    ptExperimentAccum.cacheReuseAcceptedLumaDark +=
+        static_cast<double>(stats.cacheReuseAcceptedLumaDarkCount);
+    ptExperimentAccum.cacheReuseAcceptedLumaDim +=
+        static_cast<double>(stats.cacheReuseAcceptedLumaDimCount);
+    ptExperimentAccum.cacheReuseAcceptedLumaUseful +=
+        static_cast<double>(stats.cacheReuseAcceptedLumaUsefulCount);
+    ptExperimentAccum.cacheReuseAcceptedLumaBright +=
+        static_cast<double>(stats.cacheReuseAcceptedLumaBrightCount);
+    ptExperimentAccum.cacheConnectionReuseAttempts +=
+        static_cast<double>(stats.cacheConnectionReuseAttempts);
+    ptExperimentAccum.cacheConnectionReuseAccepted +=
+        static_cast<double>(stats.cacheConnectionReuseAccepted);
     ptExperimentAccum.cacheReuseAcceptedRatio += stats.cacheReuseAcceptedRatio;
     ptExperimentAccum.cacheReuseAvgLuma += stats.cacheReuseContributionAverage;
     ptExperimentAccum.diagnosticTargetCacheReuseAttempts += static_cast<double>(stats.diagnosticTargetCacheReuseAttemptCount);
@@ -2316,6 +2610,7 @@ void EngineCore::loadPathTracerIndirectBounceTestSceneIfRequested()
     ui.pathTracerSettings.firstHitDiffuseSamples = 1;
     ui.pathTracerSettings.targetedDiagnosticCacheRefresh = false;
     ui.pathTracerSettings.cacheSpatialCandidateTrials = 8;
+    ui.pathTracerSettings.cacheVisibilityValidationBudget = 7;
     ui.pathTracerAnalysisSettings.debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor;
 
     camera.position = glm::vec3(0.0f, 1.05f, 2.25f);
@@ -2326,6 +2621,73 @@ void EngineCore::loadPathTracerIndirectBounceTestSceneIfRequested()
     ptPrevPitch = camera.pitch;
     ptPrevYaw = camera.yaw;
     ptForceHistoryReset = true;
+}
+
+void EngineCore::loadPathTracerSponzaGiValidationPresetIfRequested()
+{
+    auto &pathTracerAnalysisSettings = ui.pathTracerAnalysisSettings;
+    auto &pathTracerSettings = ui.pathTracerSettings;
+    if (!pathTracerAnalysisSettings.loadSponzaGiValidationPreset) {
+        return;
+    }
+    pathTracerAnalysisSettings.loadSponzaGiValidationPreset = false;
+
+    if (!scene || !resourceManager) {
+        return;
+    }
+
+    scene->clearScene();
+    ptBenchmarkSceneLoaded = false;
+    ptIndirectBounceTargetWallModelId = -1;
+    ptExperimentSweepActive = false;
+    ptExperimentRows.clear();
+
+    pathTracerAnalysisSettings.enableAnalysisMode = true;
+    pathTracerAnalysisSettings.lockBenchmarkScene = true;
+    pathTracerAnalysisSettings.benchmarkActive = false;
+    pathTracerAnalysisSettings.runBaselineSweep = false;
+    pathTracerAnalysisSettings.runGiCacheWeightSweep = false;
+    pathTracerAnalysisSettings.loadIndirectBounceTestScene = false;
+    pathTracerAnalysisSettings.runPhysicalSanityChecks = false;
+    pathTracerAnalysisSettings.physicalSanityActive = false;
+    pathTracerAnalysisSettings.applyDebugLightPreset = false;
+    pathTracerAnalysisSettings.cameraPath = UISystem::PathTracerBenchmarkCameraPath::Static;
+    pathTracerAnalysisSettings.debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor;
+    pathTracerAnalysisSettings.clearSunVisibleCacheRequested = false;
+
+    ui.renderMode = RenderMode::PathTracer;
+    ui.exposure = 1.0f;
+    ui.lightDirection = glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f));
+    pathTracerSettings.enableEnvironmentNEE = true;
+    pathTracerSettings.blackEnvironment = false;
+    pathTracerSettings.applyFirstHitProbesToFinal = true;
+    pathTracerSettings.enableSunVisibleCandidateCache = true;
+    pathTracerSettings.adaptiveCacheRefresh = true;
+    pathTracerSettings.targetedDiagnosticCacheRefresh = false;
+    pathTracerSettings.environmentNeeSamplingMode = UISystem::EnvironmentNeeSamplingMode::SkyBiased;
+    pathTracerSettings.firstHitProbeSamplingMode = UISystem::FirstHitProbeSamplingMode::CachedSecondaryReuse;
+    pathTracerSettings.firstHitDiffuseSamples = 8;
+    pathTracerSettings.firstHitCandidateCount = 4;
+    pathTracerSettings.cacheReuseWeight = 0.126f;
+    pathTracerSettings.cacheConnectionRadius = 14.0f;
+    pathTracerSettings.cacheMisStrength = 1.5f;
+    pathTracerSettings.cacheWeightingMode = UISystem::PathTracerCacheWeightingMode::MisApproximation;
+    pathTracerSettings.cacheRefreshCandidateCount = 1;
+    pathTracerSettings.cacheSpatialCandidateTrials = 1;
+    pathTracerSettings.cacheVisibilityValidationBudget = 1;
+    pathTracerSettings.cacheMaxRecordAgeFrames = 180;
+
+    ptBenchmarkClockSeconds = 0.0f;
+    ptBenchmarkTeleportClockSeconds = 0.0f;
+    camera.position = ptBenchmarkBasePosition;
+    camera.pitch = ptBenchmarkBasePitch;
+    camera.yaw = ptBenchmarkBaseYaw;
+    camera.processInput(0.0f, 0.0f, 0.0f);
+    ptPrevCameraPos = camera.position;
+    ptPrevPitch = camera.pitch;
+    ptPrevYaw = camera.yaw;
+    ptForceHistoryReset = true;
+    clearSunVisibleCandidateCache("sponza GI validation preset");
 }
 
 void EngineCore::writePathTracerBacklogCsv()
