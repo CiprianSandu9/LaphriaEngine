@@ -89,6 +89,14 @@ public:
         ConnectionCache = 2
     };
 
+    enum class PathTracerReservoirGiMode
+    {
+        Off = 0,
+        SingleFrame = 1,
+        Temporal = 2,
+        TemporalSpatial = 3
+    };
+
     struct PathTracerSettings
     {
         float                 resolutionScale = 1.0f;
@@ -107,6 +115,10 @@ public:
         float                 cacheConnectionRadius = 3.5f;
         PathTracerCacheWeightingMode cacheWeightingMode = PathTracerCacheWeightingMode::CalibratedWeight;
         PathTracerCacheProposalMode cacheProposalMode = PathTracerCacheProposalMode::SpatialLocal;
+        PathTracerReservoirGiMode reservoirGiMode = PathTracerReservoirGiMode::Off;
+        int                   reservoirGiCandidateCount = 2;
+        int                   reservoirGiSpatialNeighborCount = 4;
+        bool                  reservoirGiUseCandidateRis = true;
         float                 cacheMisStrength = 1.5f;
         bool                  adaptiveCacheRefresh = true;
         bool                  targetedDiagnosticCacheRefresh = false;
@@ -186,6 +198,13 @@ public:
         uint32_t cacheReuseAcceptedLumaBrightCount = 0;
         uint32_t cacheConnectionReuseAttempts = 0;
         uint32_t cacheConnectionReuseAccepted = 0;
+        uint32_t reservoirGiCandidates = 0;
+        uint32_t reservoirGiAccepted = 0;
+        uint32_t reservoirGiTemporalAccepted = 0;
+        uint32_t reservoirGiTemporalRejected = 0;
+        uint32_t reservoirGiSpatialAccepted = 0;
+        uint32_t reservoirGiSpatialRejected = 0;
+        float reservoirGiAvgLuma = 0.0f;
         uint32_t cacheReuseAttemptCount = 0;
         uint32_t cacheReuseAcceptedCount = 0;
         float cacheReuseAcceptedRatio = 0.0f;

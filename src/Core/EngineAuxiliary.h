@@ -200,6 +200,13 @@ struct PathTracerAnalysisCounters
 	uint32_t cacheReuseAcceptedLumaBrightCount = 0;
 	uint32_t cacheConnectionReuseAttempts = 0;
 	uint32_t cacheConnectionReuseAccepted = 0;
+	uint32_t reservoirGiCandidates = 0;
+	uint32_t reservoirGiAccepted = 0;
+	uint32_t reservoirGiLumaScaledSum = 0;
+	uint32_t reservoirGiTemporalAccepted = 0;
+	uint32_t reservoirGiTemporalRejected = 0;
+	uint32_t reservoirGiSpatialAccepted = 0;
+	uint32_t reservoirGiSpatialRejected = 0;
 };
 
 struct SkinningPushConstants

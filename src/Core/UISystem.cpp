@@ -1142,6 +1142,28 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::SliderInt("Debug A-Trous Iteration", &pathTracerAnalysisSettings.debugAtrousIteration, 0, 4);
     }
 
+    if (ImGui::CollapsingHeader("Reservoir GI")) {
+        const char *reservoirGiModes[] = {"Off", "Single Frame", "Temporal", "Temporal + Spatial"};
+        int reservoirGiMode = static_cast<int>(pathTracerSettings.reservoirGiMode);
+        if (ImGui::Combo("Reservoir GI Mode", &reservoirGiMode,
+                         reservoirGiModes, IM_ARRAYSIZE(reservoirGiModes))) {
+            pathTracerSettings.reservoirGiMode =
+                static_cast<PathTracerReservoirGiMode>(reservoirGiMode);
+        }
+        ImGui::SliderInt("Reservoir GI Candidates", &pathTracerSettings.reservoirGiCandidateCount, 1, 4);
+        ImGui::SliderInt("Reservoir Spatial Neighbors", &pathTracerSettings.reservoirGiSpatialNeighborCount, 1, 8);
+        ImGui::Checkbox("Reservoir GI Candidate RIS", &pathTracerSettings.reservoirGiUseCandidateRis);
+        ImGui::Text("Reservoir GI Candidates: %u", pathTracerPerfStats.reservoirGiCandidates);
+        ImGui::Text("Reservoir GI Accepted: %u", pathTracerPerfStats.reservoirGiAccepted);
+        ImGui::Text("Reservoir GI Temporal: accepted %u | rejected %u",
+                    pathTracerPerfStats.reservoirGiTemporalAccepted,
+                    pathTracerPerfStats.reservoirGiTemporalRejected);
+        ImGui::Text("Reservoir GI Spatial: accepted %u | rejected %u",
+                    pathTracerPerfStats.reservoirGiSpatialAccepted,
+                    pathTracerPerfStats.reservoirGiSpatialRejected);
+        ImGui::Text("Reservoir GI Avg Luma: %.5f", pathTracerPerfStats.reservoirGiAvgLuma);
+    }
+
     if (ImGui::CollapsingHeader("Core Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Text("First-Hit Probe Rays: %u", pathTracerPerfStats.firstHitProbeCount);
         ImGui::Text("First-Hit Probe Surface Hits: %u (%.2f%%)",

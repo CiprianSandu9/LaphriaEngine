@@ -106,6 +106,9 @@ class EngineCore
 		    UISystem::PathTracerCacheWeightingMode::CalibratedWeight;
 		UISystem::PathTracerCacheProposalMode cacheProposalMode =
 		    UISystem::PathTracerCacheProposalMode::SpatialLocal;
+		UISystem::PathTracerReservoirGiMode reservoirGiMode =
+		    UISystem::PathTracerReservoirGiMode::Off;
+		int reservoirGiSpatialNeighborCount = 4;
 		bool adaptiveCacheRefresh = true;
 		bool targetedDiagnosticCacheRefresh = false;
 		bool enableSunVisibleCandidateCache = true;
@@ -158,6 +161,13 @@ class EngineCore
 		double cacheReuseAcceptedLumaBright = 0.0;
 		double cacheConnectionReuseAttempts = 0.0;
 		double cacheConnectionReuseAccepted = 0.0;
+		double reservoirGiCandidates = 0.0;
+		double reservoirGiAccepted = 0.0;
+		double reservoirGiAvgLuma = 0.0;
+		double reservoirGiTemporalAccepted = 0.0;
+		double reservoirGiTemporalRejected = 0.0;
+		double reservoirGiSpatialAccepted = 0.0;
+		double reservoirGiSpatialRejected = 0.0;
 		double cacheReuseAcceptedRatio = 0.0;
 		double cacheReuseAvgLuma = 0.0;
 		double diagnosticTargetCacheReuseAttempts = 0.0;

@@ -47,6 +47,7 @@ FrameContext::~FrameContext()
 	destroyBuffersAndReleaseAllocations(ptAnalysisCounterBuffers);
 	destroyBuffersAndReleaseAllocations(sunVisibleCandidateCacheBuffers);
 	destroyBuffersAndReleaseAllocations(sunVisibleConnectionCacheBuffers);
+	destroyBuffersAndReleaseAllocations(reservoirGiCurrentBuffers);
 	destroyBuffersAndReleaseAllocations(tlasBuffers);
 	destroyBuffersAndReleaseAllocations(tlasScratchBuffers);
 	destroyBuffersAndReleaseAllocations(tlasInstanceBuffers);
@@ -63,6 +64,7 @@ void FrameContext::init(VulkanDevice &dev, SwapchainManager &swapchain) {
     createHistoryResources(dev, swapchain);
     createAtrousResources(dev, swapchain);
     createPathTracerAnalysisResources(dev, swapchain);
+    createReservoirGiCurrentBuffers(dev, swapchain);
     createPathTracerAnalysisBuffers(dev);
     createSunVisibleCandidateCacheBuffers(dev);
     createSunVisibleConnectionCacheBuffers(dev);
@@ -85,6 +87,7 @@ void FrameContext::cleanupSwapChainDependents() {
     destroyImagesAndReleaseAllocations(historyMoments);
     destroyImagesAndReleaseAllocations(atrousTemp);
     destroyImagesAndReleaseAllocations(ptReprojectionDebug);
+    destroyBuffersAndReleaseAllocations(reservoirGiCurrentBuffers);
 
     storageImageViews.clear();
     storageImages.clear();
@@ -110,6 +113,10 @@ void FrameContext::cleanupSwapChainDependents() {
     atrousTemp.clear();
     ptReprojectionDebugViews.clear();
     ptReprojectionDebug.clear();
+    reservoirGiCurrentBuffers.clear();
+    reservoirGiCurrentMapped.clear();
+    reservoirGiCurrentBufferSize = kReservoirGiHeaderSize;
+    reservoirGiCurrentCapacity = 0;
 }
 
 void FrameContext::recreate(VulkanDevice &dev, SwapchainManager &swapchain) {
@@ -121,6 +128,7 @@ void FrameContext::recreate(VulkanDevice &dev, SwapchainManager &swapchain) {
     createHistoryResources(dev, swapchain);
     createAtrousResources(dev, swapchain);
     createPathTracerAnalysisResources(dev, swapchain);
+    createReservoirGiCurrentBuffers(dev, swapchain);
 }
 
 void FrameContext::createCommandPool(const VulkanDevice &dev) {
@@ -721,6 +729,38 @@ void FrameContext::createSunVisibleConnectionCacheBuffers(const VulkanDevice &de
         std::memset(sunVisibleConnectionCacheMapped.back(), 0,
                     static_cast<size_t>(kSunVisibleConnectionCacheBufferSize));
         sunVisibleConnectionCacheBuffers.push_back(std::move(buffer));
+    }
+}
+
+void FrameContext::createReservoirGiCurrentBuffers(const VulkanDevice &dev, const SwapchainManager &swapchain)
+{
+    reservoirGiCurrentBuffers.clear();
+    reservoirGiCurrentMapped.clear();
+    reservoirGiCurrentBuffers.reserve(MAX_FRAMES_IN_FLIGHT);
+    reservoirGiCurrentMapped.reserve(MAX_FRAMES_IN_FLIGHT);
+
+    const uint64_t pixelCapacity =
+        static_cast<uint64_t>(std::max(swapchain.extent.width, 1u)) *
+        static_cast<uint64_t>(std::max(swapchain.extent.height, 1u));
+    reservoirGiCurrentCapacity = static_cast<uint32_t>(
+        std::min<uint64_t>(pixelCapacity, kReservoirGiCurrentCapacity));
+    reservoirGiCurrentBufferSize =
+        kReservoirGiHeaderSize +
+        static_cast<vk::DeviceSize>(reservoirGiCurrentCapacity) * kReservoirGiRecordSize;
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VulkanUtils::VmaBuffer buffer{};
+        VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice,
+                                  reservoirGiCurrentBufferSize,
+                                  vk::BufferUsageFlagBits::eStorageBuffer,
+                                  vk::MemoryPropertyFlagBits::eHostVisible |
+                                      vk::MemoryPropertyFlagBits::eHostCoherent,
+                                  buffer);
+        reservoirGiCurrentMapped.push_back(
+            buffer.memory.mapMemory(0, reservoirGiCurrentBufferSize));
+        std::memset(reservoirGiCurrentMapped.back(), 0,
+                    static_cast<size_t>(reservoirGiCurrentBufferSize));
+        reservoirGiCurrentBuffers.push_back(std::move(buffer));
     }
 }
 

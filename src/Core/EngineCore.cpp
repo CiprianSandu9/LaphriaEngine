@@ -646,6 +646,40 @@ void EngineCore::createRayTracingDescriptorSets() {
             .descriptorType = vk::DescriptorType::eStorageBuffer,
             .pBufferInfo = &sunVisibleConnectionCacheInfo
         };
+        vk::DescriptorBufferInfo reservoirGiCurrentInfo{
+            .buffer = *frames.reservoirGiCurrentBuffers[i],
+            .offset = 0,
+            .range = frames.reservoirGiCurrentBufferSize
+        };
+        // Temporal reservoir history aliases the previous frame slot's current buffer.
+        // This keeps the capped reservoir capacity/record size identical without
+        // allocating a duplicate history buffer set.
+        const size_t reservoirGiHistoryIndex =
+            frames.reservoirGiCurrentBuffers.empty()
+                ? i
+                : (i + frames.reservoirGiCurrentBuffers.size() - 1) %
+                      frames.reservoirGiCurrentBuffers.size();
+        vk::DescriptorBufferInfo reservoirGiHistoryInfo{
+            .buffer = *frames.reservoirGiCurrentBuffers[reservoirGiHistoryIndex],
+            .offset = 0,
+            .range = frames.reservoirGiCurrentBufferSize
+        };
+        vk::WriteDescriptorSet reservoirGiCurrentWrite{
+            .dstSet = *rtDescriptorSets[i],
+            .dstBinding = 12,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .pBufferInfo = &reservoirGiCurrentInfo
+        };
+        vk::WriteDescriptorSet reservoirGiHistoryWrite{
+            .dstSet = *rtDescriptorSets[i],
+            .dstBinding = 13,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .pBufferInfo = &reservoirGiHistoryInfo
+        };
 
         std::vector<vk::WriteDescriptorSet> descriptorWrites;
         descriptorWrites.push_back(tlasWrite);
@@ -656,6 +690,8 @@ void EngineCore::createRayTracingDescriptorSets() {
         descriptorWrites.push_back(analysisCounterWrite);
         descriptorWrites.push_back(sunVisibleCandidateCacheWrite);
         descriptorWrites.push_back(sunVisibleConnectionCacheWrite);
+        descriptorWrites.push_back(reservoirGiCurrentWrite);
+        descriptorWrites.push_back(reservoirGiHistoryWrite);
 
         // Now we extract ALL global vertices, indices, materials, and textures
         // across all Scene Nodes that have been uploaded into VRAM by ResourceManager
@@ -1177,6 +1213,10 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
     rtPush.modelMatrix = glm::mat4(1.0f);
     rtPush.cascadeIndex = ptIndirectBounceTargetWallModelId;
     const uint32_t packedPathTracerMaterialIndex =
+        ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.reservoirGiSpatialNeighborCount, 1, 8) - 1) & 0x7u) << 23) |
+        ((ui.pathTracerSettings.reservoirGiUseCandidateRis ? 1u : 0u) << 22) |
+        ((static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.reservoirGiCandidateCount, 1, 4) - 1) & 0x3u) << 20) |
+        ((static_cast<uint32_t>(ui.pathTracerSettings.reservoirGiMode) & 0x3u) << 18) |
         (static_cast<uint32_t>(std::clamp(ui.pathTracerSettings.cacheMaxRecordAgeFrames, 1, 600)) << 8) |
         (static_cast<uint32_t>(ui.pathTracerSettings.cacheProposalMode) & 0xFFu);
     rtPush.materialIndex = static_cast<int>(packedPathTracerMaterialIndex);
@@ -1642,6 +1682,17 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
     ui.pathTracerPerfStats.cacheReuseAcceptedLumaBrightCount = counters->cacheReuseAcceptedLumaBrightCount;
     ui.pathTracerPerfStats.cacheConnectionReuseAttempts = counters->cacheConnectionReuseAttempts;
     ui.pathTracerPerfStats.cacheConnectionReuseAccepted = counters->cacheConnectionReuseAccepted;
+    ui.pathTracerPerfStats.reservoirGiCandidates = counters->reservoirGiCandidates;
+    ui.pathTracerPerfStats.reservoirGiAccepted = counters->reservoirGiAccepted;
+    ui.pathTracerPerfStats.reservoirGiTemporalAccepted = counters->reservoirGiTemporalAccepted;
+    ui.pathTracerPerfStats.reservoirGiTemporalRejected = counters->reservoirGiTemporalRejected;
+    ui.pathTracerPerfStats.reservoirGiSpatialAccepted = counters->reservoirGiSpatialAccepted;
+    ui.pathTracerPerfStats.reservoirGiSpatialRejected = counters->reservoirGiSpatialRejected;
+    ui.pathTracerPerfStats.reservoirGiAvgLuma =
+        (counters->reservoirGiAccepted > 0)
+            ? static_cast<float>(counters->reservoirGiLumaScaledSum) /
+                  (static_cast<float>(counters->reservoirGiAccepted) * 64.0f)
+            : 0.0f;
     if (frameSlot < frames.sunVisibleCandidateCacheMapped.size() && frames.sunVisibleCandidateCacheMapped[frameSlot]) {
         const auto *cacheBytes = static_cast<const std::byte *>(frames.sunVisibleCandidateCacheMapped[frameSlot]);
         const auto loadU32 = [](const std::byte *src) {
@@ -2035,54 +2086,32 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
             .debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor};
     };
 
-    auto makeSponzaRadiusRow = [&](const char *name, float radius) {
-        auto row = makeSponzaCachedRow(name, 8, 1, true);
-        row.cacheConnectionRadius = radius;
-        return row;
-    };
-
-    auto makeSponzaVisibilityBudgetRow = [&](const char *name, int visibilityBudget) {
-        auto row = makeSponzaCachedRow(name, 8, 1, true);
-        row.cacheConnectionRadius = 14.0f;
-        row.cacheVisibilityValidationBudget = visibilityBudget;
-        return row;
-    };
-
     auto chosenRow = makeSponzaCachedRow("Sponza / Chosen Radius 14 Budget 1", 8, 1, true);
     chosenRow.cacheConnectionRadius = 14.0f;
     chosenRow.cacheVisibilityValidationBudget = 1;
 
-    auto globalNonLocalRow =
-        makeSponzaVisibilityBudgetRow("Sponza / Global Non-Local Radius 14 Budget 1", 1);
-    globalNonLocalRow.cacheProposalMode =
-        UISystem::PathTracerCacheProposalMode::GlobalNonLocal;
+    auto reservoirGiSingleFrameRow = chosenRow;
+    reservoirGiSingleFrameRow.name = "Sponza / Reservoir GI Single Frame";
+    reservoirGiSingleFrameRow.probeMode = UISystem::FirstHitProbeSamplingMode::CandidateRis;
+    reservoirGiSingleFrameRow.reservoirGiMode = UISystem::PathTracerReservoirGiMode::SingleFrame;
+    reservoirGiSingleFrameRow.enableSunVisibleCandidateCache = false;
+    reservoirGiSingleFrameRow.adaptiveCacheRefresh = false;
 
-    auto connectionCacheRow =
-        makeSponzaVisibilityBudgetRow("Sponza / Connection Cache Radius 14 Budget 1", 1);
-    connectionCacheRow.cacheProposalMode =
-        UISystem::PathTracerCacheProposalMode::ConnectionCache;
-    connectionCacheRow.clearCacheBeforeRow = false;
+    auto reservoirGiTemporalRow = reservoirGiSingleFrameRow;
+    reservoirGiTemporalRow.name = "Sponza / Reservoir GI Temporal";
+    reservoirGiTemporalRow.reservoirGiMode = UISystem::PathTracerReservoirGiMode::Temporal;
 
-    auto noRefreshRow = makeSponzaCachedRow("Sponza / Cached Reuse No Refresh", 8, 8, false);
-    noRefreshRow.clearCacheBeforeRow = false;
+    auto reservoirGiTemporalSpatialRow = reservoirGiSingleFrameRow;
+    reservoirGiTemporalSpatialRow.name = "Sponza / Reservoir GI Temporal Spatial";
+    reservoirGiTemporalSpatialRow.reservoirGiMode = UISystem::PathTracerReservoirGiMode::TemporalSpatial;
+    reservoirGiTemporalSpatialRow.reservoirGiSpatialNeighborCount = 4;
 
     ptExperimentRows = {
         makeSponzaCachedRow("Sponza / No First-Hit GI", 1, 1, false),
         chosenRow,
-        globalNonLocalRow,
-        connectionCacheRow,
-        makeSponzaCachedRow("Sponza / Cached Reuse Samples 2", 2, 1, true),
-        makeSponzaCachedRow("Sponza / Cached Reuse Trials 1", 8, 1, true),
-        makeSponzaCachedRow("Sponza / Cached Reuse Trials 4", 8, 4, true),
-        makeSponzaCachedRow("Sponza / Cached Reuse Trials 8", 8, 8, true),
-        noRefreshRow,
-        makeSponzaRadiusRow("Sponza / Radius 3.5", 3.5f),
-        makeSponzaRadiusRow("Sponza / Radius 7.0", 7.0f),
-        makeSponzaRadiusRow("Sponza / Radius 14.0", 14.0f),
-        makeSponzaRadiusRow("Sponza / Radius 28.0", 28.0f),
-        makeSponzaVisibilityBudgetRow("Sponza / Radius 14 Budget 1", 1),
-        makeSponzaVisibilityBudgetRow("Sponza / Radius 14 Budget 2", 2),
-        makeSponzaVisibilityBudgetRow("Sponza / Radius 14 Budget 4", 4)};
+        reservoirGiSingleFrameRow,
+        reservoirGiTemporalRow,
+        reservoirGiTemporalSpatialRow};
 
     ptExperimentSweepActive = !ptExperimentRows.empty();
     ptExperimentRowIndex = 0;
@@ -2107,6 +2136,11 @@ void EngineCore::clearPathTracerExperimentCache()
     for (void *mapped : frames.sunVisibleConnectionCacheMapped) {
         if (mapped) {
             std::memset(mapped, 0, static_cast<size_t>(FrameContext::kSunVisibleConnectionCacheBufferSize));
+        }
+    }
+    for (void *mapped : frames.reservoirGiCurrentMapped) {
+        if (mapped) {
+            std::memset(mapped, 0, static_cast<size_t>(frames.reservoirGiCurrentBufferSize));
         }
     }
 }
@@ -2155,6 +2189,13 @@ void EngineCore::clearSunVisibleCandidateCache(const char *reason)
     ui.pathTracerPerfStats.cacheReuseAcceptedLumaBrightCount = 0;
     ui.pathTracerPerfStats.cacheConnectionReuseAttempts = 0;
     ui.pathTracerPerfStats.cacheConnectionReuseAccepted = 0;
+    ui.pathTracerPerfStats.reservoirGiCandidates = 0;
+    ui.pathTracerPerfStats.reservoirGiAccepted = 0;
+    ui.pathTracerPerfStats.reservoirGiTemporalAccepted = 0;
+    ui.pathTracerPerfStats.reservoirGiTemporalRejected = 0;
+    ui.pathTracerPerfStats.reservoirGiSpatialAccepted = 0;
+    ui.pathTracerPerfStats.reservoirGiSpatialRejected = 0;
+    ui.pathTracerPerfStats.reservoirGiAvgLuma = 0.0f;
     ui.pathTracerPerfStats.cacheReuseAttemptCount = 0;
     ui.pathTracerPerfStats.cacheReuseAcceptedCount = 0;
     ui.pathTracerPerfStats.cacheReuseAcceptedRatio = 0.0f;
@@ -2212,6 +2253,8 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
     settings.cacheMisStrength = row.cacheMisStrength;
     settings.cacheWeightingMode = row.cacheWeightingMode;
     settings.cacheProposalMode = row.cacheProposalMode;
+    settings.reservoirGiMode = row.reservoirGiMode;
+    settings.reservoirGiSpatialNeighborCount = row.reservoirGiSpatialNeighborCount;
     settings.adaptiveCacheRefresh = row.adaptiveCacheRefresh;
     settings.targetedDiagnosticCacheRefresh = row.targetedDiagnosticCacheRefresh;
     settings.cacheRefreshCandidateCount = row.cacheRefreshCandidateCount;
@@ -2235,7 +2278,7 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow &row,
 {
     const double invSamples = (accum.sampleCount > 0) ? (1.0 / static_cast<double>(accum.sampleCount)) : 0.0;
     LOGI("PT Experiment Row: name=\"%s\", samples=%u, mode=%d, cacheWeight=%.3f, proposalMode=%d, "
-         "connectionRadius=%.2f, misStrength=%.2f, weighting=%d, refresh=%s, targetRefresh=%s, refreshCandidates=%d, spatialTrials=%d, visibilityBudget=%d, "
+         "reservoirGiMode=%d, connectionRadius=%.2f, misStrength=%.2f, weighting=%d, refresh=%s, targetRefresh=%s, refreshCandidates=%d, spatialTrials=%d, visibilityBudget=%d, "
          "targetWallFinalLuma=%.5f, targetWallBaseLuma=%.5f, targetWallProbeAddedLuma=%.5f, "
          "firstHitProbeAvgLuma=%.5f, firstHitSunVisibleAvgLuma=%.5f, "
          "residentCachedCandidates=%.1f, readBank=%.1f, writeBank=%.1f, "
@@ -2248,6 +2291,9 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow &row,
          "cacheReuseAcceptedDistanceBuckets=%.1f/%.1f/%.1f/%.1f, "
          "cacheReuseAcceptedLumaBuckets=%.1f/%.1f/%.1f/%.1f, "
          "cacheConnectionReuseAttempts=%.1f, cacheConnectionReuseAccepted=%.1f, "
+         "reservoirGiCandidates=%.1f, reservoirGiAccepted=%.1f, reservoirGiAvgLuma=%.5f, "
+         "reservoirGiTemporalAccepted=%.1f, reservoirGiTemporalRejected=%.1f, "
+         "reservoirGiSpatialAccepted=%.1f, reservoirGiSpatialRejected=%.1f, "
          "cacheReuseAccepted=%.2f%%, cacheReuseAvgLuma=%.5f, "
          "diagnosticTargetCacheReuseAttempts=%.1f, "
          "diagnosticTargetCacheSelected=%.1f, diagnosticTargetCacheRejectDistance=%.1f, "
@@ -2260,6 +2306,7 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow &row,
          static_cast<int>(row.probeMode),
          row.cacheReuseWeight,
          static_cast<int>(row.cacheProposalMode),
+         static_cast<int>(row.reservoirGiMode),
          row.cacheConnectionRadius,
          row.cacheMisStrength,
          static_cast<int>(row.cacheWeightingMode),
@@ -2303,6 +2350,13 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow &row,
          accum.cacheReuseAcceptedLumaBright * invSamples,
          accum.cacheConnectionReuseAttempts * invSamples,
          accum.cacheConnectionReuseAccepted * invSamples,
+         accum.reservoirGiCandidates * invSamples,
+         accum.reservoirGiAccepted * invSamples,
+         accum.reservoirGiAvgLuma * invSamples,
+         accum.reservoirGiTemporalAccepted * invSamples,
+         accum.reservoirGiTemporalRejected * invSamples,
+         accum.reservoirGiSpatialAccepted * invSamples,
+         accum.reservoirGiSpatialRejected * invSamples,
          accum.cacheReuseAcceptedRatio * invSamples * 100.0,
          accum.cacheReuseAvgLuma * invSamples,
          accum.diagnosticTargetCacheReuseAttempts * invSamples,
@@ -2381,6 +2435,20 @@ void EngineCore::updatePathTracerExperimentSweep()
         static_cast<double>(stats.cacheConnectionReuseAttempts);
     ptExperimentAccum.cacheConnectionReuseAccepted +=
         static_cast<double>(stats.cacheConnectionReuseAccepted);
+    ptExperimentAccum.reservoirGiCandidates +=
+        static_cast<double>(stats.reservoirGiCandidates);
+    ptExperimentAccum.reservoirGiAccepted +=
+        static_cast<double>(stats.reservoirGiAccepted);
+    ptExperimentAccum.reservoirGiAvgLuma +=
+        static_cast<double>(stats.reservoirGiAvgLuma);
+    ptExperimentAccum.reservoirGiTemporalAccepted +=
+        static_cast<double>(stats.reservoirGiTemporalAccepted);
+    ptExperimentAccum.reservoirGiTemporalRejected +=
+        static_cast<double>(stats.reservoirGiTemporalRejected);
+    ptExperimentAccum.reservoirGiSpatialAccepted +=
+        static_cast<double>(stats.reservoirGiSpatialAccepted);
+    ptExperimentAccum.reservoirGiSpatialRejected +=
+        static_cast<double>(stats.reservoirGiSpatialRejected);
     ptExperimentAccum.cacheReuseAcceptedRatio += stats.cacheReuseAcceptedRatio;
     ptExperimentAccum.cacheReuseAvgLuma += stats.cacheReuseContributionAverage;
     ptExperimentAccum.diagnosticTargetCacheReuseAttempts += static_cast<double>(stats.diagnosticTargetCacheReuseAttemptCount);
