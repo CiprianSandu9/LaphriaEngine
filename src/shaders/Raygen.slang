@@ -74,6 +74,7 @@ static const int DIRECT_SUN_BOUNCE_FIRST_TWO = 2;
 static const int RESERVOIR_GI_CANDIDATE_TRACE_ONLY = 0;
 static const int RESERVOIR_GI_CANDIDATE_UNSHADOWED_SUN = 1;
 static const int RESERVOIR_GI_CANDIDATE_SHADOWED_SUN = 2;
+static const float RESERVOIR_GI_TEMPORAL_REUSE_LUMA_THRESHOLD = 0.025;
 static const uint PT_MATERIAL_RESERVOIR_PROPOSAL_SHIFT = 0u;
 static const uint PT_MATERIAL_RESERVOIR_PROPOSAL_MASK = 0x3u;
 static const uint PT_MATERIAL_RESERVOIR_MODE_SHIFT = 18u;
@@ -115,6 +116,10 @@ static const uint reservoirGiCandidateSunVisibleOffset = 92u;
 static const uint reservoirGiCandidatePositiveWeightOffset = 96u;
 static const uint reservoirGiZeroWeightOffset = 100u;
 static const uint reservoirGiSelectedWeightScaledSumOffset = 104u;
+static const uint reservoirGiTemporalReuseAttemptsOffset = 108u;
+static const uint reservoirGiTemporalRejectGeometryOffset = 112u;
+static const uint reservoirGiTemporalRejectVisibilityOffset = 116u;
+static const uint reservoirGiTemporalRejectLightOffset = 120u;
 
 struct FirstHitDiffuseBounceResult {
     float3 totalContribution;
@@ -331,6 +336,7 @@ bool loadTemporalReservoirGi(uint2 pixel,
                              float currentPrimaryDepth,
                              out ReservoirGiRecord record)
 {
+    ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalReuseAttemptsOffset, 1u);
     record.primaryPosition = float3(0.0, 0.0, 0.0);
     record.candidatePosition = float3(0.0, 0.0, 0.0);
     record.primaryNormal = float3(0.0, 0.0, 0.0);
@@ -343,6 +349,7 @@ bool loadTemporalReservoirGi(uint2 pixel,
 
     uint pixelIndex = pixel.y * launchSize.x + pixel.x;
     if (pixelIndex >= RESERVOIR_GI_CURRENT_CAPACITY) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectGeometryOffset, 1u);
         return false;
     }
 
@@ -354,15 +361,18 @@ bool loadTemporalReservoirGi(uint2 pixel,
         historyWidth != launchSize.x ||
         historyHeight != launchSize.y ||
         pixelIndex >= historyCapacity) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectGeometryOffset, 1u);
         return false;
     }
 
     uint offset = reservoirGiRecordOffset(pixelIndex);
     record = loadReservoirGiHistoryRecord(offset);
     if ((record.flags & 1u) == 0u) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectLightOffset, 1u);
         return false;
     }
     if (record.frameId == 0u || record.frameId + 1u != ubo.frameCount) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectGeometryOffset, 1u);
         return false;
     }
     if (!isSaneReservoirGiVector(record.primaryPosition, 100000.0) ||
@@ -370,16 +380,19 @@ bool loadTemporalReservoirGi(uint2 pixel,
         !isSaneReservoirGiVector(record.primaryNormal, 1.1) ||
         !isSaneReservoirGiVector(record.contribution, 64.0) ||
         !isSaneReservoirGiVector(record.secondaryDirectSun, 64.0)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectGeometryOffset, 1u);
         return false;
     }
     if (!isFinitePositive(record.selectedWeight) ||
         !isFinitePositive(record.weightSum) ||
         pathTracerLuminance(record.contribution) <= 0.0) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectLightOffset, 1u);
         return false;
     }
 
     float previousDepth = length(record.primaryPosition - ubo.cameraPos.xyz);
     if (abs(previousDepth - currentPrimaryDepth) > 0.1) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectGeometryOffset, 1u);
         return false;
     }
     float3 previousPrimaryNormal = normalize(record.primaryNormal);
@@ -387,6 +400,7 @@ bool loadTemporalReservoirGi(uint2 pixel,
     if (!isSaneReservoirGiVector(previousPrimaryNormal, 1.1) ||
         !isSaneReservoirGiVector(currentNormal, 1.1) ||
         dot(previousPrimaryNormal, currentNormal) < 0.8) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectGeometryOffset, 1u);
         return false;
     }
     return true;
@@ -591,6 +605,132 @@ float3 evaluateUnshadowedDirectSunContribution(float3 hitPos, float3 N, float3 V
                                                float3 throughput, RayPayload payload)
 {
     return evaluateDirectSunContributionInternal(hitPos, N, V, throughput, payload, false);
+}
+
+bool reconnectTemporalReservoirGi(float3 currentPrimaryPosition,
+                                  float3 currentPrimaryNormal,
+                                  float3 currentViewDirection,
+                                  RayPayload currentPrimaryPayload,
+                                  ReservoirGiRecord temporalRecord,
+                                  int reservoirGiCandidateEvaluationMode,
+                                  out float3 reconnectedContribution,
+                                  out float3 reconnectedSecondarySun,
+                                  out float3 reconnectedCandidatePosition,
+                                  out float reconnectedWeight,
+                                  out bool reconnectedSurfaceHit,
+                                  out bool reconnectedSunVisible)
+{
+    reconnectedContribution = float3(0.0, 0.0, 0.0);
+    reconnectedSecondarySun = float3(0.0, 0.0, 0.0);
+    reconnectedCandidatePosition = temporalRecord.candidatePosition;
+    reconnectedWeight = 0.0;
+    reconnectedSurfaceHit = false;
+    reconnectedSunVisible = false;
+
+    if (!isSaneReservoirGiVector(currentPrimaryPosition, 100000.0) ||
+        !isSaneReservoirGiVector(currentPrimaryNormal, 1.1) ||
+        !isSaneReservoirGiVector(currentViewDirection, 1.1) ||
+        !isSaneReservoirGiVector(temporalRecord.candidatePosition, 100000.0)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectGeometryOffset, 1u);
+        return false;
+    }
+
+    float3 primaryToCandidate = temporalRecord.candidatePosition - currentPrimaryPosition;
+    float primaryToCandidateDistance = length(primaryToCandidate);
+    if (primaryToCandidateDistance <= 0.01 || !isFinitePositive(primaryToCandidateDistance)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectGeometryOffset, 1u);
+        return false;
+    }
+
+    float3 bounceDir = primaryToCandidate / primaryToCandidateDistance;
+    float NdotBounce = max(dot(currentPrimaryNormal, bounceDir), 0.0);
+    if (NdotBounce <= 0.0001 || !isSaneReservoirGiVector(bounceDir, 1.1)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectGeometryOffset, 1u);
+        return false;
+    }
+
+    float3 reconnectOrigin = currentPrimaryPosition + currentPrimaryNormal * 0.002;
+    float3 reconnectVector = temporalRecord.candidatePosition - reconnectOrigin;
+    float reconnectDistance = length(reconnectVector);
+    if (reconnectDistance <= 0.01 || !isFinitePositive(reconnectDistance)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectGeometryOffset, 1u);
+        return false;
+    }
+
+    float3 reconnectDir = reconnectVector / reconnectDistance;
+    RayPayload reconnectPayload;
+    reconnectPayload.hitT = -1.0;
+    RayDesc reconnectRay;
+    reconnectRay.Origin = reconnectOrigin;
+    reconnectRay.Direction = reconnectDir;
+    reconnectRay.TMin = 0.001;
+    reconnectRay.TMax = reconnectDistance + max(0.05, reconnectDistance * 0.02);
+    TraceRay(tlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, reconnectRay, reconnectPayload);
+
+    if (reconnectPayload.hitT < 0.0) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectVisibilityOffset, 1u);
+        return false;
+    }
+
+    float hitDistanceError = abs(reconnectPayload.hitT - reconnectDistance);
+    if (hitDistanceError > max(0.05, reconnectDistance * 0.02) ||
+        !isSaneReservoirGiVector(reconnectPayload.hitPos, 100000.0) ||
+        !isSaneReservoirGiVector(reconnectPayload.worldNormal, 1.1)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectVisibilityOffset, 1u);
+        return false;
+    }
+
+    float3 F = fresnelSchlick(max(dot(currentPrimaryNormal, currentViewDirection), 0.0),
+                              currentPrimaryPayload.F0);
+    float3 kD = (float3(1.0, 1.0, 1.0) - F) * (1.0 - currentPrimaryPayload.metallic);
+    float3 diffuseBsdf = kD * currentPrimaryPayload.albedo / PI;
+    float reconnectPdfProxy = max(NdotBounce / PI, 0.0001);
+    float3 firstLegThroughput = diffuseBsdf * NdotBounce / reconnectPdfProxy;
+    if (!isSaneReservoirGiVector(firstLegThroughput, 64.0)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectLightOffset, 1u);
+        return false;
+    }
+
+    float3 secondaryViewDirection = -bounceDir;
+    reconnectedSurfaceHit = true;
+    reconnectedCandidatePosition = reconnectPayload.hitPos;
+    float3 emissiveContribution = firstLegThroughput * reconnectPayload.emission;
+    if (reservoirGiCandidateEvaluationMode == RESERVOIR_GI_CANDIDATE_UNSHADOWED_SUN) {
+        reconnectedSecondarySun = evaluateUnshadowedDirectSunContribution(reconnectPayload.hitPos,
+                                                                          reconnectPayload.worldNormal,
+                                                                          secondaryViewDirection,
+                                                                          firstLegThroughput,
+                                                                          reconnectPayload);
+    } else if (reservoirGiCandidateEvaluationMode == RESERVOIR_GI_CANDIDATE_SHADOWED_SUN) {
+        reconnectedSecondarySun = evaluateDirectSunContribution(reconnectPayload.hitPos,
+                                                               reconnectPayload.worldNormal,
+                                                               secondaryViewDirection,
+                                                               firstLegThroughput,
+                                                               reconnectPayload);
+    }
+    reconnectedContribution = sanitizeReservoirGiContribution(emissiveContribution + reconnectedSecondarySun);
+    reconnectedSecondarySun = sanitizeReservoirGiContribution(reconnectedSecondarySun);
+    reconnectedWeight = pathTracerLuminance(reconnectedContribution);
+    reconnectedSunVisible = pathTracerLuminance(reconnectedSecondarySun) > 0.000001;
+
+    if (!isFinitePositive(reconnectedWeight)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectLightOffset, 1u);
+        return false;
+    }
+    return true;
+}
+
+bool shouldAttemptTemporalReservoirGi(bool acceptedReservoir,
+                                      float selectedWeight,
+                                      float3 reservoirTotal)
+{
+    if (!acceptedReservoir) {
+        return true;
+    }
+
+    float reservoirLuma = pathTracerLuminance(reservoirTotal);
+    return selectedWeight < RESERVOIR_GI_TEMPORAL_REUSE_LUMA_THRESHOLD ||
+           reservoirLuma < RESERVOIR_GI_TEMPORAL_REUSE_LUMA_THRESHOLD;
 }
 
 FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N, float3 V, RayPayload payload,
@@ -1107,33 +1247,49 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     result.reservoirCandidatePositiveWeightRatio = float(candidatePositiveWeightCount) * invCandidateCount;
     result.reservoirSelectedWeight = selectedWeight;
 
-    if (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL) {
+    if (shouldAttemptTemporalReservoirGi(acceptedReservoir, selectedWeight, reservoirTotal) &&
+        reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL) {
         ReservoirGiRecord temporalRecord;
         if (loadTemporalReservoirGi(launchID, launchSize, N, payload.hitT, temporalRecord)) {
-            ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalAcceptedOffset, 1u);
-            float temporalWeight = max(temporalRecord.selectedWeight,
-                                       pathTracerLuminance(temporalRecord.contribution));
-            if (!acceptedReservoir) {
-                reservoirTotal = sanitizeReservoirGiContribution(temporalRecord.contribution);
-                reservoirSecondarySun = sanitizeReservoirGiContribution(temporalRecord.secondaryDirectSun);
-                selectedPosition = temporalRecord.candidatePosition;
-                selectedWeight = temporalWeight;
-                reservoirWeightSum = max(temporalRecord.weightSum, temporalWeight);
-                selectedSurfaceHit = (temporalRecord.flags & 2u) != 0u;
-                selectedSunVisible = (temporalRecord.flags & 4u) != 0u;
-                acceptedReservoir = selectedWeight > 0.0 &&
-                                    isFinitePositive(pathTracerLuminance(reservoirTotal));
-            } else {
-                float combinedWeightSum = max(reservoirWeightSum + temporalWeight, 0.000001);
-                if (randomFloat(rngState) < temporalWeight / combinedWeightSum) {
-                    reservoirTotal = sanitizeReservoirGiContribution(temporalRecord.contribution);
-                    reservoirSecondarySun = sanitizeReservoirGiContribution(temporalRecord.secondaryDirectSun);
-                    selectedPosition = temporalRecord.candidatePosition;
+            float3 temporalContribution;
+            float3 temporalSecondarySun;
+            float3 temporalCandidatePosition;
+            float temporalWeight;
+            bool temporalSurfaceHit;
+            bool temporalSunVisible;
+            if (reconnectTemporalReservoirGi(hitPos, N, V, payload, temporalRecord,
+                                             reservoirGiCandidateEvaluationMode,
+                                             temporalContribution,
+                                             temporalSecondarySun,
+                                             temporalCandidatePosition,
+                                             temporalWeight,
+                                             temporalSurfaceHit,
+                                             temporalSunVisible)) {
+                ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalAcceptedOffset, 1u);
+                if (!acceptedReservoir) {
+                    reservoirTotal = temporalContribution;
+                    reservoirSecondarySun = temporalSecondarySun;
+                    selectedPosition = temporalCandidatePosition;
                     selectedWeight = temporalWeight;
-                    selectedSurfaceHit = (temporalRecord.flags & 2u) != 0u;
-                    selectedSunVisible = (temporalRecord.flags & 4u) != 0u;
+                    reservoirWeightSum = max(temporalRecord.weightSum, temporalWeight);
+                    selectedSurfaceHit = temporalSurfaceHit;
+                    selectedSunVisible = temporalSunVisible;
+                    acceptedReservoir = selectedWeight > 0.0 &&
+                                        isFinitePositive(pathTracerLuminance(reservoirTotal));
+                } else {
+                    float combinedWeightSum = max(reservoirWeightSum + temporalWeight, 0.000001);
+                    if (randomFloat(rngState) < temporalWeight / combinedWeightSum) {
+                        reservoirTotal = temporalContribution;
+                        reservoirSecondarySun = temporalSecondarySun;
+                        selectedPosition = temporalCandidatePosition;
+                        selectedWeight = temporalWeight;
+                        selectedSurfaceHit = temporalSurfaceHit;
+                        selectedSunVisible = temporalSunVisible;
+                    }
+                    reservoirWeightSum = combinedWeightSum;
                 }
-                reservoirWeightSum = combinedWeightSum;
+            } else {
+                ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectedOffset, 1u);
             }
         } else {
             ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalRejectedOffset, 1u);

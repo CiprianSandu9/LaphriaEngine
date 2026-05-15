@@ -1167,6 +1167,11 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::Text("Reservoir GI Temporal: accepted %u | rejected %u",
                     pathTracerPerfStats.reservoirGiTemporalAccepted,
                     pathTracerPerfStats.reservoirGiTemporalRejected);
+        ImGui::Text("Reservoir GI Temporal Reuse: attempts %u | geometry %u | visibility %u | light %u",
+                    pathTracerPerfStats.reservoirGiTemporalReuseAttempts,
+                    pathTracerPerfStats.reservoirGiTemporalRejectGeometry,
+                    pathTracerPerfStats.reservoirGiTemporalRejectVisibility,
+                    pathTracerPerfStats.reservoirGiTemporalRejectLight);
         ImGui::Text("Reservoir GI Spatial: accepted %u | rejected %u",
                     pathTracerPerfStats.reservoirGiSpatialAccepted,
                     pathTracerPerfStats.reservoirGiSpatialRejected);

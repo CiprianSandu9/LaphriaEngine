@@ -175,6 +175,10 @@ public:
         uint32_t reservoirGiZeroWeight = 0;
         uint32_t reservoirGiTemporalAccepted = 0;
         uint32_t reservoirGiTemporalRejected = 0;
+        uint32_t reservoirGiTemporalReuseAttempts = 0;
+        uint32_t reservoirGiTemporalRejectGeometry = 0;
+        uint32_t reservoirGiTemporalRejectVisibility = 0;
+        uint32_t reservoirGiTemporalRejectLight = 0;
         uint32_t reservoirGiSpatialAccepted = 0;
         uint32_t reservoirGiSpatialRejected = 0;
         float reservoirGiAcceptedAvgLuma = 0.0f;

@@ -1804,6 +1804,10 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	ui.pathTracerPerfStats.reservoirGiZeroWeight                  = counters->reservoirGiZeroWeight;
 	ui.pathTracerPerfStats.reservoirGiTemporalAccepted            = counters->reservoirGiTemporalAccepted;
 	ui.pathTracerPerfStats.reservoirGiTemporalRejected            = counters->reservoirGiTemporalRejected;
+	ui.pathTracerPerfStats.reservoirGiTemporalReuseAttempts       = counters->reservoirGiTemporalReuseAttempts;
+	ui.pathTracerPerfStats.reservoirGiTemporalRejectGeometry      = counters->reservoirGiTemporalRejectGeometry;
+	ui.pathTracerPerfStats.reservoirGiTemporalRejectVisibility    = counters->reservoirGiTemporalRejectVisibility;
+	ui.pathTracerPerfStats.reservoirGiTemporalRejectLight         = counters->reservoirGiTemporalRejectLight;
 	ui.pathTracerPerfStats.reservoirGiSpatialAccepted             = counters->reservoirGiSpatialAccepted;
 	ui.pathTracerPerfStats.reservoirGiSpatialRejected             = counters->reservoirGiSpatialRejected;
 	ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum =
@@ -2143,6 +2147,10 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		                     "Reservoir 1C Shadowed Sun First Mixed",
 		                     1,
 		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided);
+		auto reservoirMixedTemporalRow = reservoirMixedRow;
+		reservoirMixedTemporalRow.name =
+		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal");
+		reservoirMixedTemporalRow.reservoirGiMode = UISystem::PathTracerReservoirGiMode::Temporal;
 		auto reservoirMixedTwoCandidateRow =
 		    makeReservoirRow(scenario,
 		                     "Reservoir 2C Shadowed Sun First Mixed",
@@ -2160,6 +2168,7 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		ptExperimentRows.push_back(reservoirSunFirstRow);
 		ptExperimentRows.push_back(reservoirSunGuidedRow);
 		ptExperimentRows.push_back(reservoirMixedRow);
+		ptExperimentRows.push_back(reservoirMixedTemporalRow);
 		ptExperimentRows.push_back(reservoirMixedTwoCandidateRow);
 		ptExperimentRows.push_back(reservoirMixedTwoCandidateRisRow);
 	}
@@ -2244,7 +2253,8 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "reservoirGiAcceptedAvgLuma=%.5f, reservoirGiAcceptedLumaSum=%.1f, "
 	     "reservoirGiCandidateSurfaceHit=%.2f%%, reservoirGiCandidateSunVisible=%.2f%%, "
 	     "reservoirGiCandidatePositiveWeight=%.2f%%, reservoirGiZeroWeight=%.1f, "
-	     "reservoirGiSelectedWeightAvg=%.5f, "
+	     "reservoirGiSelectedWeightAvg=%.5f, temporalAccepted=%.1f, temporalReuseAttempts=%.1f, "
+	     "temporalRejectGeometry=%.1f, temporalRejectVisibility=%.1f, temporalRejectLight=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
 	     row.name.c_str(),
 	     accum.sampleCount,
@@ -2267,6 +2277,11 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.reservoirGiCandidatePositiveWeightRatio * invSamples * 100.0,
 	     accum.reservoirGiZeroWeight * invSamples,
 	     accum.reservoirGiSelectedWeightAverage * invSamples,
+	     accum.reservoirGiTemporalAccepted * invSamples,
+	     accum.reservoirGiTemporalReuseAttempts * invSamples,
+	     accum.reservoirGiTemporalRejectGeometry * invSamples,
+	     accum.reservoirGiTemporalRejectVisibility * invSamples,
+	     accum.reservoirGiTemporalRejectLight * invSamples,
 	     accum.rayTraceMs * invSamples,
 	     accum.totalFrameMs * invSamples);
 }
@@ -2318,6 +2333,14 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiTemporalAccepted);
 	ptExperimentAccum.reservoirGiTemporalRejected +=
 	    static_cast<double>(stats.reservoirGiTemporalRejected);
+	ptExperimentAccum.reservoirGiTemporalReuseAttempts +=
+	    static_cast<double>(stats.reservoirGiTemporalReuseAttempts);
+	ptExperimentAccum.reservoirGiTemporalRejectGeometry +=
+	    static_cast<double>(stats.reservoirGiTemporalRejectGeometry);
+	ptExperimentAccum.reservoirGiTemporalRejectVisibility +=
+	    static_cast<double>(stats.reservoirGiTemporalRejectVisibility);
+	ptExperimentAccum.reservoirGiTemporalRejectLight +=
+	    static_cast<double>(stats.reservoirGiTemporalRejectLight);
 	ptExperimentAccum.reservoirGiSpatialAccepted +=
 	    static_cast<double>(stats.reservoirGiSpatialAccepted);
 	ptExperimentAccum.reservoirGiSpatialRejected +=

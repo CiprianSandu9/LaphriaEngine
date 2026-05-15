@@ -174,6 +174,10 @@ struct PathTracerAnalysisCounters
 	uint32_t reservoirGiCandidatePositiveWeight = 0;
 	uint32_t reservoirGiZeroWeight = 0;
 	uint32_t reservoirGiSelectedWeightScaledSum = 0;
+	uint32_t reservoirGiTemporalReuseAttempts = 0;
+	uint32_t reservoirGiTemporalRejectGeometry = 0;
+	uint32_t reservoirGiTemporalRejectVisibility = 0;
+	uint32_t reservoirGiTemporalRejectLight = 0;
 };
 
 struct SkinningPushConstants

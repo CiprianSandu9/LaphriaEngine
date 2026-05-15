@@ -141,6 +141,10 @@ class EngineCore
 		double reservoirGiSelectedWeightAverage = 0.0;
 		double reservoirGiTemporalAccepted = 0.0;
 		double reservoirGiTemporalRejected = 0.0;
+		double reservoirGiTemporalReuseAttempts = 0.0;
+		double reservoirGiTemporalRejectGeometry = 0.0;
+		double reservoirGiTemporalRejectVisibility = 0.0;
+		double reservoirGiTemporalRejectLight = 0.0;
 		double reservoirGiSpatialAccepted = 0.0;
 		double reservoirGiSpatialRejected = 0.0;
 		double rayTraceMs = 0.0;
