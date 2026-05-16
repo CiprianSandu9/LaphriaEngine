@@ -279,7 +279,11 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "float3 emissiveContribution = bouncePayload.emission",
 	    "float3 candidateSecondarySunSuffix = evaluateReservoirGiSecondarySunSuffix",
 	    "candidateSecondarySun = sanitizeReservoirGiContribution(firstLegThroughput * candidateSecondarySunSuffix)",
-	    "float3 candidateSuffixRadiance = emissiveContribution + candidateSecondarySunSuffix",
+	    "float3 baseSuffixRadiance = emissiveContribution + candidateSecondarySunSuffix",
+	    "shouldAttemptReservoirGiCacheContinuation",
+	    "RESERVOIR_GI_CACHE_CONTINUATION_BUDGET_DIVISOR",
+	    "RESERVOIR_GI_CACHE_CONTINUATION_BASE_LUMA_THRESHOLD",
+	    "float3 candidateSuffixRadiance = baseSuffixRadiance + cacheContinuationSuffixRadiance",
 	    "reconnectedSecondarySun = sanitizeReservoirGiContribution(firstLegThroughput * reconnectedSecondarySunSuffix)",
 	    "float3 selectedSuffixRadiance",
 	    "ReservoirGiRecord candidateRecord = localRecord",
@@ -851,7 +855,15 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    {"reservoirGiReceiverReconnectAccepted",
 	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiReceiverReconnectAccepted), 284u},
 	    {"reservoirGiSelectedCacheReconnect",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiSelectedCacheReconnect), 288u}};
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiSelectedCacheReconnect), 288u},
+	    {"reservoirGiReceiverCacheContinuationAttempt",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiReceiverCacheContinuationAttempt), 292u},
+	    {"reservoirGiReceiverCacheContinuationHit",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiReceiverCacheContinuationHit), 296u},
+	    {"reservoirGiReceiverCacheContinuationMiss",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiReceiverCacheContinuationMiss), 300u},
+	    {"reservoirGiReceiverCacheContinuationAccepted",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiReceiverCacheContinuationAccepted), 304u}};
 	for (const auto &counterOffset : counterOffsets)
 	{
 		if (counterOffset.offset != counterOffset.expectedOffset)
@@ -891,8 +903,8 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "reservoirGiConfidenceMAvg=%.5f",
 	    "reservoirGiConfidenceMAvg",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N",
-	    "reservoirMixedTemporalSpatialTwoNeighborRow.reservoirGiMode = UISystem::PathTracerReservoirGiMode::TemporalSpatial",
-	    "reservoirMixedTemporalSpatialTwoNeighborRow.reservoirGiSpatialNeighborCount = 2",
+	    "reservoirMixedTemporalSpatialBudget2Row.reservoirGiMode = UISystem::PathTracerReservoirGiMode::TemporalSpatial",
+	    "reservoirMixedTemporalSpatialBudget2Row.reservoirGiSpatialNeighborCount = 2",
 	    "PT Experiment Row Summary:",
 	    "ptExperimentCompletionLog",
 	    "PT Experiment Sweep: Sponza PT/GI audit sweep complete"};
@@ -1239,6 +1251,13 @@ bool testPathTracerDebugAovContract()
 	    "reservoirGiReceiverReconnectRejectTargetOffset",
 	    "reservoirGiReceiverReconnectAcceptedOffset",
 	    "reservoirGiSelectedCacheReconnectOffset",
+	    "reservoirGiReceiverCacheContinuationAttemptOffset",
+	    "reservoirGiReceiverCacheContinuationHitOffset",
+	    "reservoirGiReceiverCacheContinuationMissOffset",
+	    "reservoirGiReceiverCacheContinuationAcceptedOffset",
+	    "RESERVOIR_GI_CANDIDATE_SHADOWED_SUN_CACHE_CONTINUATION",
+	    "tryEvaluateReservoirGiReceiverCacheContinuation",
+	    "RESERVOIR_GI_CACHE_CONTINUATION_FLAG",
 	    "RESERVOIR_GI_SOURCE_CACHE_RECONNECT",
 	    "PT_MATERIAL_RESERVOIR_PROPOSAL_SHIFT",
 	    "PT_MATERIAL_RESERVOIR_PROPOSAL_MASK",
@@ -1436,6 +1455,10 @@ bool testPathTracerDebugAovContract()
 	    "reservoirGiReceiverReconnectRejectTarget",
 	    "reservoirGiReceiverReconnectAccepted",
 	    "reservoirGiSelectedCacheReconnect",
+	    "reservoirGiReceiverCacheContinuationAttempt",
+	    "reservoirGiReceiverCacheContinuationHit",
+	    "reservoirGiReceiverCacheContinuationMiss",
+	    "reservoirGiReceiverCacheContinuationAccepted",
 	    "MixedCosineSunReceiverCacheGuided",
 	    "Mixed Cosine + Sun Receiver + Cache Guide",
 	    "MixedCosineSunReceiverCacheReconnect",
@@ -1460,17 +1483,15 @@ bool testPathTracerDebugAovContract()
 	    "Mid-Depth Interior",
 	    "glm::vec3(0.0f, 12.0f, -1.5f)",
 	    "glm::vec3(-1.0f, 6.5f, 3.0f)",
-	    "Reservoir 1C Shadowed Sun First Mixed",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Receiver Reconnect",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Env First Two",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two Cache Continuation",
+	    "Shadowed Sun + Cache Continuation",
 	    "environmentNeeMode=%d",
 	    "reservoirTemporalBudget=%d",
 	    "reservoirSpatialBudget=%d",
-	    "reservoirMixedTemporalBudget2Row.reservoirGiTemporalBudgetDivisor = 2",
+	    "reservoirMixedTemporalSpatialBudget2Row.reservoirGiTemporalBudgetDivisor = 2",
 	    "reservoirMixedTemporalSpatialBudget2Row.reservoirGiSpatialBudgetDivisor = 2",
 	    "pathTracerSettings.reservoirGiMode            = UISystem::PathTracerReservoirGiMode::TemporalSpatial",
 	    "pathTracerSettings.reservoirGiSpatialNeighborCount = 2",
@@ -1546,13 +1567,10 @@ bool testPathTracerDebugAovContract()
 		}
 	}
 	const char *requiredSponzaTemporalSpatialRows[] = {
-	    "Reservoir 1C Shadowed Sun First Mixed",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Receiver Reconnect",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Env First Two"};
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two Cache Continuation"};
 	for (const char *rowName : requiredSponzaTemporalSpatialRows)
 	{
 		if (!containsText(engineSource, rowName))
@@ -1569,7 +1587,12 @@ bool testPathTracerDebugAovContract()
 	    containsText(engineSource, "Base 5 Sun First") ||
 	    containsText(engineSource, "Base 8 Sun First") ||
 	    containsText(engineSource, "Base 8 Sun All") ||
+	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed\",") ||
+	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2") ||
+	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N\"") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal\")") ||
+	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Env First Two") ||
+	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Receiver Reconnect") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 1N Budget") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 3") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Dual Sun") ||

@@ -129,7 +129,7 @@ normalizeReservoirGiProposalMode(UISystem::PathTracerReservoirGiProposalMode mod
 uint32_t packPathTracerMaterialSettings(const UISystem::PathTracerSettings &settings)
 {
 	const auto reservoirProposalMode = normalizeReservoirGiProposalMode(settings.reservoirGiProposalMode);
-	return packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.reservoirGiCandidateEvaluationMode, 0, 2)),
+	return packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.reservoirGiCandidateEvaluationMode, 0, 3)),
 	                          kPtMaterialReservoirEvalShift,
 	                          kPtMaterialReservoirEvalMask) |
 	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.directSunBounceMode, 0, 2)),
@@ -1932,6 +1932,14 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    counters->reservoirGiReceiverReconnectRejectTarget;
 	ui.pathTracerPerfStats.reservoirGiReceiverReconnectAccepted =
 	    counters->reservoirGiReceiverReconnectAccepted;
+	ui.pathTracerPerfStats.reservoirGiReceiverCacheContinuationAttempt =
+	    counters->reservoirGiReceiverCacheContinuationAttempt;
+	ui.pathTracerPerfStats.reservoirGiReceiverCacheContinuationHit =
+	    counters->reservoirGiReceiverCacheContinuationHit;
+	ui.pathTracerPerfStats.reservoirGiReceiverCacheContinuationMiss =
+	    counters->reservoirGiReceiverCacheContinuationMiss;
+	ui.pathTracerPerfStats.reservoirGiReceiverCacheContinuationAccepted =
+	    counters->reservoirGiReceiverCacheContinuationAccepted;
 	ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum =
 	    static_cast<float>(counters->reservoirGiLumaScaledSum) / 64.0f;
 	ui.pathTracerPerfStats.reservoirGiAcceptedAvgLuma =
@@ -2249,26 +2257,13 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 	ptExperimentRows.clear();
 	for (const auto &scenario : sponzaScenarioPresets())
 	{
-		auto reservoirMixedRow =
+		auto reservoirMixedTemporalSpatialBudget2Row =
 		    makeReservoirRow(scenario,
-		                     "Reservoir 1C Shadowed Sun First Mixed",
+		                     "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
 		                     1,
 		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided);
-		auto reservoirMixedTemporalBaseRow = reservoirMixedRow;
-		reservoirMixedTemporalBaseRow.reservoirGiMode = UISystem::PathTracerReservoirGiMode::Temporal;
-		auto reservoirMixedTemporalBudget2Row = reservoirMixedTemporalBaseRow;
-		reservoirMixedTemporalBudget2Row.name =
-		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2");
-		reservoirMixedTemporalBudget2Row.reservoirGiTemporalBudgetDivisor = 2;
-		reservoirMixedTemporalBudget2Row.reservoirGiSpatialBudgetDivisor = 1;
-		auto reservoirMixedTemporalSpatialTwoNeighborRow = reservoirMixedTemporalBaseRow;
-		reservoirMixedTemporalSpatialTwoNeighborRow.name =
-		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N");
-		reservoirMixedTemporalSpatialTwoNeighborRow.reservoirGiMode = UISystem::PathTracerReservoirGiMode::TemporalSpatial;
-		reservoirMixedTemporalSpatialTwoNeighborRow.reservoirGiSpatialNeighborCount = 2;
-		auto reservoirMixedTemporalSpatialBudget2Row = reservoirMixedTemporalSpatialTwoNeighborRow;
-		reservoirMixedTemporalSpatialBudget2Row.name =
-		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2");
+		reservoirMixedTemporalSpatialBudget2Row.reservoirGiMode = UISystem::PathTracerReservoirGiMode::TemporalSpatial;
+		reservoirMixedTemporalSpatialBudget2Row.reservoirGiSpatialNeighborCount = 2;
 		reservoirMixedTemporalSpatialBudget2Row.reservoirGiTemporalBudgetDivisor = 2;
 		reservoirMixedTemporalSpatialBudget2Row.reservoirGiSpatialBudgetDivisor = 2;
 		auto reservoirMixedTemporalSpatialBudget2SunReceiverRow = reservoirMixedTemporalSpatialBudget2Row;
@@ -2276,23 +2271,20 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver");
 		reservoirMixedTemporalSpatialBudget2SunReceiverRow.reservoirGiProposalMode =
 		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
-		auto reservoirMixedTemporalSpatialBudget2ReceiverReconnectRow = reservoirMixedTemporalSpatialBudget2Row;
-		reservoirMixedTemporalSpatialBudget2ReceiverReconnectRow.name =
-		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Receiver Reconnect");
-		reservoirMixedTemporalSpatialBudget2ReceiverReconnectRow.reservoirGiProposalMode =
-		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverCacheReconnect;
-		auto reservoirMixedTemporalSpatialBudget2EnvFirstTwoRow = reservoirMixedTemporalSpatialBudget2Row;
-		reservoirMixedTemporalSpatialBudget2EnvFirstTwoRow.name =
-		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Env First Two");
-		reservoirMixedTemporalSpatialBudget2EnvFirstTwoRow.environmentNeeBounceMode = 1;
-
-		ptExperimentRows.push_back(reservoirMixedRow);
-		ptExperimentRows.push_back(reservoirMixedTemporalBudget2Row);
-		ptExperimentRows.push_back(reservoirMixedTemporalSpatialTwoNeighborRow);
+		auto reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow =
+		    reservoirMixedTemporalSpatialBudget2SunReceiverRow;
+		reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow.name =
+		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two");
+		reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow.environmentNeeBounceMode = 1;
+		auto reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow =
+		    reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow;
+		reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow.name =
+		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two Cache Continuation");
+		reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow.reservoirGiCandidateEvaluationMode = 3;
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);
-		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2ReceiverReconnectRow);
-		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2EnvFirstTwoRow);
+		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow);
+		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);
 	}
 
 	ptExperimentSweepActive     = !ptExperimentRows.empty();
@@ -2406,6 +2398,8 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "receiverReconnectAttempt=%.1f, receiverReconnectHit=%.1f, receiverReconnectMiss=%.1f, "
 	     "receiverReconnectRejectVisibility=%.1f, receiverReconnectRejectTarget=%.1f, "
 	     "receiverReconnectAccepted=%.1f, "
+	     "receiverCacheContinuationAttempt=%.1f, receiverCacheContinuationHit=%.1f, "
+	     "receiverCacheContinuationMiss=%.1f, receiverCacheContinuationAccepted=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
 	     row.name.c_str(),
 	     accum.sampleCount,
@@ -2471,6 +2465,10 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.reservoirGiReceiverReconnectRejectVisibility * invSamples,
 	     accum.reservoirGiReceiverReconnectRejectTarget * invSamples,
 	     accum.reservoirGiReceiverReconnectAccepted * invSamples,
+	     accum.reservoirGiReceiverCacheContinuationAttempt * invSamples,
+	     accum.reservoirGiReceiverCacheContinuationHit * invSamples,
+	     accum.reservoirGiReceiverCacheContinuationMiss * invSamples,
+	     accum.reservoirGiReceiverCacheContinuationAccepted * invSamples,
 	     accum.rayTraceMs * invSamples,
 	     accum.totalFrameMs * invSamples);
 }
@@ -2618,6 +2616,14 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiReceiverReconnectRejectTarget);
 	ptExperimentAccum.reservoirGiReceiverReconnectAccepted +=
 	    static_cast<double>(stats.reservoirGiReceiverReconnectAccepted);
+	ptExperimentAccum.reservoirGiReceiverCacheContinuationAttempt +=
+	    static_cast<double>(stats.reservoirGiReceiverCacheContinuationAttempt);
+	ptExperimentAccum.reservoirGiReceiverCacheContinuationHit +=
+	    static_cast<double>(stats.reservoirGiReceiverCacheContinuationHit);
+	ptExperimentAccum.reservoirGiReceiverCacheContinuationMiss +=
+	    static_cast<double>(stats.reservoirGiReceiverCacheContinuationMiss);
+	ptExperimentAccum.reservoirGiReceiverCacheContinuationAccepted +=
+	    static_cast<double>(stats.reservoirGiReceiverCacheContinuationAccepted);
 	ptExperimentAccum.rayTraceMs += stats.rayTraceMs;
 	ptExperimentAccum.totalFrameMs += stats.totalFrameMs;
 	++ptExperimentAccum.sampleCount;

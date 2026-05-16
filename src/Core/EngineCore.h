@@ -192,6 +192,10 @@ class EngineCore
 		double reservoirGiReceiverReconnectRejectVisibility = 0.0;
 		double reservoirGiReceiverReconnectRejectTarget = 0.0;
 		double reservoirGiReceiverReconnectAccepted = 0.0;
+		double reservoirGiReceiverCacheContinuationAttempt = 0.0;
+		double reservoirGiReceiverCacheContinuationHit = 0.0;
+		double reservoirGiReceiverCacheContinuationMiss = 0.0;
+		double reservoirGiReceiverCacheContinuationAccepted = 0.0;
 		double rayTraceMs = 0.0;
 		double totalFrameMs = 0.0;
 	};

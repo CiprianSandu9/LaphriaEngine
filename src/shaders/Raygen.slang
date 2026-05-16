@@ -124,8 +124,11 @@ static const int DIRECT_SUN_BOUNCE_FIRST_TWO = 2;
 static const int RESERVOIR_GI_CANDIDATE_TRACE_ONLY = 0;
 static const int RESERVOIR_GI_CANDIDATE_UNSHADOWED_SUN = 1;
 static const int RESERVOIR_GI_CANDIDATE_SHADOWED_SUN = 2;
+static const int RESERVOIR_GI_CANDIDATE_SHADOWED_SUN_CACHE_CONTINUATION = 3;
 static const float RESERVOIR_GI_TEMPORAL_M_CLAMP = 32.0;
 static const float RESERVOIR_GI_SPATIAL_M_CLAMP = 8.0;
+static const uint RESERVOIR_GI_CACHE_CONTINUATION_BUDGET_DIVISOR = 8u;
+static const float RESERVOIR_GI_CACHE_CONTINUATION_BASE_LUMA_THRESHOLD = 0.01;
 static const uint PT_MATERIAL_RESERVOIR_PROPOSAL_SHIFT = 0u;
 static const uint PT_MATERIAL_RESERVOIR_PROPOSAL_MASK = 0x7u;
 static const uint PT_MATERIAL_RESERVOIR_MODE_SHIFT = 18u;
@@ -220,6 +223,10 @@ static const uint reservoirGiReceiverReconnectRejectVisibilityOffset = 276u;
 static const uint reservoirGiReceiverReconnectRejectTargetOffset = 280u;
 static const uint reservoirGiReceiverReconnectAcceptedOffset = 284u;
 static const uint reservoirGiSelectedCacheReconnectOffset = 288u;
+static const uint reservoirGiReceiverCacheContinuationAttemptOffset = 292u;
+static const uint reservoirGiReceiverCacheContinuationHitOffset = 296u;
+static const uint reservoirGiReceiverCacheContinuationMissOffset = 300u;
+static const uint reservoirGiReceiverCacheContinuationAcceptedOffset = 304u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_NONE = 0u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_GEOMETRY = 1u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_NO_LIGHT = 2u;
@@ -230,6 +237,7 @@ static const uint RESERVOIR_GI_SOURCE_TEMPORAL = 1u;
 static const uint RESERVOIR_GI_SOURCE_SPATIAL = 2u;
 static const uint RESERVOIR_GI_SOURCE_CACHE = 3u;
 static const uint RESERVOIR_GI_SOURCE_CACHE_RECONNECT = 4u;
+static const uint RESERVOIR_GI_CACHE_CONTINUATION_FLAG = 32u;
 
 struct FirstHitDiffuseBounceResult {
     float3 totalContribution;
@@ -600,6 +608,17 @@ bool loadReservoirGiReceiverCacheHistoryRecord(uint cacheIndex,
     return true;
 }
 
+uint reservoirGiReceiverCacheSpatialIndex(float3 position, uint slotSalt)
+{
+    static const float cellSize = 1.25;
+    uint3 cell = uint3(floor((position + float3(10000.0, 10000.0, 10000.0)) / cellSize));
+    uint hash = pcgHash(cell.x * 73856093u ^
+                        cell.y * 19349663u ^
+                        cell.z * 83492791u ^
+                        slotSalt * 2654435761u);
+    return hash % RESERVOIR_GI_RECEIVER_CACHE_CAPACITY;
+}
+
 void storeReservoirGiReceiverCacheRecord(uint2 launchID,
                                          uint2 launchSize,
                                          ReservoirGiRecord record)
@@ -616,10 +635,9 @@ void storeReservoirGiReceiverCacheRecord(uint2 launchID,
     }
 
     uint pixelIndex = launchID.y * launchSize.x + launchID.x;
-    uint cacheIndex = pcgHash(pixelIndex ^
-                              record.sourcePixel * 747796405u ^
-                              ubo.frameCount * 2891336453u) %
-                      RESERVOIR_GI_RECEIVER_CACHE_CAPACITY;
+    uint cacheIndex = reservoirGiReceiverCacheSpatialIndex(
+        record.candidatePosition,
+        pcgHash(record.sourcePixel ^ pixelIndex ^ ubo.frameCount * 2891336453u) & 7u);
     uint offset = reservoirGiReceiverCacheRecordOffset(cacheIndex);
     storeFloat3ToReservoirGiReceiverCache(
         offset + RESERVOIR_GI_RECEIVER_CACHE_POSITION_OFFSET,
@@ -646,6 +664,86 @@ void storeReservoirGiReceiverCacheRecord(uint2 launchID,
         offset + RESERVOIR_GI_RECEIVER_CACHE_SOURCE_PIXEL_OFFSET,
         pixelIndex);
     ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheStoreOffset, 1u);
+}
+
+bool tryEvaluateReservoirGiReceiverCacheContinuation(float3 hitPos,
+                                                     float3 hitNormal,
+                                                     out float3 cacheContinuationSuffixRadiance)
+{
+    cacheContinuationSuffixRadiance = float3(0.0, 0.0, 0.0);
+    ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheContinuationAttemptOffset, 1u);
+
+    if (!isSaneReservoirGiVector(hitPos, 100000.0) ||
+        !isSaneReservoirGiVector(hitNormal, 1.1)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheContinuationMissOffset, 1u);
+        return false;
+    }
+
+    ReservoirGiReceiverCacheRecord bestRecord;
+    float bestScore = 0.0;
+    bool hasRecord = false;
+    for (uint slot = 0u; slot < 8u; ++slot) {
+        ReservoirGiReceiverCacheRecord cacheRecord;
+        uint cacheIndex = reservoirGiReceiverCacheSpatialIndex(hitPos, slot);
+        if (!loadReservoirGiReceiverCacheHistoryRecord(cacheIndex, cacheRecord)) {
+            continue;
+        }
+
+        float3 toRecord = cacheRecord.position - hitPos;
+        float distanceSq = dot(toRecord, toRecord);
+        float normalSimilarity = dot(normalize(cacheRecord.normal), normalize(hitNormal));
+        float suffixLuma = pathTracerLuminance(cacheRecord.suffixRadiance);
+        if (distanceSq > 2.25 ||
+            normalSimilarity < 0.85 ||
+            suffixLuma <= 0.000001) {
+            continue;
+        }
+
+        float score = cacheRecord.targetWeight * normalSimilarity / (1.0 + distanceSq);
+        if (score > bestScore) {
+            bestScore = score;
+            bestRecord = cacheRecord;
+            hasRecord = true;
+        }
+    }
+
+    if (!hasRecord) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheContinuationMissOffset, 1u);
+        return false;
+    }
+
+    ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheContinuationHitOffset, 1u);
+    cacheContinuationSuffixRadiance = sanitizeReservoirGiContribution(bestRecord.suffixRadiance * 0.5);
+    if (pathTracerLuminance(cacheContinuationSuffixRadiance) <= 0.000001) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheContinuationMissOffset, 1u);
+        return false;
+    }
+
+    ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheContinuationAcceptedOffset, 1u);
+    return true;
+}
+
+bool shouldAttemptReservoirGiCacheContinuation(float3 hitPos,
+                                               float3 hitNormal,
+                                               uint2 launchID,
+                                               uint2 launchSize,
+                                               float baseSuffixLuma)
+{
+    if (!isSaneReservoirGiVector(hitPos, 100000.0) ||
+        !isSaneReservoirGiVector(hitNormal, 1.1)) {
+        return false;
+    }
+    if (baseSuffixLuma > RESERVOIR_GI_CACHE_CONTINUATION_BASE_LUMA_THRESHOLD) {
+        return false;
+    }
+
+    uint pixelIndex = launchID.y * launchSize.x + launchID.x;
+    uint spatialSeed = pcgHash(asuint(hitPos.x) ^
+                               asuint(hitPos.y) * 1664525u ^
+                               asuint(hitPos.z) * 1013904223u ^
+                               pixelIndex * 747796405u ^
+                               ubo.frameCount * 2891336453u);
+    return (spatialSeed % RESERVOIR_GI_CACHE_CONTINUATION_BUDGET_DIVISOR) == 0u;
 }
 
 void updateReservoirGi(uint2 launchID,
@@ -1596,7 +1694,8 @@ float3 evaluateReservoirGiSecondarySunSuffix(float3 hitPos,
     if (reservoirGiCandidateEvaluationMode == RESERVOIR_GI_CANDIDATE_UNSHADOWED_SUN) {
         return evaluateUnshadowedDirectSunContribution(hitPos, N, V, unitThroughput, payload);
     }
-    if (reservoirGiCandidateEvaluationMode == RESERVOIR_GI_CANDIDATE_SHADOWED_SUN) {
+    if (reservoirGiCandidateEvaluationMode == RESERVOIR_GI_CANDIDATE_SHADOWED_SUN ||
+        reservoirGiCandidateEvaluationMode == RESERVOIR_GI_CANDIDATE_SHADOWED_SUN_CACHE_CONTINUATION) {
         return evaluateDirectSunContributionInternal(hitPos, N, V, unitThroughput, payload,
                                                     true, countShadowRays, shadowRayCounterOffset);
     }
@@ -1685,7 +1784,41 @@ ReservoirGiRecord makeLocalReservoirGiSample(
     record.candidateNormal = bouncePayload.worldNormal;
     sunVisible = pathTracerLuminance(candidateSecondarySunSuffix) > 0.000001;
 
-    float3 candidateSuffixRadiance = emissiveContribution + candidateSecondarySunSuffix;
+    float3 baseSuffixRadiance = emissiveContribution + candidateSecondarySunSuffix;
+    if (reservoirGiCandidateEvaluationMode == RESERVOIR_GI_CANDIDATE_SHADOWED_SUN_CACHE_CONTINUATION &&
+        pathTracerLuminance(baseSuffixRadiance) > 0.000001) {
+        ReservoirGiTargetEvaluation baseTargetEvaluation =
+            evaluateReservoirGiTargetAtPrimary(hitPos, N, V, primaryPayload,
+                                               record.candidatePosition, record.candidateNormal,
+                                               baseSuffixRadiance,
+                                               reservoirGiProposalPdf);
+        if (baseTargetEvaluation.validGeometry && baseTargetEvaluation.validLight) {
+            ReservoirGiRecord baseCacheRecord = record;
+            baseCacheRecord.suffixRadiance = baseTargetEvaluation.suffixRadiance;
+            baseCacheRecord.contribution = baseTargetEvaluation.contribution;
+            baseCacheRecord.targetWeight = baseTargetEvaluation.targetWeight;
+            baseCacheRecord.weightSum = baseTargetEvaluation.targetWeight;
+            baseCacheRecord.selectedWeight = baseTargetEvaluation.targetWeight;
+            baseCacheRecord.confidenceM = 1.0;
+            baseCacheRecord.flags = 1u | 2u | (sunVisible ? 4u : 0u);
+            storeReservoirGiReceiverCacheRecord(launchID, launchSize, baseCacheRecord);
+        }
+    }
+
+    float3 cacheContinuationSuffixRadiance = float3(0.0, 0.0, 0.0);
+    bool usedCacheContinuation = false;
+    if (reservoirGiCandidateEvaluationMode == RESERVOIR_GI_CANDIDATE_SHADOWED_SUN_CACHE_CONTINUATION &&
+        shouldAttemptReservoirGiCacheContinuation(record.candidatePosition,
+                                                  record.candidateNormal,
+                                                  launchID,
+                                                  launchSize,
+                                                  pathTracerLuminance(baseSuffixRadiance))) {
+        usedCacheContinuation =
+            tryEvaluateReservoirGiReceiverCacheContinuation(record.candidatePosition,
+                                                            record.candidateNormal,
+                                                            cacheContinuationSuffixRadiance);
+    }
+    float3 candidateSuffixRadiance = baseSuffixRadiance + cacheContinuationSuffixRadiance;
     if (pathTracerLuminance(candidateSuffixRadiance) <= 0.000001) {
         localRejectReason = RESERVOIR_GI_LOCAL_REJECT_NO_LIGHT;
         return record;
@@ -1713,7 +1846,8 @@ ReservoirGiRecord makeLocalReservoirGiSample(
     record.weightSum = targetEvaluation.targetWeight;
     record.selectedWeight = targetEvaluation.targetWeight;
     record.confidenceM = 1.0;
-    record.flags = 1u | 2u | (sunVisible ? 4u : 0u);
+    record.flags = 1u | 2u | (sunVisible ? 4u : 0u) |
+                   (usedCacheContinuation ? RESERVOIR_GI_CACHE_CONTINUATION_FLAG : 0u);
     validSample = true;
     return record;
 }
@@ -2487,7 +2621,8 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     }
     bool usesReservoirGiReceiverCache =
         reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_CACHE_GUIDED ||
-        reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_CACHE_RECONNECT;
+        reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_CACHE_RECONNECT ||
+        reservoirGiCandidateEvaluationMode == RESERVOIR_GI_CANDIDATE_SHADOWED_SUN_CACHE_CONTINUATION;
     if (usesReservoirGiReceiverCache) {
         updateReservoirGiReceiverCacheHeader(launchID, ubo.frameCount);
     }
@@ -2774,11 +2909,13 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     selectedRecord.sourcePixel = selectedSourcePixel;
     selectedRecord.sourceFrameId = selectedSourceFrameId;
     selectedRecord.frameId = ubo.frameCount;
+    uint selectedPreservedFlags = selectedRecord.flags & RESERVOIR_GI_CACHE_CONTINUATION_FLAG;
     selectedRecord.flags = (selectedWeight > 0.0 ? 1u : 0u) |
                            (selectedSurfaceHit ? 2u : 0u) |
                            (selectedSunVisible ? 4u : 0u) |
                            (useCandidateRis ? 8u : 0u) |
-                           (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL ? 16u : 0u);
+                           (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL ? 16u : 0u) |
+                           selectedPreservedFlags;
 
     if (acceptedReservoir) {
         ReservoirGiRecord validatedRecord;
@@ -2913,8 +3050,10 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
                    (selectedSurfaceHit ? 2u : 0u) |
                    (selectedSunVisible ? 4u : 0u) |
                    (useCandidateRis ? 8u : 0u) |
-                   (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL ? 16u : 0u);
-    bool canPersistSelectedReservoirGi = selectedSource != RESERVOIR_GI_SOURCE_CACHE_RECONNECT;
+                   (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL ? 16u : 0u) |
+                   (selectedRecord.flags & RESERVOIR_GI_CACHE_CONTINUATION_FLAG);
+    bool canPersistSelectedReservoirGi = selectedSource != RESERVOIR_GI_SOURCE_CACHE_RECONNECT &&
+        (record.flags & RESERVOIR_GI_CACHE_CONTINUATION_FLAG) == 0u;
     if (acceptedReservoir && canPersistSelectedReservoirGi) {
         storeReservoirGiReceiverCacheRecord(launchID, launchSize, record);
     }
@@ -3067,7 +3206,7 @@ void main() {
         clamp(int((packedPathTracerMaterialIndex >> PT_MATERIAL_RESERVOIR_EVAL_SHIFT) &
                   PT_MATERIAL_RESERVOIR_EVAL_MASK),
               RESERVOIR_GI_CANDIDATE_TRACE_ONLY,
-              RESERVOIR_GI_CANDIDATE_SHADOWED_SUN);
+              RESERVOIR_GI_CANDIDATE_SHADOWED_SUN_CACHE_CONTINUATION);
 
     RayDesc ray;
     ray.Origin    = origin;

@@ -1160,6 +1160,16 @@ void UISystem::drawPathTracerDebugLab() {
             pathTracerSettings.reservoirGiProposalMode =
                 static_cast<PathTracerReservoirGiProposalMode>(reservoirGiProposalMode);
         }
+        const char *reservoirGiCandidateEvaluationModes[] = {
+            "Trace Only",
+            "Unshadowed Sun",
+            "Shadowed Sun",
+            "Shadowed Sun + Cache Continuation"};
+        if (ImGui::Combo("Reservoir GI Candidate Eval", &pathTracerSettings.reservoirGiCandidateEvaluationMode,
+                         reservoirGiCandidateEvaluationModes, IM_ARRAYSIZE(reservoirGiCandidateEvaluationModes))) {
+            pathTracerSettings.reservoirGiCandidateEvaluationMode =
+                std::clamp(pathTracerSettings.reservoirGiCandidateEvaluationMode, 0, 3);
+        }
         ImGui::SliderInt("Reservoir GI Candidates", &pathTracerSettings.reservoirGiCandidateCount, 1, 4);
         ImGui::SliderInt("Reservoir Spatial Neighbors", &pathTracerSettings.reservoirGiSpatialNeighborCount, 1, 8);
         ImGui::Checkbox("Reservoir GI Candidate RIS", &pathTracerSettings.reservoirGiUseCandidateRis);
@@ -1244,6 +1254,14 @@ void UISystem::drawPathTracerDebugLab() {
                     pathTracerPerfStats.reservoirGiReceiverReconnectRejectTarget);
         ImGui::Text("Reservoir GI Receiver Reconnect Accepted: %u",
                     pathTracerPerfStats.reservoirGiReceiverReconnectAccepted);
+        ImGui::Text("Reservoir GI Receiver Cache Continuation Attempts: %u",
+                    pathTracerPerfStats.reservoirGiReceiverCacheContinuationAttempt);
+        ImGui::Text("Reservoir GI Receiver Cache Continuation Hits: %u",
+                    pathTracerPerfStats.reservoirGiReceiverCacheContinuationHit);
+        ImGui::Text("Reservoir GI Receiver Cache Continuation Misses: %u",
+                    pathTracerPerfStats.reservoirGiReceiverCacheContinuationMiss);
+        ImGui::Text("Reservoir GI Receiver Cache Continuation Accepted: %u",
+                    pathTracerPerfStats.reservoirGiReceiverCacheContinuationAccepted);
         ImGui::Text("Reservoir GI Temporal: accepted %u | rejected %u",
                     pathTracerPerfStats.reservoirGiTemporalAccepted,
                     pathTracerPerfStats.reservoirGiTemporalRejected);

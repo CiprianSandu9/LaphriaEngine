@@ -220,6 +220,10 @@ struct PathTracerAnalysisCounters
 	uint32_t reservoirGiReceiverReconnectRejectTarget = 0;
 	uint32_t reservoirGiReceiverReconnectAccepted = 0;
 	uint32_t reservoirGiSelectedCacheReconnect = 0;
+	uint32_t reservoirGiReceiverCacheContinuationAttempt = 0;
+	uint32_t reservoirGiReceiverCacheContinuationHit = 0;
+	uint32_t reservoirGiReceiverCacheContinuationMiss = 0;
+	uint32_t reservoirGiReceiverCacheContinuationAccepted = 0;
 };
 
 struct SkinningPushConstants

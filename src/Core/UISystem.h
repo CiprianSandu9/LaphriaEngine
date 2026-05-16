@@ -233,6 +233,10 @@ public:
         uint32_t reservoirGiReceiverReconnectRejectVisibility = 0;
         uint32_t reservoirGiReceiverReconnectRejectTarget = 0;
         uint32_t reservoirGiReceiverReconnectAccepted = 0;
+        uint32_t reservoirGiReceiverCacheContinuationAttempt = 0;
+        uint32_t reservoirGiReceiverCacheContinuationHit = 0;
+        uint32_t reservoirGiReceiverCacheContinuationMiss = 0;
+        uint32_t reservoirGiReceiverCacheContinuationAccepted = 0;
         float reservoirGiAcceptedAvgLuma = 0.0f;
         float reservoirGiAcceptedLumaSum = 0.0f;
         float reservoirGiCandidateSurfaceHitRatio = 0.0f;
