@@ -185,6 +185,11 @@ struct PathTracerAnalysisCounters
 	uint32_t reservoirGiConfidenceMScaledSum = 0;
 	uint32_t reservoirGiLocalSurfaceHits = 0;
 	uint32_t reservoirGiLocalValidSamples = 0;
+	uint32_t reservoirGiLocalMissCandidates = 0;
+	uint32_t reservoirGiLocalMissPositiveWeight = 0;
+	uint32_t reservoirGiLocalSurfaceInvalid = 0;
+	uint32_t reservoirGiAcceptedLocalSurface = 0;
+	uint32_t reservoirGiAcceptedLocalMiss = 0;
 	uint32_t reservoirGiLocalShadowRays = 0;
 	uint32_t reservoirGiTemporalReconnectRays = 0;
 	uint32_t reservoirGiTemporalShadowRays = 0;

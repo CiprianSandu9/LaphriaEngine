@@ -1141,7 +1141,8 @@ void UISystem::drawPathTracerDebugLab() {
         const char *reservoirGiProposalModes[] = {
             "Cosine",
             "Sun Guided",
-            "Mixed Cosine + Sun Guided"};
+            "Mixed Cosine + Sun Guided",
+            "Mixed Cosine + Opposite Sun Guide"};
         int reservoirGiProposalMode = static_cast<int>(pathTracerSettings.reservoirGiProposalMode);
         if (ImGui::Combo("Reservoir GI Proposal", &reservoirGiProposalMode,
                          reservoirGiProposalModes, IM_ARRAYSIZE(reservoirGiProposalModes))) {
@@ -1180,6 +1181,12 @@ void UISystem::drawPathTracerDebugLab() {
                     pathTracerPerfStats.reservoirGiLocalValidSamples,
                     pathTracerPerfStats.reservoirGiCandidates,
                     pathTracerPerfStats.reservoirGiLocalValidRatio * 100.0f);
+        ImGui::Text("Reservoir GI Local Miss: %u | positive %u",
+                    pathTracerPerfStats.reservoirGiLocalMissCandidates,
+                    pathTracerPerfStats.reservoirGiLocalMissPositiveWeight);
+        ImGui::Text("Reservoir GI Local Surface Invalid: %u", pathTracerPerfStats.reservoirGiLocalSurfaceInvalid);
+        ImGui::Text("Reservoir GI Accepted Local Surface: %u", pathTracerPerfStats.reservoirGiAcceptedLocalSurface);
+        ImGui::Text("Reservoir GI Accepted Local Miss: %u", pathTracerPerfStats.reservoirGiAcceptedLocalMiss);
         ImGui::Text("Reservoir GI Local Shadow Rays: %u", pathTracerPerfStats.reservoirGiLocalShadowRays);
         ImGui::Text("Reservoir GI Temporal Reconnect Rays: %u", pathTracerPerfStats.reservoirGiTemporalReconnectRays);
         ImGui::Text("Reservoir GI Temporal Shadow Rays: %u", pathTracerPerfStats.reservoirGiTemporalShadowRays);

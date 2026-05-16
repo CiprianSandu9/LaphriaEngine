@@ -156,6 +156,11 @@ class EngineCore
 		double reservoirGiSelectedSpatial = 0.0;
 		double reservoirGiLocalSurfaceHits = 0.0;
 		double reservoirGiLocalValidSamples = 0.0;
+		double reservoirGiLocalMissCandidates = 0.0;
+		double reservoirGiLocalMissPositiveWeight = 0.0;
+		double reservoirGiLocalSurfaceInvalid = 0.0;
+		double reservoirGiAcceptedLocalSurface = 0.0;
+		double reservoirGiAcceptedLocalMiss = 0.0;
 		double reservoirGiLocalShadowRays = 0.0;
 		double reservoirGiTemporalReconnectRays = 0.0;
 		double reservoirGiTemporalShadowRays = 0.0;

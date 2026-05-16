@@ -93,7 +93,8 @@ public:
     {
         Cosine = 0,
         SunGuided = 1,
-        MixedCosineSunGuided = 2
+        MixedCosineSunGuided = 2,
+        MixedCosineOppositeSunGuided = 3
     };
 
     enum class PathTracerSponzaValidationView
@@ -189,6 +190,11 @@ public:
         uint32_t reservoirGiSelectedSpatial = 0;
         uint32_t reservoirGiLocalSurfaceHits = 0;
         uint32_t reservoirGiLocalValidSamples = 0;
+        uint32_t reservoirGiLocalMissCandidates = 0;
+        uint32_t reservoirGiLocalMissPositiveWeight = 0;
+        uint32_t reservoirGiLocalSurfaceInvalid = 0;
+        uint32_t reservoirGiAcceptedLocalSurface = 0;
+        uint32_t reservoirGiAcceptedLocalMiss = 0;
         uint32_t reservoirGiLocalShadowRays = 0;
         uint32_t reservoirGiTemporalReconnectRays = 0;
         uint32_t reservoirGiTemporalShadowRays = 0;

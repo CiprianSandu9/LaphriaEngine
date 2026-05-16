@@ -314,11 +314,19 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "reservoirGiSpatialBudgetPass",
 	    "reservoirGiLocalSurfaceHitsOffset",
 	    "reservoirGiLocalValidSamplesOffset",
+	    "reservoirGiLocalMissCandidatesOffset",
+	    "reservoirGiLocalMissPositiveWeightOffset",
+	    "reservoirGiLocalSurfaceInvalidOffset",
+	    "reservoirGiAcceptedLocalSurfaceOffset",
+	    "reservoirGiAcceptedLocalMissOffset",
 	    "reservoirGiLocalShadowRaysOffset",
 	    "reservoirGiTemporalReconnectRaysOffset",
 	    "reservoirGiTemporalShadowRaysOffset",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalSurfaceHitsOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalValidSamplesOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalMissCandidatesOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalSurfaceInvalidOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiAcceptedLocalSurfaceOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalShadowRaysOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalReconnectRaysOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalShadowRaysOffset, 1u)",
@@ -402,6 +410,43 @@ bool testPathTracerReservoirGiMeasurementContract()
 	}
 	const std::string localReservoirSampleFunction =
 	    raygen.substr(localReservoirSamplePos, temporalReconnectPos - localReservoirSamplePos);
+	const std::size_t reservoirSamplingFunctionPos =
+	    raygen.find("FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(");
+	const std::size_t postReservoirSamplingFunctionPos =
+	    raygen.find("float3 debugReservoirGiContribution", reservoirSamplingFunctionPos);
+	if (reservoirSamplingFunctionPos == std::string::npos ||
+	    postReservoirSamplingFunctionPos == std::string::npos)
+	{
+		std::cerr << "reservoir GI sampling function markers are missing\n";
+		return false;
+	}
+	const std::string reservoirSamplingFunction =
+	    raygen.substr(reservoirSamplingFunctionPos, postReservoirSamplingFunctionPos - reservoirSamplingFunctionPos);
+	const char *requiredReservoirMissSkipSymbols[] = {
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalMissCandidatesOffset, 1u)",
+	    "continue; // Local ReSTIR GI candidates must be secondary surface samples."};
+	for (const char *symbol : requiredReservoirMissSkipSymbols)
+	{
+		if (!containsText(reservoirSamplingFunction, symbol))
+		{
+			std::cerr << "missing reservoir GI miss-skip contract: " << symbol << "\n";
+			return false;
+		}
+	}
+	const char *forbiddenReservoirMissFallbackSymbols[] = {
+	    "candidateTotal = firstLegThroughput * bouncePayload.emission",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalMissPositiveWeightOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiAcceptedLocalMissOffset, 1u)",
+	    "candidateRecord = record"};
+	for (const char *symbol : forbiddenReservoirMissFallbackSymbols)
+	{
+		if (containsText(reservoirSamplingFunction, symbol))
+		{
+			std::cerr << "reservoir GI local miss fallback still participates in candidate selection: "
+			          << symbol << "\n";
+			return false;
+		}
+	}
 	if (containsText(localReservoirSampleFunction, "float3 emissiveContribution = firstLegThroughput * bouncePayload.emission") ||
 	    containsText(localReservoirSampleFunction, "float3 candidateSuffixRadiance = emissiveContribution + secondaryDirectSun") ||
 	    containsText(localReservoirSampleFunction, "candidateSecondarySun = evaluateUnshadowedDirectSunContribution") ||
@@ -653,12 +698,22 @@ bool testPathTracerReservoirGiMeasurementContract()
 	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiLocalSurfaceHits), 144u},
 	    {"reservoirGiLocalValidSamples",
 	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiLocalValidSamples), 148u},
+	    {"reservoirGiLocalMissCandidates",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiLocalMissCandidates), 152u},
+	    {"reservoirGiLocalMissPositiveWeight",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiLocalMissPositiveWeight), 156u},
+	    {"reservoirGiLocalSurfaceInvalid",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiLocalSurfaceInvalid), 160u},
+	    {"reservoirGiAcceptedLocalSurface",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAcceptedLocalSurface), 164u},
+	    {"reservoirGiAcceptedLocalMiss",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAcceptedLocalMiss), 168u},
 	    {"reservoirGiLocalShadowRays",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiLocalShadowRays), 152u},
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiLocalShadowRays), 172u},
 	    {"reservoirGiTemporalReconnectRays",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiTemporalReconnectRays), 156u},
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiTemporalReconnectRays), 176u},
 	    {"reservoirGiTemporalShadowRays",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiTemporalShadowRays), 160u}};
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiTemporalShadowRays), 180u}};
 	for (const auto &counterOffset : counterOffsets)
 	{
 		if (counterOffset.offset != counterOffset.expectedOffset)
@@ -674,6 +729,11 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "reservoirGiCandidateRays=%.1f",
 	    "localSurfaceHits=%.1f",
 	    "localValid=%.1f",
+	    "localMiss=%.1f",
+	    "localMissPositive=%.1f",
+	    "localSurfaceInvalid=%.1f",
+	    "acceptedLocalSurface=%.1f",
+	    "acceptedLocalMiss=%.1f",
 	    "localShadowRays=%.1f",
 	    "temporalReconnectRays=%.1f",
 	    "temporalShadowRays=%.1f",
@@ -698,6 +758,11 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "uint32_t reservoirGiConfidenceMScaledSum = 0",
 	    "uint32_t reservoirGiLocalSurfaceHits = 0",
 	    "uint32_t reservoirGiLocalValidSamples = 0",
+	    "uint32_t reservoirGiLocalMissCandidates = 0",
+	    "uint32_t reservoirGiLocalMissPositiveWeight = 0",
+	    "uint32_t reservoirGiLocalSurfaceInvalid = 0",
+	    "uint32_t reservoirGiAcceptedLocalSurface = 0",
+	    "uint32_t reservoirGiAcceptedLocalMiss = 0",
 	    "uint32_t reservoirGiLocalShadowRays = 0",
 	    "uint32_t reservoirGiTemporalReconnectRays = 0",
 	    "uint32_t reservoirGiTemporalShadowRays = 0",
@@ -705,6 +770,9 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "float reservoirGiLocalValidRatio = 0.0f",
 	    "Reservoir GI Confidence M Avg",
 	    "Reservoir GI Local Valid",
+	    "Reservoir GI Local Miss",
+	    "Reservoir GI Accepted Local Surface",
+	    "Reservoir GI Accepted Local Miss",
 	    "Reservoir GI Local Shadow Rays",
 	    "Reservoir GI Temporal Reconnect Rays"};
 	for (const char *symbol : requiredCounterAndUiSymbols)
@@ -948,12 +1016,15 @@ bool testPathTracerDebugAovContract()
 	    "RESERVOIR_GI_PROPOSAL_COSINE",
 	    "RESERVOIR_GI_PROPOSAL_SUN_GUIDED",
 	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED",
+	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_OPPOSITE_SUN_GUIDED",
 	    "PT_MATERIAL_RESERVOIR_PROPOSAL_SHIFT",
 	    "PT_MATERIAL_RESERVOIR_PROPOSAL_MASK",
 	    "PT_MATERIAL_RESERVOIR_MODE_SHIFT",
 	    "PT_FLAGS_ENVIRONMENT_NEE_BIT",
 	    "PT_FLAGS_FIRST_HIT_PROBE_SAMPLING_SHIFT",
 	    "sampleReservoirGiProposalDirection",
+	    "oppositeSunBounceGuideAxis",
+	    "reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_OPPOSITE_SUN_GUIDED",
 	    "reservoirGiProposalPdf",
 	    "reservoirGiProposalMode",
 	    "ptReservoirGiCurrent",
@@ -1124,6 +1195,7 @@ bool testPathTracerDebugAovContract()
 	    "Base 8 Sun First",
 	    "Base 8 Sun All",
 	    "Reservoir 1C Shadowed Sun First Mixed",
+	    "Reservoir 1C Shadowed Sun First Mixed Opposite Guide",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N",
@@ -1176,6 +1248,8 @@ bool testPathTracerDebugAovContract()
 	    "pathTracerSettings.directSunBounceMode = 1",
 	    "pathTracerSettings.reservoirGiCandidateCount = 1",
 	    "pathTracerSettings.reservoirGiProposalMode",
+	    "MixedCosineOppositeSunGuided",
+	    "Mixed Cosine + Opposite Sun Guide",
 	    "ui.renderMode",
 	    "sponza_runtime.glb",
 	    "ptIndirectBounceTargetWallModelId",

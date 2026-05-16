@@ -84,6 +84,7 @@ static const int PATH_TRACER_RESERVOIR_GI_TEMPORAL_SPATIAL = 3;
 static const int RESERVOIR_GI_PROPOSAL_COSINE = 0;
 static const int RESERVOIR_GI_PROPOSAL_SUN_GUIDED = 1;
 static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED = 2;
+static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_OPPOSITE_SUN_GUIDED = 3;
 static const int DIRECT_SUN_BOUNCE_ALL = 0;
 static const int DIRECT_SUN_BOUNCE_FIRST_ONLY = 1;
 static const int DIRECT_SUN_BOUNCE_FIRST_TWO = 2;
@@ -149,9 +150,14 @@ static const uint reservoirGiSelectedSpatialOffset = 136u;
 static const uint reservoirGiConfidenceMScaledSumOffset = 140u;
 static const uint reservoirGiLocalSurfaceHitsOffset = 144u;
 static const uint reservoirGiLocalValidSamplesOffset = 148u;
-static const uint reservoirGiLocalShadowRaysOffset = 152u;
-static const uint reservoirGiTemporalReconnectRaysOffset = 156u;
-static const uint reservoirGiTemporalShadowRaysOffset = 160u;
+static const uint reservoirGiLocalMissCandidatesOffset = 152u;
+static const uint reservoirGiLocalMissPositiveWeightOffset = 156u;
+static const uint reservoirGiLocalSurfaceInvalidOffset = 160u;
+static const uint reservoirGiAcceptedLocalSurfaceOffset = 164u;
+static const uint reservoirGiAcceptedLocalMissOffset = 168u;
+static const uint reservoirGiLocalShadowRaysOffset = 172u;
+static const uint reservoirGiTemporalReconnectRaysOffset = 176u;
+static const uint reservoirGiTemporalShadowRaysOffset = 180u;
 static const uint RESERVOIR_GI_SOURCE_LOCAL = 0u;
 static const uint RESERVOIR_GI_SOURCE_TEMPORAL = 1u;
 static const uint RESERVOIR_GI_SOURCE_SPATIAL = 2u;
@@ -897,6 +903,22 @@ float3 firstHitSunBounceGuideAxis(float3 N)
     return normalize(axis);
 }
 
+float3 oppositeSunBounceGuideAxis(float3 N)
+{
+    float3 axis = normalize(-ubo.lightDir.xyz);
+    float axisNdot = dot(axis, N);
+    if (axisNdot < 0.10) {
+        float3 tangentAxis = axis - N * axisNdot;
+        float tangentLenSq = dot(tangentAxis, tangentAxis);
+        if (tangentLenSq > 0.0001) {
+            axis = normalize(tangentAxis * rsqrt(tangentLenSq) + N * 0.35);
+        } else {
+            axis = N;
+        }
+    }
+    return normalize(axis);
+}
+
 FirstHitProbeSample sampleFirstHitProbeDirection(float2 xi, float selector, float3 N, int firstHitProbeSamplingMode)
 {
     FirstHitProbeSample sample;
@@ -930,21 +952,32 @@ FirstHitProbeSample sampleReservoirGiProposalDirection(float3 N,
 {
     float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
     float selector = randomFloat(rngState);
-    float3 guideAxis = firstHitSunBounceGuideAxis(N);
-
     float3 cosineDirection = cosineSampleHemisphere(xi, N);
-    float3 guidedDirection = cosineSampleHemisphere(xi, guideAxis);
     FirstHitProbeSample sample;
     if (reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_SUN_GUIDED) {
+        float3 guideAxis = firstHitSunBounceGuideAxis(N);
+        float3 guidedDirection = cosineSampleHemisphere(xi, guideAxis);
         sample.direction = guidedDirection;
         sample.pdf = max(dot(guideAxis, sample.direction), 0.0) / PI;
         return sample;
     }
 
     if (reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED) {
+        float3 guideAxis = firstHitSunBounceGuideAxis(N);
+        float3 guidedDirection = cosineSampleHemisphere(xi, guideAxis);
         sample.direction = (selector < 0.5) ? cosineDirection : guidedDirection;
         float cosinePdf = max(dot(N, sample.direction), 0.0) / PI;
         float guidedPdf = max(dot(guideAxis, sample.direction), 0.0) / PI;
+        sample.pdf = 0.5 * cosinePdf + 0.5 * guidedPdf;
+        return sample;
+    }
+
+    if (reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_OPPOSITE_SUN_GUIDED) {
+        float3 oppositeGuideAxis = oppositeSunBounceGuideAxis(N);
+        float3 oppositeGuidedDirection = cosineSampleHemisphere(xi, oppositeGuideAxis);
+        sample.direction = (selector < 0.5) ? cosineDirection : oppositeGuidedDirection;
+        float cosinePdf = max(dot(N, sample.direction), 0.0) / PI;
+        float guidedPdf = max(dot(oppositeGuideAxis, sample.direction), 0.0) / PI;
         sample.pdf = 0.5 * cosinePdf + 0.5 * guidedPdf;
         return sample;
     }
@@ -1789,6 +1822,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
                                            sunVisible,
                                            localValid);
             if (!localSurfaceHit || !localValid) {
+                ptAnalysisCounters.InterlockedAdd(reservoirGiLocalSurfaceInvalidOffset, 1u);
                 continue;
             }
             ptAnalysisCounters.InterlockedAdd(reservoirGiLocalValidSamplesOffset, 1u);
@@ -1804,7 +1838,8 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
             candidateNormal = localRecord.candidateNormal;
             candidateTargetWeight = localRecord.targetWeight;
         } else {
-            candidateTotal = firstLegThroughput * bouncePayload.emission;
+            ptAnalysisCounters.InterlockedAdd(reservoirGiLocalMissCandidatesOffset, 1u);
+            continue; // Local ReSTIR GI candidates must be secondary surface samples.
         }
 
         candidateTotal = sanitizeReservoirGiContribution(candidateTotal);
@@ -1819,16 +1854,6 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
             ptAnalysisCounters.InterlockedAdd(reservoirGiCandidatePositiveWeightOffset, 1u);
         }
         ReservoirGiRecord candidateRecord = localRecord;
-        if (!surfaceHit) {
-            candidateRecord = record;
-            candidateRecord.contribution = candidateTotal;
-            candidateRecord.suffixRadiance = candidateSuffixRadiance;
-            candidateRecord.sourcePdf = reservoirGiProposalPdf;
-            candidateRecord.targetWeight = candidateWeight;
-            candidateRecord.selectedWeight = candidateWeight;
-            candidateRecord.confidenceM = 1.0;
-            candidateRecord.flags = 1u;
-        }
         combineReservoirGiCandidate(candidateRecord, candidateWeight, RESERVOIR_GI_SOURCE_LOCAL,
                                     candidateSecondarySun, selectedRecord, selectedTargetWeight,
                                     selectedSource, selectedSecondarySun, reservoirWeightSum,
@@ -2019,6 +2044,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
             ptAnalysisCounters.InterlockedAdd(reservoirGiSelectedSpatialOffset, 1u);
         } else {
             ptAnalysisCounters.InterlockedAdd(reservoirGiSelectedLocalOffset, 1u);
+            ptAnalysisCounters.InterlockedAdd(reservoirGiAcceptedLocalSurfaceOffset, 1u);
         }
         ptAnalysisCounters.InterlockedAdd(reservoirGiLumaScaledSumOffset, scaledReservoirLuma);
         uint scaledSelectedWeight = uint(clamp(selectedWeight, 0.0, 8.0) * 64.0 + 0.5);

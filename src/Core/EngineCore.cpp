@@ -117,7 +117,7 @@ uint32_t encodeReservoirGiBudgetDivisor(int divisor)
 UISystem::PathTracerReservoirGiProposalMode
 normalizeReservoirGiProposalMode(UISystem::PathTracerReservoirGiProposalMode mode)
 {
-	const int maxMode = static_cast<int>(UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided);
+	const int maxMode = static_cast<int>(UISystem::PathTracerReservoirGiProposalMode::MixedCosineOppositeSunGuided);
 	const int clamped = std::clamp(static_cast<int>(mode), 0, maxMode);
 	return static_cast<UISystem::PathTracerReservoirGiProposalMode>(clamped);
 }
@@ -1844,6 +1844,11 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	ui.pathTracerPerfStats.reservoirGiSelectedSpatial             = counters->reservoirGiSelectedSpatial;
 	ui.pathTracerPerfStats.reservoirGiLocalSurfaceHits            = counters->reservoirGiLocalSurfaceHits;
 	ui.pathTracerPerfStats.reservoirGiLocalValidSamples           = counters->reservoirGiLocalValidSamples;
+	ui.pathTracerPerfStats.reservoirGiLocalMissCandidates         = counters->reservoirGiLocalMissCandidates;
+	ui.pathTracerPerfStats.reservoirGiLocalMissPositiveWeight     = counters->reservoirGiLocalMissPositiveWeight;
+	ui.pathTracerPerfStats.reservoirGiLocalSurfaceInvalid         = counters->reservoirGiLocalSurfaceInvalid;
+	ui.pathTracerPerfStats.reservoirGiAcceptedLocalSurface        = counters->reservoirGiAcceptedLocalSurface;
+	ui.pathTracerPerfStats.reservoirGiAcceptedLocalMiss           = counters->reservoirGiAcceptedLocalMiss;
 	ui.pathTracerPerfStats.reservoirGiLocalShadowRays             = counters->reservoirGiLocalShadowRays;
 	ui.pathTracerPerfStats.reservoirGiTemporalReconnectRays       = counters->reservoirGiTemporalReconnectRays;
 	ui.pathTracerPerfStats.reservoirGiTemporalShadowRays          = counters->reservoirGiTemporalShadowRays;
@@ -2189,6 +2194,11 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		                     "Reservoir 1C Shadowed Sun First Mixed",
 		                     1,
 		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided);
+		auto reservoirMixedOppositeGuideRow =
+		    makeReservoirRow(scenario,
+		                     "Reservoir 1C Shadowed Sun First Mixed Opposite Guide",
+		                     1,
+		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineOppositeSunGuided);
 		auto reservoirMixedTemporalRow = reservoirMixedRow;
 		reservoirMixedTemporalRow.name =
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal");
@@ -2223,6 +2233,7 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		ptExperimentRows.push_back(base8SunFirstRow);
 		ptExperimentRows.push_back(base8SunAllRow);
 		ptExperimentRows.push_back(reservoirMixedRow);
+		ptExperimentRows.push_back(reservoirMixedOppositeGuideRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalBudget2Row);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialTwoNeighborRow);
@@ -2310,7 +2321,9 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "reservoirTemporalBudget=%d, reservoirSpatialBudget=%d, "
 	     "firstHitProbeAvgLuma=%.5f, firstHitSunVisibleAvgLuma=%.5f, "
 	     "reservoirGiCandidateRays=%.1f, reservoirGiAccepted=%.1f, "
-	     "localSurfaceHits=%.1f, localValid=%.1f, localShadowRays=%.1f, "
+	     "localSurfaceHits=%.1f, localValid=%.1f, localMiss=%.1f, localMissPositive=%.1f, "
+	     "localSurfaceInvalid=%.1f, acceptedLocalSurface=%.1f, acceptedLocalMiss=%.1f, "
+	     "localShadowRays=%.1f, "
 	     "reservoirGiAcceptedAvgLuma=%.5f, reservoirGiAcceptedLumaSum=%.1f, "
 	     "reservoirGiSelectedWeightAvg=%.5f, reservoirGiTargetWeightAvg=%.5f, "
 	     "reservoirGiConfidenceMAvg=%.5f, "
@@ -2336,6 +2349,11 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.reservoirGiAccepted * invSamples,
 	     accum.reservoirGiLocalSurfaceHits * invSamples,
 	     accum.reservoirGiLocalValidSamples * invSamples,
+	     accum.reservoirGiLocalMissCandidates * invSamples,
+	     accum.reservoirGiLocalMissPositiveWeight * invSamples,
+	     accum.reservoirGiLocalSurfaceInvalid * invSamples,
+	     accum.reservoirGiAcceptedLocalSurface * invSamples,
+	     accum.reservoirGiAcceptedLocalMiss * invSamples,
 	     accum.reservoirGiLocalShadowRays * invSamples,
 	     accum.reservoirGiAcceptedAvgLuma * invSamples,
 	     accum.reservoirGiAcceptedLumaSum * invSamples,
@@ -2426,6 +2444,16 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiLocalSurfaceHits);
 	ptExperimentAccum.reservoirGiLocalValidSamples +=
 	    static_cast<double>(stats.reservoirGiLocalValidSamples);
+	ptExperimentAccum.reservoirGiLocalMissCandidates +=
+	    static_cast<double>(stats.reservoirGiLocalMissCandidates);
+	ptExperimentAccum.reservoirGiLocalMissPositiveWeight +=
+	    static_cast<double>(stats.reservoirGiLocalMissPositiveWeight);
+	ptExperimentAccum.reservoirGiLocalSurfaceInvalid +=
+	    static_cast<double>(stats.reservoirGiLocalSurfaceInvalid);
+	ptExperimentAccum.reservoirGiAcceptedLocalSurface +=
+	    static_cast<double>(stats.reservoirGiAcceptedLocalSurface);
+	ptExperimentAccum.reservoirGiAcceptedLocalMiss +=
+	    static_cast<double>(stats.reservoirGiAcceptedLocalMiss);
 	ptExperimentAccum.reservoirGiLocalShadowRays +=
 	    static_cast<double>(stats.reservoirGiLocalShadowRays);
 	ptExperimentAccum.reservoirGiTemporalReconnectRays +=
