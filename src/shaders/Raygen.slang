@@ -72,6 +72,9 @@ static const int DEBUG_AOV_PATH_RESERVOIR_GI_CANDIDATE_POSITIVE_WEIGHT = 21;
 static const int DEBUG_AOV_PATH_RESERVOIR_GI_SELECTED_WEIGHT = 22;
 static const int ENV_NEE_SAMPLING_COSINE_HEMISPHERE = 0;
 static const int ENV_NEE_SAMPLING_SKY_BIASED = 1;
+static const int ENV_NEE_BOUNCE_FIRST_ONLY = 0;
+static const int ENV_NEE_BOUNCE_FIRST_TWO = 1;
+static const int ENV_NEE_BOUNCE_ALL = 2;
 static const int FIRST_HIT_PROBE_SAMPLING_COSINE_HEMISPHERE = 0;
 static const int FIRST_HIT_PROBE_SAMPLING_SUN_BOUNCE_GUIDED = 1;
 static const int FIRST_HIT_PROBE_SAMPLING_CANDIDATE_SUN_BOUNCE = 2;
@@ -131,6 +134,8 @@ static const uint PT_FLAGS_RESERVOIR_TEMPORAL_BUDGET_SHIFT = 17u;
 static const uint PT_FLAGS_RESERVOIR_TEMPORAL_BUDGET_MASK = 0x3u;
 static const uint PT_FLAGS_RESERVOIR_SPATIAL_BUDGET_SHIFT = 19u;
 static const uint PT_FLAGS_RESERVOIR_SPATIAL_BUDGET_MASK = 0x3u;
+static const uint PT_FLAGS_ENVIRONMENT_BOUNCE_SHIFT = 21u;
+static const uint PT_FLAGS_ENVIRONMENT_BOUNCE_MASK = 0x3u;
 static const uint PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = PT_FLAGS_APPLY_FIRST_HIT_PROBES_BIT;
 static const uint targetWallFirstHitProbeContributionSumOffset = 52u;
 static const uint targetWallBaseLuminanceSumOffset = 56u;
@@ -282,9 +287,11 @@ float3 sampleSkyBiasedEnvironmentDirection(float2 xi)
     return cosineSampleHemisphere(xi, float3(0.0, 1.0, 0.0));
 }
 
-bool environmentNeeEnabledForBounce(int bounce)
+bool environmentNeeEnabledForBounce(int bounce, int environmentNeeBounceMode)
 {
-    return bounce == 0;
+    return environmentNeeBounceMode == ENV_NEE_BOUNCE_ALL ||
+           (environmentNeeBounceMode == ENV_NEE_BOUNCE_FIRST_TWO && bounce <= 1) ||
+           (environmentNeeBounceMode == ENV_NEE_BOUNCE_FIRST_ONLY && bounce == 0);
 }
 
 float pathTracerLuminance(float3 c)
@@ -2419,6 +2426,8 @@ void main() {
                                        PT_FLAGS_RESERVOIR_SPATIAL_BUDGET_MASK);
     int    environmentNeeSamplingMode = int((packedPathTracerFlags >> PT_FLAGS_ENVIRONMENT_SAMPLING_SHIFT) &
                                             PT_FLAGS_ENVIRONMENT_SAMPLING_MASK);
+    int    environmentNeeBounceMode = int((packedPathTracerFlags >> PT_FLAGS_ENVIRONMENT_BOUNCE_SHIFT) &
+                                          PT_FLAGS_ENVIRONMENT_BOUNCE_MASK);
     int    firstHitDiffuseSampleCount =
         clamp(int((packedPathTracerFlags >> PT_FLAGS_FIRST_HIT_DIFFUSE_SAMPLES_SHIFT) &
                   PT_FLAGS_FIRST_HIT_DIFFUSE_SAMPLES_MASK),
@@ -2651,7 +2660,8 @@ void main() {
         float  specProb = clamp(fAvg + payload.metallic * 0.5, 0.1, 0.9);
         float  diffuseSelectionProbability = 1.0 - specProb;
 
-        bool useEnvironmentNeeOnThisBounce = environmentNeeEnabled && environmentNeeEnabledForBounce(bounce);
+        bool useEnvironmentNeeOnThisBounce =
+            environmentNeeEnabled && environmentNeeEnabledForBounce(bounce, environmentNeeBounceMode);
         if (useEnvironmentNeeOnThisBounce) {
             float3 envNeeContribution = sampleEnvironmentNEE(payload.hitPos, N, V, throughput, payload,
                                                              diffuseSelectionProbability, environmentNeeSamplingMode, rngState);

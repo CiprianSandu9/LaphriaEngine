@@ -73,6 +73,8 @@ constexpr uint32_t    kPtFlagsReservoirTemporalBudgetShift   = 17u;
 constexpr uint32_t    kPtFlagsReservoirTemporalBudgetMask    = 0x3u;
 constexpr uint32_t    kPtFlagsReservoirSpatialBudgetShift    = 19u;
 constexpr uint32_t    kPtFlagsReservoirSpatialBudgetMask     = 0x3u;
+constexpr uint32_t    kPtFlagsEnvironmentBounceShift         = 21u;
+constexpr uint32_t    kPtFlagsEnvironmentBounceMask          = 0x3u;
 constexpr int         PATH_TRACER_BLACK_ENVIRONMENT_BIT      = static_cast<int>(kPtFlagsBlackEnvironmentBit);
 constexpr int         PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = static_cast<int>(kPtFlagsApplyFirstHitProbesBit);
 constexpr double      kWindowTitleUpdateIntervalSeconds      = 0.5;
@@ -174,7 +176,10 @@ uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
 	                          kPtFlagsReservoirTemporalBudgetMask) |
 	       packPathTracerBits(encodeReservoirGiBudgetDivisor(settings.reservoirGiSpatialBudgetDivisor),
 	                          kPtFlagsReservoirSpatialBudgetShift,
-	                          kPtFlagsReservoirSpatialBudgetMask);
+	                          kPtFlagsReservoirSpatialBudgetMask) |
+	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.environmentNeeBounceMode, 0, 2)),
+	                          kPtFlagsEnvironmentBounceShift,
+	                          kPtFlagsEnvironmentBounceMask);
 }
 
 std::filesystem::path resolveProjectRootPath()
@@ -2156,27 +2161,6 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		row.lightDirection                = scenario.lightDirection;
 	};
 
-	auto makeBaseTransportRow = [&](const SponzaScenarioPreset &scenario,
-	                                const char                 *variant,
-	                                int                         directSunMode) {
-		PathTracerExperimentRow row{};
-		row.name = makeScenarioRowName(scenario, variant);
-		applyScenarioPreset(row, scenario);
-		row.probeMode                          = UISystem::FirstHitProbeSamplingMode::CosineHemisphere;
-		row.blackEnvironment                   = false;
-		row.applyDebugLightPreset              = false;
-		row.firstHitDiffuseSamples             = 1;
-		row.firstHitCandidateCount             = 4;
-		row.reservoirGiMode                    = UISystem::PathTracerReservoirGiMode::Off;
-		row.reservoirGiTemporalBudgetDivisor   = 1;
-		row.reservoirGiSpatialBudgetDivisor    = 1;
-		row.pathTracerMaxBounces               = 8;
-		row.directSunBounceMode                = directSunMode;
-		row.reservoirGiCandidateEvaluationMode = 2;
-		row.debugAov                           = UISystem::PathTracerDebugAov::PathRawFinalColor;
-		return row;
-	};
-
 	auto makeReservoirRow = [&](const SponzaScenarioPreset &scenario,
 	                            const char                 *variant,
 	                            int                         directSunMode,
@@ -2196,6 +2180,7 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		row.reservoirGiUseCandidateRis         = false;
 		row.reservoirGiTemporalBudgetDivisor   = 1;
 		row.reservoirGiSpatialBudgetDivisor    = 1;
+		row.environmentNeeBounceMode           = 0;
 		row.pathTracerMaxBounces               = 8;
 		row.directSunBounceMode                = directSunMode;
 		row.reservoirGiCandidateEvaluationMode = 2;
@@ -2211,21 +2196,14 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		                     "Reservoir 1C Shadowed Sun First Mixed",
 		                     1,
 		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided);
-		auto reservoirMixedHistoryGuideRow =
-		    makeReservoirRow(scenario,
-		                     "Reservoir 1C Shadowed Sun First Mixed History Guide",
-		                     1,
-		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineHistoryGuided);
-		auto reservoirMixedTemporalRow = reservoirMixedRow;
-		reservoirMixedTemporalRow.name =
-		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal");
-		reservoirMixedTemporalRow.reservoirGiMode = UISystem::PathTracerReservoirGiMode::Temporal;
-		auto reservoirMixedTemporalBudget2Row = reservoirMixedTemporalRow;
+		auto reservoirMixedTemporalBaseRow = reservoirMixedRow;
+		reservoirMixedTemporalBaseRow.reservoirGiMode = UISystem::PathTracerReservoirGiMode::Temporal;
+		auto reservoirMixedTemporalBudget2Row = reservoirMixedTemporalBaseRow;
 		reservoirMixedTemporalBudget2Row.name =
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2");
 		reservoirMixedTemporalBudget2Row.reservoirGiTemporalBudgetDivisor = 2;
 		reservoirMixedTemporalBudget2Row.reservoirGiSpatialBudgetDivisor = 1;
-		auto reservoirMixedTemporalSpatialTwoNeighborRow = reservoirMixedTemporalRow;
+		auto reservoirMixedTemporalSpatialTwoNeighborRow = reservoirMixedTemporalBaseRow;
 		reservoirMixedTemporalSpatialTwoNeighborRow.name =
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N");
 		reservoirMixedTemporalSpatialTwoNeighborRow.reservoirGiMode = UISystem::PathTracerReservoirGiMode::TemporalSpatial;
@@ -2235,26 +2213,16 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2");
 		reservoirMixedTemporalSpatialBudget2Row.reservoirGiTemporalBudgetDivisor = 2;
 		reservoirMixedTemporalSpatialBudget2Row.reservoirGiSpatialBudgetDivisor = 2;
+		auto reservoirMixedTemporalSpatialBudget2EnvFirstTwoRow = reservoirMixedTemporalSpatialBudget2Row;
+		reservoirMixedTemporalSpatialBudget2EnvFirstTwoRow.name =
+		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Env First Two");
+		reservoirMixedTemporalSpatialBudget2EnvFirstTwoRow.environmentNeeBounceMode = 1;
 
-		auto base3SunFirstRow = makeBaseTransportRow(scenario, "Base 3 Sun First", 1);
-		base3SunFirstRow.pathTracerMaxBounces = 3;
-		auto base5SunFirstRow = makeBaseTransportRow(scenario, "Base 5 Sun First", 1);
-		base5SunFirstRow.pathTracerMaxBounces = 5;
-		auto base8SunFirstRow = makeBaseTransportRow(scenario, "Base 8 Sun First", 1);
-		base8SunFirstRow.pathTracerMaxBounces = 8;
-		auto base8SunAllRow = makeBaseTransportRow(scenario, "Base 8 Sun All", 0);
-		base8SunAllRow.pathTracerMaxBounces = 8;
-
-		ptExperimentRows.push_back(base3SunFirstRow);
-		ptExperimentRows.push_back(base5SunFirstRow);
-		ptExperimentRows.push_back(base8SunFirstRow);
-		ptExperimentRows.push_back(base8SunAllRow);
 		ptExperimentRows.push_back(reservoirMixedRow);
-		ptExperimentRows.push_back(reservoirMixedHistoryGuideRow);
-		ptExperimentRows.push_back(reservoirMixedTemporalRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalBudget2Row);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialTwoNeighborRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);
+		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2EnvFirstTwoRow);
 	}
 
 	ptExperimentSweepActive     = !ptExperimentRows.empty();
@@ -2290,6 +2258,7 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
 	auto &settings                              = ui.pathTracerSettings;
 	auto &analysis                              = ui.pathTracerAnalysisSettings;
 	settings.enableEnvironmentNEE               = true;
+	settings.environmentNeeBounceMode           = row.environmentNeeBounceMode;
 	settings.blackEnvironment                   = row.blackEnvironment;
 	settings.applyFirstHitProbesToFinal         = true;
 	settings.environmentNeeSamplingMode         = UISystem::EnvironmentNeeSamplingMode::SkyBiased;
@@ -2335,7 +2304,7 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 {
 	const double invSamples = (accum.sampleCount > 0) ? (1.0 / static_cast<double>(accum.sampleCount)) : 0.0;
 	LOGI("PT Experiment Row Summary: name=\"%s\", samples=%u, mode=%d, "
-	     "maxBounces=%d, directSunMode=%d, reservoirEvalMode=%d, "
+	     "maxBounces=%d, directSunMode=%d, environmentNeeMode=%d, reservoirEvalMode=%d, "
 	     "reservoirGiMode=%d, reservoirProposalMode=%d, reservoirCandidates=%d, reservoirUseRis=%d, "
 	     "reservoirTemporalBudget=%d, reservoirSpatialBudget=%d, "
 	     "firstHitProbeAvgLuma=%.5f, firstHitSunVisibleAvgLuma=%.5f, "
@@ -2358,6 +2327,7 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     static_cast<int>(row.probeMode),
 	     row.pathTracerMaxBounces,
 	     row.directSunBounceMode,
+	     row.environmentNeeBounceMode,
 	     row.reservoirGiCandidateEvaluationMode,
 	     static_cast<int>(row.reservoirGiMode),
 	     static_cast<int>(row.reservoirGiProposalMode),
@@ -2777,16 +2747,20 @@ void EngineCore::applySponzaValidationPreset(UISystem::PathTracerSponzaValidatio
 	ui.exposure                       = 1.0f;
 	ui.lightDirection                 = glm::normalize(preset.lightDirection);
 	pathTracerSettings.enableEnvironmentNEE     = true;
+	pathTracerSettings.environmentNeeBounceMode = 0;
 	pathTracerSettings.blackEnvironment         = false;
 	pathTracerSettings.applyFirstHitProbesToFinal = true;
 	pathTracerSettings.environmentNeeSamplingMode = UISystem::EnvironmentNeeSamplingMode::SkyBiased;
 	pathTracerSettings.firstHitProbeSamplingMode  = UISystem::FirstHitProbeSamplingMode::CandidateRis;
 	pathTracerSettings.firstHitDiffuseSamples     = 2;
 	pathTracerSettings.firstHitCandidateCount     = 4;
-	pathTracerSettings.reservoirGiMode            = UISystem::PathTracerReservoirGiMode::SingleFrame;
+	pathTracerSettings.reservoirGiMode            = UISystem::PathTracerReservoirGiMode::TemporalSpatial;
 	pathTracerSettings.reservoirGiProposalMode    = UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided;
 	pathTracerSettings.reservoirGiCandidateCount = 1;
+	pathTracerSettings.reservoirGiSpatialNeighborCount = 2;
 	pathTracerSettings.reservoirGiUseCandidateRis = false;
+	pathTracerSettings.reservoirGiTemporalBudgetDivisor = 2;
+	pathTracerSettings.reservoirGiSpatialBudgetDivisor = 2;
 	pathTracerSettings.reservoirGiCandidateEvaluationMode = 2;
 	pathTracerSettings.pathTracerMaxBounces       = 8;
 	pathTracerSettings.directSunBounceMode = 1;

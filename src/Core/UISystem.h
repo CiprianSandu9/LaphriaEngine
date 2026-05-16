@@ -111,6 +111,8 @@ public:
         PathTracerQualityMode qualityMode = PathTracerQualityMode::Manual;
         bool                  reduceSecondaryEffects = false;
         bool                  enableEnvironmentNEE = true;
+        // 0 = first bounce only, 1 = first 2 bounces, 2 = all bounces.
+        int                   environmentNeeBounceMode = 0;
         bool                  blackEnvironment = false;
         bool                  applyFirstHitProbesToFinal = false;
         EnvironmentNeeSamplingMode environmentNeeSamplingMode = EnvironmentNeeSamplingMode::SkyBiased;

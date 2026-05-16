@@ -113,6 +113,7 @@ class EngineCore
 		bool reservoirGiUseCandidateRis = true;
 		int reservoirGiTemporalBudgetDivisor = 1;
 		int reservoirGiSpatialBudgetDivisor = 1;
+		int environmentNeeBounceMode = 0;
 		int pathTracerMaxBounces = 8;
 		// 0 = all bounces, 1 = first bounce only, 2 = first 2 bounces.
 		int directSunBounceMode = 0;

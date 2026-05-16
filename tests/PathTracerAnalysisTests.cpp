@@ -1111,6 +1111,13 @@ bool testPathTracerDebugAovContract()
 	    "bsdfPdfForEnvironmentDirection",
 	    "sampleSkyBiasedEnvironmentDirection",
 	    "environmentNeeEnabledForBounce",
+	    "ENV_NEE_BOUNCE_FIRST_ONLY",
+	    "ENV_NEE_BOUNCE_FIRST_TWO",
+	    "ENV_NEE_BOUNCE_ALL",
+	    "bool environmentNeeEnabledForBounce(int bounce, int environmentNeeBounceMode)",
+	    "environmentNeeBounceMode == ENV_NEE_BOUNCE_FIRST_TWO && bounce <= 1",
+	    "environmentNeeBounceMode == ENV_NEE_BOUNCE_ALL",
+	    "int    environmentNeeBounceMode",
 	    "ENV_NEE_SAMPLING_SKY_BIASED",
 	    "firstHitDiffuseSampleCount",
 	    "firstHitProbeSamplingMode",
@@ -1148,6 +1155,7 @@ bool testPathTracerDebugAovContract()
 	    "PT_MATERIAL_RESERVOIR_PROPOSAL_MASK",
 	    "PT_MATERIAL_RESERVOIR_MODE_SHIFT",
 	    "PT_FLAGS_ENVIRONMENT_NEE_BIT",
+	    "PT_FLAGS_ENVIRONMENT_BOUNCE_SHIFT",
 	    "PT_FLAGS_FIRST_HIT_PROBE_SAMPLING_SHIFT",
 	    "sampleReservoirGiProposalDirection",
 	    "sampleHistoryGuidedReservoirGiProposalDirection",
@@ -1275,6 +1283,7 @@ bool testPathTracerDebugAovContract()
 	    "kPtMaterialReservoirProposalShift",
 	    "kPtMaterialReservoirProposalMask",
 	    "kPtFlagsEnvironmentNeeBit",
+	    "kPtFlagsEnvironmentBounceShift",
 	    "kPtFlagsReservoirGiDetailedDiagnosticsBit",
 	    "kPtFlagsReservoirTemporalBudgetShift",
 	    "kPtFlagsReservoirSpatialBudgetShift",
@@ -1283,6 +1292,11 @@ bool testPathTracerDebugAovContract()
 	    "reservoirGiDetailedDiagnostics",
 	    "reservoirGiTemporalBudgetDivisor",
 	    "reservoirGiSpatialBudgetDivisor",
+	    "environmentNeeBounceMode",
+	    "Env NEE Bounces",
+	    "First Only",
+	    "First Two",
+	    "All Bounces",
 	    "Temporal Reuse Budget Divisor",
 	    "Spatial Reuse Budget Divisor",
 	    "Detailed Reservoir Diagnostics",
@@ -1318,27 +1332,24 @@ bool testPathTracerDebugAovContract()
 	    "Mid-Depth Interior",
 	    "glm::vec3(0.0f, 12.0f, -1.5f)",
 	    "glm::vec3(-1.0f, 6.5f, 3.0f)",
-	    "Base 3 Sun First",
-	    "Base 5 Sun First",
-	    "Base 8 Sun First",
-	    "Base 8 Sun All",
 	    "Reservoir 1C Shadowed Sun First Mixed",
-	    "Reservoir 1C Shadowed Sun First Mixed History Guide",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Env First Two",
+	    "environmentNeeMode=%d",
 	    "reservoirTemporalBudget=%d",
 	    "reservoirSpatialBudget=%d",
 	    "reservoirMixedTemporalBudget2Row.reservoirGiTemporalBudgetDivisor = 2",
 	    "reservoirMixedTemporalSpatialBudget2Row.reservoirGiSpatialBudgetDivisor = 2",
+	    "pathTracerSettings.reservoirGiMode            = UISystem::PathTracerReservoirGiMode::TemporalSpatial",
+	    "pathTracerSettings.reservoirGiSpatialNeighborCount = 2",
+	    "pathTracerSettings.environmentNeeBounceMode = 0",
+	    "pathTracerSettings.reservoirGiTemporalBudgetDivisor = 2",
+	    "pathTracerSettings.reservoirGiSpatialBudgetDivisor = 2",
 	    "ptBenchmarkBasePosition",
 	    "ui.lightDirection",
 	    "makeScenarioRowName",
-	    "base3SunFirstRow.pathTracerMaxBounces = 3",
-	    "base5SunFirstRow.pathTracerMaxBounces = 5",
-	    "base8SunFirstRow.pathTracerMaxBounces = 8",
-	    "base8SunAllRow.pathTracerMaxBounces = 8",
 	    "uint32_t padding3",
 	    "rtPush.padding3 = pathTracerFlags",
 	    "packPathTracerMaterialSettings(ui.pathTracerSettings)",
@@ -1364,6 +1375,7 @@ bool testPathTracerDebugAovContract()
 	    "pathTracerSettings.blackEnvironment",
 	    "pathTracerSettings.applyFirstHitProbesToFinal",
 	    "pathTracerSettings.environmentNeeSamplingMode",
+	    "pathTracerSettings.environmentNeeBounceMode",
 	    "pathTracerSettings.firstHitProbeSamplingMode",
 	    "pathTracerSettings.firstHitDiffuseSamples",
 	    "pathTracerSettings.firstHitCandidateCount",
@@ -1402,13 +1414,10 @@ bool testPathTracerDebugAovContract()
 	}
 	const char *requiredSponzaTemporalSpatialRows[] = {
 	    "Reservoir 1C Shadowed Sun First Mixed",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 1N Budget 2",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 1N Budget 3",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 3"};
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Env First Two"};
 	for (const char *rowName : requiredSponzaTemporalSpatialRows)
 	{
 		if (!containsText(engineSource, rowName))
@@ -1421,6 +1430,13 @@ bool testPathTracerDebugAovContract()
 	    containsText(engineSource, "Sponza / Reservoir GI Temporal Spatial") ||
 	    containsText(engineSource, "Sponza / Reservoir GI Single Frame 2 Candidates No RIS") ||
 	    containsText(engineSource, "Sponza / Reservoir GI Single Frame 2 Candidates RIS") ||
+	    containsText(engineSource, "Base 3 Sun First") ||
+	    containsText(engineSource, "Base 5 Sun First") ||
+	    containsText(engineSource, "Base 8 Sun First") ||
+	    containsText(engineSource, "Base 8 Sun All") ||
+	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal\")") ||
+	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 1N Budget") ||
+	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 3") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed History Guide") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun All") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First\", 1") ||

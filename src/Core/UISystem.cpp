@@ -1078,6 +1078,11 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::Checkbox("Black Environment", &pathTracerSettings.blackEnvironment);
         ImGui::Checkbox("Apply First-Hit Probes", &pathTracerSettings.applyFirstHitProbesToFinal);
 
+        const char *envNeeBounceModes[] = {"First Only", "First Two", "All Bounces"};
+        ImGui::Combo("Env NEE Bounces", &pathTracerSettings.environmentNeeBounceMode,
+                     envNeeBounceModes, IM_ARRAYSIZE(envNeeBounceModes));
+        pathTracerSettings.environmentNeeBounceMode = std::clamp(pathTracerSettings.environmentNeeBounceMode, 0, 2);
+
         const char *envNeeSamplingModes[] = {"Cosine Hemisphere", "Sky Biased"};
         int envNeeSamplingMode = static_cast<int>(pathTracerSettings.environmentNeeSamplingMode);
         if (ImGui::Combo("Env NEE Sampling", &envNeeSamplingMode, envNeeSamplingModes, IM_ARRAYSIZE(envNeeSamplingModes))) {
