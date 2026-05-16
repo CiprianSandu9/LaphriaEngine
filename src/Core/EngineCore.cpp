@@ -75,6 +75,8 @@ constexpr uint32_t    kPtFlagsReservoirSpatialBudgetShift    = 19u;
 constexpr uint32_t    kPtFlagsReservoirSpatialBudgetMask     = 0x3u;
 constexpr uint32_t    kPtFlagsEnvironmentBounceShift         = 21u;
 constexpr uint32_t    kPtFlagsEnvironmentBounceMask          = 0x3u;
+constexpr uint32_t    RESERVOIR_GI_RECEIVER_CACHE_CURRENT_BINDING = 14u;
+constexpr uint32_t    RESERVOIR_GI_RECEIVER_CACHE_HISTORY_BINDING = 15u;
 constexpr int         PATH_TRACER_BLACK_ENVIRONMENT_BIT      = static_cast<int>(kPtFlagsBlackEnvironmentBit);
 constexpr int         PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = static_cast<int>(kPtFlagsApplyFirstHitProbesBit);
 constexpr double      kWindowTitleUpdateIntervalSeconds      = 0.5;
@@ -119,7 +121,7 @@ uint32_t encodeReservoirGiBudgetDivisor(int divisor)
 UISystem::PathTracerReservoirGiProposalMode
 normalizeReservoirGiProposalMode(UISystem::PathTracerReservoirGiProposalMode mode)
 {
-	const int maxMode = static_cast<int>(UISystem::PathTracerReservoirGiProposalMode::MixedCosineDualSunGuided);
+	const int maxMode = static_cast<int>(UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverCacheReconnect);
 	const int clamped = std::clamp(static_cast<int>(mode), 0, maxMode);
 	return static_cast<UISystem::PathTracerReservoirGiProposalMode>(clamped);
 }
@@ -847,6 +849,16 @@ void EngineCore::createRayTracingDescriptorSets()
 		    .buffer = *frames.reservoirGiCurrentBuffers[reservoirGiHistoryIndex],
 		    .offset = 0,
 		    .range  = frames.reservoirGiCurrentBufferSize};
+		vk::DescriptorBufferInfo reservoirGiReceiverCacheCurrentInfo{
+		    .buffer = *frames.reservoirGiReceiverCacheBuffers[i],
+		    .offset = 0,
+		    .range  = frames.reservoirGiReceiverCacheBufferSize};
+		const size_t reservoirGiReceiverCacheHistoryIndex =
+		    frames.reservoirGiReceiverCacheBuffers.empty() ? i : (i + frames.reservoirGiReceiverCacheBuffers.size() - 1) % frames.reservoirGiReceiverCacheBuffers.size();
+		vk::DescriptorBufferInfo reservoirGiReceiverCacheHistoryInfo{
+		    .buffer = *frames.reservoirGiReceiverCacheBuffers[reservoirGiReceiverCacheHistoryIndex],
+		    .offset = 0,
+		    .range  = frames.reservoirGiReceiverCacheBufferSize};
 		vk::WriteDescriptorSet reservoirGiCurrentWrite{
 		    .dstSet          = *rtDescriptorSets[i],
 		    .dstBinding      = 12,
@@ -861,6 +873,20 @@ void EngineCore::createRayTracingDescriptorSets()
 		    .descriptorCount = 1,
 		    .descriptorType  = vk::DescriptorType::eStorageBuffer,
 		    .pBufferInfo     = &reservoirGiHistoryInfo};
+		vk::WriteDescriptorSet reservoirGiReceiverCacheCurrentWrite{
+		    .dstSet          = *rtDescriptorSets[i],
+		    .dstBinding      = RESERVOIR_GI_RECEIVER_CACHE_CURRENT_BINDING,
+		    .dstArrayElement = 0,
+		    .descriptorCount = 1,
+		    .descriptorType  = vk::DescriptorType::eStorageBuffer,
+		    .pBufferInfo     = &reservoirGiReceiverCacheCurrentInfo};
+		vk::WriteDescriptorSet reservoirGiReceiverCacheHistoryWrite{
+		    .dstSet          = *rtDescriptorSets[i],
+		    .dstBinding      = RESERVOIR_GI_RECEIVER_CACHE_HISTORY_BINDING,
+		    .dstArrayElement = 0,
+		    .descriptorCount = 1,
+		    .descriptorType  = vk::DescriptorType::eStorageBuffer,
+		    .pBufferInfo     = &reservoirGiReceiverCacheHistoryInfo};
 
 		std::vector<vk::WriteDescriptorSet> descriptorWrites;
 		descriptorWrites.push_back(tlasWrite);
@@ -871,6 +897,8 @@ void EngineCore::createRayTracingDescriptorSets()
 		descriptorWrites.push_back(analysisCounterWrite);
 		descriptorWrites.push_back(reservoirGiCurrentWrite);
 		descriptorWrites.push_back(reservoirGiHistoryWrite);
+		descriptorWrites.push_back(reservoirGiReceiverCacheCurrentWrite);
+		descriptorWrites.push_back(reservoirGiReceiverCacheHistoryWrite);
 
 		// Now we extract ALL global vertices, indices, materials, and textures
 		// across all Scene Nodes that have been uploaded into VRAM by ResourceManager
@@ -1847,6 +1875,8 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	ui.pathTracerPerfStats.reservoirGiSelectedLocal               = counters->reservoirGiSelectedLocal;
 	ui.pathTracerPerfStats.reservoirGiSelectedTemporal            = counters->reservoirGiSelectedTemporal;
 	ui.pathTracerPerfStats.reservoirGiSelectedSpatial             = counters->reservoirGiSelectedSpatial;
+	ui.pathTracerPerfStats.reservoirGiSelectedCache               = counters->reservoirGiSelectedCache;
+	ui.pathTracerPerfStats.reservoirGiSelectedCacheReconnect      = counters->reservoirGiSelectedCacheReconnect;
 	ui.pathTracerPerfStats.reservoirGiLocalSurfaceHits            = counters->reservoirGiLocalSurfaceHits;
 	ui.pathTracerPerfStats.reservoirGiLocalValidSamples           = counters->reservoirGiLocalValidSamples;
 	ui.pathTracerPerfStats.reservoirGiLocalMissCandidates         = counters->reservoirGiLocalMissCandidates;
@@ -1878,6 +1908,30 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    counters->reservoirGiHistoryGuideNeighborHits;
 	ui.pathTracerPerfStats.reservoirGiHistoryGuideNeighborMisses =
 	    counters->reservoirGiHistoryGuideNeighborMisses;
+	ui.pathTracerPerfStats.reservoirGiReceiverCacheStore =
+	    counters->reservoirGiReceiverCacheStore;
+	ui.pathTracerPerfStats.reservoirGiReceiverCacheAttempt =
+	    counters->reservoirGiReceiverCacheAttempt;
+	ui.pathTracerPerfStats.reservoirGiReceiverCacheHit =
+	    counters->reservoirGiReceiverCacheHit;
+	ui.pathTracerPerfStats.reservoirGiReceiverCacheMiss =
+	    counters->reservoirGiReceiverCacheMiss;
+	ui.pathTracerPerfStats.reservoirGiReceiverCacheRejectNoLight =
+	    counters->reservoirGiReceiverCacheRejectNoLight;
+	ui.pathTracerPerfStats.reservoirGiReceiverCacheAccepted =
+	    counters->reservoirGiReceiverCacheAccepted;
+	ui.pathTracerPerfStats.reservoirGiReceiverReconnectAttempt =
+	    counters->reservoirGiReceiverReconnectAttempt;
+	ui.pathTracerPerfStats.reservoirGiReceiverReconnectHit =
+	    counters->reservoirGiReceiverReconnectHit;
+	ui.pathTracerPerfStats.reservoirGiReceiverReconnectMiss =
+	    counters->reservoirGiReceiverReconnectMiss;
+	ui.pathTracerPerfStats.reservoirGiReceiverReconnectRejectVisibility =
+	    counters->reservoirGiReceiverReconnectRejectVisibility;
+	ui.pathTracerPerfStats.reservoirGiReceiverReconnectRejectTarget =
+	    counters->reservoirGiReceiverReconnectRejectTarget;
+	ui.pathTracerPerfStats.reservoirGiReceiverReconnectAccepted =
+	    counters->reservoirGiReceiverReconnectAccepted;
 	ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum =
 	    static_cast<float>(counters->reservoirGiLumaScaledSum) / 64.0f;
 	ui.pathTracerPerfStats.reservoirGiAcceptedAvgLuma =
@@ -2222,6 +2276,11 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver");
 		reservoirMixedTemporalSpatialBudget2SunReceiverRow.reservoirGiProposalMode =
 		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
+		auto reservoirMixedTemporalSpatialBudget2ReceiverReconnectRow = reservoirMixedTemporalSpatialBudget2Row;
+		reservoirMixedTemporalSpatialBudget2ReceiverReconnectRow.name =
+		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Receiver Reconnect");
+		reservoirMixedTemporalSpatialBudget2ReceiverReconnectRow.reservoirGiProposalMode =
+		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverCacheReconnect;
 		auto reservoirMixedTemporalSpatialBudget2EnvFirstTwoRow = reservoirMixedTemporalSpatialBudget2Row;
 		reservoirMixedTemporalSpatialBudget2EnvFirstTwoRow.name =
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Env First Two");
@@ -2232,6 +2291,7 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialTwoNeighborRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);
+		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2ReceiverReconnectRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2EnvFirstTwoRow);
 	}
 
@@ -2259,6 +2319,13 @@ void EngineCore::clearPathTracerExperimentState()
 		if (mapped)
 		{
 			std::memset(mapped, 0, static_cast<size_t>(frames.reservoirGiCurrentBufferSize));
+		}
+	}
+	for (void *mapped : frames.reservoirGiReceiverCacheMapped)
+	{
+		if (mapped)
+		{
+			std::memset(mapped, 0, static_cast<size_t>(frames.reservoirGiReceiverCacheBufferSize));
 		}
 	}
 }
@@ -2328,11 +2395,17 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "reservoirGiSelectedWeightAvg=%.5f, reservoirGiTargetWeightAvg=%.5f, "
 	     "reservoirGiConfidenceMAvg=%.5f, "
 	     "reservoirGiSelectedLocal=%.1f, reservoirGiSelectedTemporal=%.1f, reservoirGiSelectedSpatial=%.1f, "
+	     "reservoirGiSelectedCache=%.1f, reservoirGiSelectedCacheReconnect=%.1f, "
 	     "temporalAccepted=%.1f, temporalReuseAttempts=%.1f, "
 	     "temporalReconnectRays=%.1f, temporalShadowRays=%.1f, "
 	     "historyGuideUsed=%.1f, historyGuideRejectedLowWeight=%.1f, historyGuideFallbackCosine=%.1f, "
 	     "historyGuideRejectReprojection=%.1f, historyGuideRejectLoad=%.1f, historyGuideRejectGeometry=%.1f, "
 	     "historyGuideNeighborSearches=%.1f, historyGuideNeighborHits=%.1f, historyGuideNeighborMisses=%.1f, "
+	     "receiverCacheStore=%.1f, receiverCacheAttempt=%.1f, receiverCacheHit=%.1f, "
+	     "receiverCacheMiss=%.1f, receiverCacheRejectNoLight=%.1f, receiverCacheAccepted=%.1f, "
+	     "receiverReconnectAttempt=%.1f, receiverReconnectHit=%.1f, receiverReconnectMiss=%.1f, "
+	     "receiverReconnectRejectVisibility=%.1f, receiverReconnectRejectTarget=%.1f, "
+	     "receiverReconnectAccepted=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
 	     row.name.c_str(),
 	     accum.sampleCount,
@@ -2371,6 +2444,8 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.reservoirGiSelectedLocal * invSamples,
 	     accum.reservoirGiSelectedTemporal * invSamples,
 	     accum.reservoirGiSelectedSpatial * invSamples,
+	     accum.reservoirGiSelectedCache * invSamples,
+	     accum.reservoirGiSelectedCacheReconnect * invSamples,
 	     accum.reservoirGiTemporalAccepted * invSamples,
 	     accum.reservoirGiTemporalReuseAttempts * invSamples,
 	     accum.reservoirGiTemporalReconnectRays * invSamples,
@@ -2384,6 +2459,18 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.reservoirGiHistoryGuideNeighborSearches * invSamples,
 	     accum.reservoirGiHistoryGuideNeighborHits * invSamples,
 	     accum.reservoirGiHistoryGuideNeighborMisses * invSamples,
+	     accum.reservoirGiReceiverCacheStore * invSamples,
+	     accum.reservoirGiReceiverCacheAttempt * invSamples,
+	     accum.reservoirGiReceiverCacheHit * invSamples,
+	     accum.reservoirGiReceiverCacheMiss * invSamples,
+	     accum.reservoirGiReceiverCacheRejectNoLight * invSamples,
+	     accum.reservoirGiReceiverCacheAccepted * invSamples,
+	     accum.reservoirGiReceiverReconnectAttempt * invSamples,
+	     accum.reservoirGiReceiverReconnectHit * invSamples,
+	     accum.reservoirGiReceiverReconnectMiss * invSamples,
+	     accum.reservoirGiReceiverReconnectRejectVisibility * invSamples,
+	     accum.reservoirGiReceiverReconnectRejectTarget * invSamples,
+	     accum.reservoirGiReceiverReconnectAccepted * invSamples,
 	     accum.rayTraceMs * invSamples,
 	     accum.totalFrameMs * invSamples);
 }
@@ -2457,6 +2544,10 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiSelectedTemporal);
 	ptExperimentAccum.reservoirGiSelectedSpatial +=
 	    static_cast<double>(stats.reservoirGiSelectedSpatial);
+	ptExperimentAccum.reservoirGiSelectedCache +=
+	    static_cast<double>(stats.reservoirGiSelectedCache);
+	ptExperimentAccum.reservoirGiSelectedCacheReconnect +=
+	    static_cast<double>(stats.reservoirGiSelectedCacheReconnect);
 	ptExperimentAccum.reservoirGiLocalSurfaceHits +=
 	    static_cast<double>(stats.reservoirGiLocalSurfaceHits);
 	ptExperimentAccum.reservoirGiLocalValidSamples +=
@@ -2503,6 +2594,30 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiHistoryGuideNeighborHits);
 	ptExperimentAccum.reservoirGiHistoryGuideNeighborMisses +=
 	    static_cast<double>(stats.reservoirGiHistoryGuideNeighborMisses);
+	ptExperimentAccum.reservoirGiReceiverCacheStore +=
+	    static_cast<double>(stats.reservoirGiReceiverCacheStore);
+	ptExperimentAccum.reservoirGiReceiverCacheAttempt +=
+	    static_cast<double>(stats.reservoirGiReceiverCacheAttempt);
+	ptExperimentAccum.reservoirGiReceiverCacheHit +=
+	    static_cast<double>(stats.reservoirGiReceiverCacheHit);
+	ptExperimentAccum.reservoirGiReceiverCacheMiss +=
+	    static_cast<double>(stats.reservoirGiReceiverCacheMiss);
+	ptExperimentAccum.reservoirGiReceiverCacheRejectNoLight +=
+	    static_cast<double>(stats.reservoirGiReceiverCacheRejectNoLight);
+	ptExperimentAccum.reservoirGiReceiverCacheAccepted +=
+	    static_cast<double>(stats.reservoirGiReceiverCacheAccepted);
+	ptExperimentAccum.reservoirGiReceiverReconnectAttempt +=
+	    static_cast<double>(stats.reservoirGiReceiverReconnectAttempt);
+	ptExperimentAccum.reservoirGiReceiverReconnectHit +=
+	    static_cast<double>(stats.reservoirGiReceiverReconnectHit);
+	ptExperimentAccum.reservoirGiReceiverReconnectMiss +=
+	    static_cast<double>(stats.reservoirGiReceiverReconnectMiss);
+	ptExperimentAccum.reservoirGiReceiverReconnectRejectVisibility +=
+	    static_cast<double>(stats.reservoirGiReceiverReconnectRejectVisibility);
+	ptExperimentAccum.reservoirGiReceiverReconnectRejectTarget +=
+	    static_cast<double>(stats.reservoirGiReceiverReconnectRejectTarget);
+	ptExperimentAccum.reservoirGiReceiverReconnectAccepted +=
+	    static_cast<double>(stats.reservoirGiReceiverReconnectAccepted);
 	ptExperimentAccum.rayTraceMs += stats.rayTraceMs;
 	ptExperimentAccum.totalFrameMs += stats.totalFrameMs;
 	++ptExperimentAccum.sampleCount;

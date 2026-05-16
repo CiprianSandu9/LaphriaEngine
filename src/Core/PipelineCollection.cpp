@@ -189,7 +189,9 @@ void PipelineCollection::createRayTracingDescriptorSetLayout(const VulkanDevice 
 	// Binding 9: analysis counters buffer (optional instrumentation path).
 	constexpr uint32_t RESERVOIR_GI_CURRENT_BINDING = 12;
 	constexpr uint32_t RESERVOIR_GI_HISTORY_BINDING = 13;
-	std::array<vk::DescriptorSetLayoutBinding, 12> bindings = {
+	constexpr uint32_t RESERVOIR_GI_RECEIVER_CACHE_CURRENT_BINDING = 14;
+	constexpr uint32_t RESERVOIR_GI_RECEIVER_CACHE_HISTORY_BINDING = 15;
+	std::array<vk::DescriptorSetLayoutBinding, 14> bindings = {
 	    vk::DescriptorSetLayoutBinding{// 0: TLAS
 	                                   .binding         = 0,
 	                                   .descriptorType  = vk::DescriptorType::eAccelerationStructureKHR,
@@ -249,8 +251,18 @@ void PipelineCollection::createRayTracingDescriptorSetLayout(const VulkanDevice 
 	                                   .binding         = RESERVOIR_GI_HISTORY_BINDING,
 	                                   .descriptorType  = vk::DescriptorType::eStorageBuffer,
 	                                   .descriptorCount = 1,
+	                                   .stageFlags      = vk::ShaderStageFlagBits::eRaygenKHR},
+	    vk::DescriptorSetLayoutBinding{// 14: PT receiver-cache current-frame records
+	                                   .binding         = RESERVOIR_GI_RECEIVER_CACHE_CURRENT_BINDING,
+	                                   .descriptorType  = vk::DescriptorType::eStorageBuffer,
+	                                   .descriptorCount = 1,
+	                                   .stageFlags      = vk::ShaderStageFlagBits::eRaygenKHR},
+	    vk::DescriptorSetLayoutBinding{// 15: PT receiver-cache previous-frame records
+	                                   .binding         = RESERVOIR_GI_RECEIVER_CACHE_HISTORY_BINDING,
+	                                   .descriptorType  = vk::DescriptorType::eStorageBuffer,
+	                                   .descriptorCount = 1,
 	                                   .stageFlags      = vk::ShaderStageFlagBits::eRaygenKHR}};
-	std::array<vk::DescriptorBindingFlags, 12> flags = {
+	std::array<vk::DescriptorBindingFlags, 14> flags = {
 	    vk::DescriptorBindingFlags{},   // 0: TLAS
 	    vk::DescriptorBindingFlags{},   // 1: noisy colour
 	    vk::DescriptorBindingFlags{},   // 2: normals
@@ -262,7 +274,9 @@ void PipelineCollection::createRayTracingDescriptorSetLayout(const VulkanDevice 
 	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind, // 8
 	    vk::DescriptorBindingFlags{}, // 9
 	    vk::DescriptorBindingFlags{}, // 12
-	    vk::DescriptorBindingFlags{}  // 13
+	    vk::DescriptorBindingFlags{}, // 13
+	    vk::DescriptorBindingFlags{}, // 14
+	    vk::DescriptorBindingFlags{}  // 15
 	};
 	vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlags{
 	    .bindingCount  = static_cast<uint32_t>(flags.size()),

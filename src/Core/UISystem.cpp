@@ -1126,7 +1126,9 @@ void UISystem::drawPathTracerDebugLab() {
             "Reservoir GI Candidate Surface Hit",
             "Reservoir GI Candidate Sun Visible",
             "Reservoir GI Candidate Positive Weight",
-            "Reservoir GI Selected Weight"};
+            "Reservoir GI Selected Weight",
+            "Reservoir GI Local No Light",
+            "Reservoir GI Selected Source"};
         int debugAovIdx = static_cast<int>(pathTracerAnalysisSettings.debugAov);
         if (ImGui::Combo("Debug AOV", &debugAovIdx, debugAovs, IM_ARRAYSIZE(debugAovs))) {
             pathTracerAnalysisSettings.debugAov = static_cast<PathTracerDebugAov>(debugAovIdx);
@@ -1149,7 +1151,9 @@ void UISystem::drawPathTracerDebugLab() {
             "Mixed Cosine + Sun Guided",
             "Mixed Cosine + History Guide",
             "Mixed Cosine + Sun Receiver Guide",
-            "Mixed Cosine + Dual Sun Guide"};
+            "Mixed Cosine + Dual Sun Guide",
+            "Mixed Cosine + Sun Receiver + Cache Guide",
+            "Mixed Cosine + Sun Receiver + Cache Reconnect"};
         int reservoirGiProposalMode = static_cast<int>(pathTracerSettings.reservoirGiProposalMode);
         if (ImGui::Combo("Reservoir GI Proposal", &reservoirGiProposalMode,
                          reservoirGiProposalModes, IM_ARRAYSIZE(reservoirGiProposalModes))) {
@@ -1184,6 +1188,9 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::Text("Reservoir GI Selected Local: %u", pathTracerPerfStats.reservoirGiSelectedLocal);
         ImGui::Text("Reservoir GI Selected Temporal: %u", pathTracerPerfStats.reservoirGiSelectedTemporal);
         ImGui::Text("Reservoir GI Selected Spatial: %u", pathTracerPerfStats.reservoirGiSelectedSpatial);
+        ImGui::Text("Reservoir GI Selected Cache: %u", pathTracerPerfStats.reservoirGiSelectedCache);
+        ImGui::Text("Reservoir GI Selected Cache Reconnect: %u",
+                    pathTracerPerfStats.reservoirGiSelectedCacheReconnect);
         ImGui::Text("Reservoir GI Local Valid: %u / %u (%.2f%%)",
                     pathTracerPerfStats.reservoirGiLocalValidSamples,
                     pathTracerPerfStats.reservoirGiCandidates,
@@ -1218,6 +1225,25 @@ void UISystem::drawPathTracerDebugLab() {
                     pathTracerPerfStats.reservoirGiHistoryGuideNeighborHits);
         ImGui::Text("Reservoir GI History Guide Neighbor Misses: %u",
                     pathTracerPerfStats.reservoirGiHistoryGuideNeighborMisses);
+        ImGui::Text("Reservoir GI Receiver Cache Store: %u", pathTracerPerfStats.reservoirGiReceiverCacheStore);
+        ImGui::Text("Reservoir GI Receiver Cache Attempts: %u", pathTracerPerfStats.reservoirGiReceiverCacheAttempt);
+        ImGui::Text("Reservoir GI Receiver Cache Hits: %u", pathTracerPerfStats.reservoirGiReceiverCacheHit);
+        ImGui::Text("Reservoir GI Receiver Cache Misses: %u", pathTracerPerfStats.reservoirGiReceiverCacheMiss);
+        ImGui::Text("Reservoir GI Receiver Cache No Light: %u",
+                    pathTracerPerfStats.reservoirGiReceiverCacheRejectNoLight);
+        ImGui::Text("Reservoir GI Receiver Cache Accepted: %u", pathTracerPerfStats.reservoirGiReceiverCacheAccepted);
+        ImGui::Text("Reservoir GI Receiver Reconnect Attempts: %u",
+                    pathTracerPerfStats.reservoirGiReceiverReconnectAttempt);
+        ImGui::Text("Reservoir GI Receiver Reconnect Hits: %u",
+                    pathTracerPerfStats.reservoirGiReceiverReconnectHit);
+        ImGui::Text("Reservoir GI Receiver Reconnect Misses: %u",
+                    pathTracerPerfStats.reservoirGiReceiverReconnectMiss);
+        ImGui::Text("Reservoir GI Receiver Reconnect Reject Visibility: %u",
+                    pathTracerPerfStats.reservoirGiReceiverReconnectRejectVisibility);
+        ImGui::Text("Reservoir GI Receiver Reconnect Reject Target: %u",
+                    pathTracerPerfStats.reservoirGiReceiverReconnectRejectTarget);
+        ImGui::Text("Reservoir GI Receiver Reconnect Accepted: %u",
+                    pathTracerPerfStats.reservoirGiReceiverReconnectAccepted);
         ImGui::Text("Reservoir GI Temporal: accepted %u | rejected %u",
                     pathTracerPerfStats.reservoirGiTemporalAccepted,
                     pathTracerPerfStats.reservoirGiTemporalRejected);

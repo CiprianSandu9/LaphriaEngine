@@ -49,7 +49,9 @@ public:
         PathReservoirGiCandidateSurfaceHit = 19,
         PathReservoirGiCandidateSunVisible = 20,
         PathReservoirGiCandidatePositiveWeight = 21,
-        PathReservoirGiSelectedWeight = 22
+        PathReservoirGiSelectedWeight = 22,
+        PathReservoirGiLocalNoLight = 23,
+        PathReservoirGiSelectedSource = 24
     };
 
     enum class PathTracerQualityMode
@@ -96,7 +98,9 @@ public:
         MixedCosineSunGuided = 2,
         MixedCosineHistoryGuided = 3,
         MixedCosineSunReceiverGuided = 4,
-        MixedCosineDualSunGuided = 5
+        MixedCosineDualSunGuided = 5,
+        MixedCosineSunReceiverCacheGuided = 6,
+        MixedCosineSunReceiverCacheReconnect = 7
     };
 
     enum class PathTracerSponzaValidationView
@@ -192,6 +196,8 @@ public:
         uint32_t reservoirGiSelectedLocal = 0;
         uint32_t reservoirGiSelectedTemporal = 0;
         uint32_t reservoirGiSelectedSpatial = 0;
+        uint32_t reservoirGiSelectedCache = 0;
+        uint32_t reservoirGiSelectedCacheReconnect = 0;
         uint32_t reservoirGiLocalSurfaceHits = 0;
         uint32_t reservoirGiLocalValidSamples = 0;
         uint32_t reservoirGiLocalMissCandidates = 0;
@@ -215,6 +221,18 @@ public:
         uint32_t reservoirGiHistoryGuideNeighborSearches = 0;
         uint32_t reservoirGiHistoryGuideNeighborHits = 0;
         uint32_t reservoirGiHistoryGuideNeighborMisses = 0;
+        uint32_t reservoirGiReceiverCacheStore = 0;
+        uint32_t reservoirGiReceiverCacheAttempt = 0;
+        uint32_t reservoirGiReceiverCacheHit = 0;
+        uint32_t reservoirGiReceiverCacheMiss = 0;
+        uint32_t reservoirGiReceiverCacheRejectNoLight = 0;
+        uint32_t reservoirGiReceiverCacheAccepted = 0;
+        uint32_t reservoirGiReceiverReconnectAttempt = 0;
+        uint32_t reservoirGiReceiverReconnectHit = 0;
+        uint32_t reservoirGiReceiverReconnectMiss = 0;
+        uint32_t reservoirGiReceiverReconnectRejectVisibility = 0;
+        uint32_t reservoirGiReceiverReconnectRejectTarget = 0;
+        uint32_t reservoirGiReceiverReconnectAccepted = 0;
         float reservoirGiAcceptedAvgLuma = 0.0f;
         float reservoirGiAcceptedLumaSum = 0.0f;
         float reservoirGiCandidateSurfaceHitRatio = 0.0f;

@@ -155,6 +155,8 @@ class EngineCore
 		double reservoirGiSelectedLocal = 0.0;
 		double reservoirGiSelectedTemporal = 0.0;
 		double reservoirGiSelectedSpatial = 0.0;
+		double reservoirGiSelectedCache = 0.0;
+		double reservoirGiSelectedCacheReconnect = 0.0;
 		double reservoirGiLocalSurfaceHits = 0.0;
 		double reservoirGiLocalValidSamples = 0.0;
 		double reservoirGiLocalMissCandidates = 0.0;
@@ -178,6 +180,18 @@ class EngineCore
 		double reservoirGiHistoryGuideNeighborSearches = 0.0;
 		double reservoirGiHistoryGuideNeighborHits = 0.0;
 		double reservoirGiHistoryGuideNeighborMisses = 0.0;
+		double reservoirGiReceiverCacheStore = 0.0;
+		double reservoirGiReceiverCacheAttempt = 0.0;
+		double reservoirGiReceiverCacheHit = 0.0;
+		double reservoirGiReceiverCacheMiss = 0.0;
+		double reservoirGiReceiverCacheRejectNoLight = 0.0;
+		double reservoirGiReceiverCacheAccepted = 0.0;
+		double reservoirGiReceiverReconnectAttempt = 0.0;
+		double reservoirGiReceiverReconnectHit = 0.0;
+		double reservoirGiReceiverReconnectMiss = 0.0;
+		double reservoirGiReceiverReconnectRejectVisibility = 0.0;
+		double reservoirGiReceiverReconnectRejectTarget = 0.0;
+		double reservoirGiReceiverReconnectAccepted = 0.0;
 		double rayTraceMs = 0.0;
 		double totalFrameMs = 0.0;
 	};

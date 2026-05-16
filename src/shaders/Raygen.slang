@@ -25,6 +25,8 @@ struct RayPayload {
 [[vk::binding(9, 0)]] RWByteAddressBuffer ptAnalysisCounters;
 [[vk::binding(12, 0)]] RWByteAddressBuffer ptReservoirGiCurrent;
 [[vk::binding(13, 0)]] RWByteAddressBuffer ptReservoirGiHistory;
+[[vk::binding(14, 0)]] RWByteAddressBuffer ptReservoirGiReceiverCacheCurrent;
+[[vk::binding(15, 0)]] RWByteAddressBuffer ptReservoirGiReceiverCacheHistory;
 
 // Set 1 — global UBO
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
@@ -33,9 +35,22 @@ struct RayPayload {
 
 static const int RESERVOIR_GI_CURRENT_BINDING = 12;
 static const int RESERVOIR_GI_HISTORY_BINDING = 13;
+static const int RESERVOIR_GI_RECEIVER_CACHE_CURRENT_BINDING = 14;
+static const int RESERVOIR_GI_RECEIVER_CACHE_HISTORY_BINDING = 15;
 static const uint RESERVOIR_GI_CURRENT_CAPACITY = 262144u;
 static const uint RESERVOIR_GI_CURRENT_HEADER_SIZE = 16;
 static const uint RESERVOIR_GI_RECORD_SIZE = 160;
+static const uint RESERVOIR_GI_RECEIVER_CACHE_CAPACITY = 65536u;
+static const uint RESERVOIR_GI_RECEIVER_CACHE_HEADER_SIZE = 16;
+static const uint RESERVOIR_GI_RECEIVER_CACHE_RECORD_SIZE = 96;
+static const uint RESERVOIR_GI_RECEIVER_CACHE_POSITION_OFFSET = 0;
+static const uint RESERVOIR_GI_RECEIVER_CACHE_NORMAL_OFFSET = 16;
+static const uint RESERVOIR_GI_RECEIVER_CACHE_SUFFIX_RADIANCE_OFFSET = 32;
+static const uint RESERVOIR_GI_RECEIVER_CACHE_TARGET_WEIGHT_OFFSET = 48;
+static const uint RESERVOIR_GI_RECEIVER_CACHE_CONFIDENCE_OFFSET = 52;
+static const uint RESERVOIR_GI_RECEIVER_CACHE_FRAME_ID_OFFSET = 56;
+static const uint RESERVOIR_GI_RECEIVER_CACHE_FLAGS_OFFSET = 60;
+static const uint RESERVOIR_GI_RECEIVER_CACHE_SOURCE_PIXEL_OFFSET = 64;
 static const uint RESERVOIR_GI_RECORD_PRIMARY_POSITION_OFFSET = 0;
 static const uint RESERVOIR_GI_RECORD_PRIMARY_NORMAL_OFFSET = 16;
 static const uint RESERVOIR_GI_RECORD_CANDIDATE_POSITION_OFFSET = 32;
@@ -70,6 +85,8 @@ static const int DEBUG_AOV_PATH_RESERVOIR_GI_CANDIDATE_SURFACE_HIT = 19;
 static const int DEBUG_AOV_PATH_RESERVOIR_GI_CANDIDATE_SUN_VISIBLE = 20;
 static const int DEBUG_AOV_PATH_RESERVOIR_GI_CANDIDATE_POSITIVE_WEIGHT = 21;
 static const int DEBUG_AOV_PATH_RESERVOIR_GI_SELECTED_WEIGHT = 22;
+static const int DEBUG_AOV_PATH_RESERVOIR_GI_LOCAL_NO_LIGHT = 23;
+static const int DEBUG_AOV_PATH_RESERVOIR_GI_SELECTED_SOURCE = 24;
 static const int ENV_NEE_SAMPLING_COSINE_HEMISPHERE = 0;
 static const int ENV_NEE_SAMPLING_SKY_BIASED = 1;
 static const int ENV_NEE_BOUNCE_FIRST_ONLY = 0;
@@ -90,8 +107,12 @@ static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED = 2;
 static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED = 3;
 static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_GUIDED = 4;
 static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_DUAL_SUN_GUIDED = 5;
+static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_CACHE_GUIDED = 6;
+static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_CACHE_RECONNECT = 7;
 static const float RESERVOIR_GI_HISTORY_GUIDE_COS_THETA_MAX = 0.9063078; // cos(25 degrees)
 static const float RESERVOIR_GI_HISTORY_GUIDE_MIN_TARGET_WEIGHT = 0.02;
+static const float RESERVOIR_GI_RECEIVER_CACHE_COS_THETA_MAX = 0.9510565; // cos(18 degrees)
+static const float RESERVOIR_GI_RECEIVER_CACHE_MIN_TARGET_WEIGHT = 0.02;
 static const uint RESERVOIR_GI_HISTORY_GUIDE_REJECT_NONE = 0u;
 static const uint RESERVOIR_GI_HISTORY_GUIDE_REJECT_REPROJECTION = 1u;
 static const uint RESERVOIR_GI_HISTORY_GUIDE_REJECT_LOAD = 2u;
@@ -185,6 +206,20 @@ static const uint reservoirGiLocalRejectGeometryOffset = 220u;
 static const uint reservoirGiLocalRejectNoLightOffset = 224u;
 static const uint reservoirGiLocalRejectZeroTargetOffset = 228u;
 static const uint reservoirGiLocalRejectBadPdfOffset = 232u;
+static const uint reservoirGiReceiverCacheStoreOffset = 236u;
+static const uint reservoirGiReceiverCacheAttemptOffset = 240u;
+static const uint reservoirGiReceiverCacheHitOffset = 244u;
+static const uint reservoirGiReceiverCacheMissOffset = 248u;
+static const uint reservoirGiReceiverCacheRejectNoLightOffset = 252u;
+static const uint reservoirGiReceiverCacheAcceptedOffset = 256u;
+static const uint reservoirGiSelectedCacheOffset = 260u;
+static const uint reservoirGiReceiverReconnectAttemptOffset = 264u;
+static const uint reservoirGiReceiverReconnectHitOffset = 268u;
+static const uint reservoirGiReceiverReconnectMissOffset = 272u;
+static const uint reservoirGiReceiverReconnectRejectVisibilityOffset = 276u;
+static const uint reservoirGiReceiverReconnectRejectTargetOffset = 280u;
+static const uint reservoirGiReceiverReconnectAcceptedOffset = 284u;
+static const uint reservoirGiSelectedCacheReconnectOffset = 288u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_NONE = 0u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_GEOMETRY = 1u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_NO_LIGHT = 2u;
@@ -193,6 +228,8 @@ static const uint RESERVOIR_GI_LOCAL_REJECT_BAD_PDF = 4u;
 static const uint RESERVOIR_GI_SOURCE_LOCAL = 0u;
 static const uint RESERVOIR_GI_SOURCE_TEMPORAL = 1u;
 static const uint RESERVOIR_GI_SOURCE_SPATIAL = 2u;
+static const uint RESERVOIR_GI_SOURCE_CACHE = 3u;
+static const uint RESERVOIR_GI_SOURCE_CACHE_RECONNECT = 4u;
 
 struct FirstHitDiffuseBounceResult {
     float3 totalContribution;
@@ -201,6 +238,8 @@ struct FirstHitDiffuseBounceResult {
     float  reservoirCandidateSunVisibleRatio;
     float  reservoirCandidatePositiveWeightRatio;
     float  reservoirSelectedWeight;
+    float  reservoirLocalNoLightRatio;
+    float  reservoirSelectedSource;
 };
 
 struct FirstHitProbeSample {
@@ -242,6 +281,17 @@ struct ReservoirGiTargetEvaluation {
     float  sourcePdf;
     bool   validGeometry;
     bool   validLight;
+};
+
+struct ReservoirGiReceiverCacheRecord {
+    float3 position;
+    float3 normal;
+    float3 suffixRadiance;
+    float targetWeight;
+    float confidence;
+    uint frameId;
+    uint flags;
+    uint sourcePixel;
 };
 
 RayPayload makeVisibilityPayload()
@@ -310,6 +360,11 @@ float pathTracerLuminance(float3 c)
     return dot(c, float3(0.2126, 0.7152, 0.0722));
 }
 
+bool isFinitePositive(float value)
+{
+    return value > 0.0 && abs(value) < 3.402823e+38;
+}
+
 void recordTargetWallLuminance(float3 color,
                                float3 firstHitProbeContribution,
                                uint primaryInstanceID,
@@ -357,6 +412,12 @@ uint reservoirGiRecordOffset(uint pixelIndex)
     return RESERVOIR_GI_CURRENT_HEADER_SIZE + pixelIndex * RESERVOIR_GI_RECORD_SIZE;
 }
 
+uint reservoirGiReceiverCacheRecordOffset(uint cacheIndex)
+{
+    return RESERVOIR_GI_RECEIVER_CACHE_HEADER_SIZE +
+           cacheIndex * RESERVOIR_GI_RECEIVER_CACHE_RECORD_SIZE;
+}
+
 void storeFloat3ToReservoirGi(uint offset, float3 value)
 {
     ptReservoirGiCurrent.Store(offset + 0, asuint(value.x));
@@ -369,6 +430,20 @@ float3 loadFloat3FromReservoirGiHistory(uint offset)
     return float3(asfloat(ptReservoirGiHistory.Load(offset + 0)),
                   asfloat(ptReservoirGiHistory.Load(offset + 4)),
                   asfloat(ptReservoirGiHistory.Load(offset + 8)));
+}
+
+void storeFloat3ToReservoirGiReceiverCache(uint offset, float3 value)
+{
+    ptReservoirGiReceiverCacheCurrent.Store(offset + 0, asuint(value.x));
+    ptReservoirGiReceiverCacheCurrent.Store(offset + 4, asuint(value.y));
+    ptReservoirGiReceiverCacheCurrent.Store(offset + 8, asuint(value.z));
+}
+
+float3 loadFloat3FromReservoirGiReceiverCacheHistory(uint offset)
+{
+    return float3(asfloat(ptReservoirGiReceiverCacheHistory.Load(offset + 0)),
+                  asfloat(ptReservoirGiReceiverCacheHistory.Load(offset + 4)),
+                  asfloat(ptReservoirGiReceiverCacheHistory.Load(offset + 8)));
 }
 
 bool isSaneReservoirGiVector(float3 value, float maxAbs)
@@ -461,6 +536,116 @@ void updateReservoirGiHeader(uint2 launchID,
         ptReservoirGiCurrent.Store(8, launchSize.y);
         ptReservoirGiCurrent.Store(12, frameId);
     }
+}
+
+void updateReservoirGiReceiverCacheHeader(uint2 launchID,
+                                          uint frameId)
+{
+    if (launchID.x == 0u && launchID.y == 0u) {
+        ptReservoirGiReceiverCacheCurrent.Store(0, RESERVOIR_GI_RECEIVER_CACHE_CAPACITY);
+        ptReservoirGiReceiverCacheCurrent.Store(4, frameId);
+        ptReservoirGiReceiverCacheCurrent.Store(8, 0u);
+        ptReservoirGiReceiverCacheCurrent.Store(12, 0u);
+    }
+}
+
+bool loadReservoirGiReceiverCacheHistoryRecord(uint cacheIndex,
+                                               out ReservoirGiReceiverCacheRecord record)
+{
+    record.position = float3(0.0, 0.0, 0.0);
+    record.normal = float3(0.0, 1.0, 0.0);
+    record.suffixRadiance = float3(0.0, 0.0, 0.0);
+    record.targetWeight = 0.0;
+    record.confidence = 0.0;
+    record.frameId = 0u;
+    record.flags = 0u;
+    record.sourcePixel = 0u;
+
+    uint cacheCapacity = ptReservoirGiReceiverCacheHistory.Load(0);
+    if (cacheCapacity == 0u ||
+        cacheCapacity > RESERVOIR_GI_RECEIVER_CACHE_CAPACITY ||
+        cacheIndex >= cacheCapacity) {
+        return false;
+    }
+
+    uint offset = reservoirGiReceiverCacheRecordOffset(cacheIndex);
+    record.position = loadFloat3FromReservoirGiReceiverCacheHistory(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_POSITION_OFFSET);
+    record.normal = loadFloat3FromReservoirGiReceiverCacheHistory(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_NORMAL_OFFSET);
+    record.suffixRadiance = loadFloat3FromReservoirGiReceiverCacheHistory(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_SUFFIX_RADIANCE_OFFSET);
+    record.targetWeight = asfloat(ptReservoirGiReceiverCacheHistory.Load(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_TARGET_WEIGHT_OFFSET));
+    record.confidence = asfloat(ptReservoirGiReceiverCacheHistory.Load(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_CONFIDENCE_OFFSET));
+    record.frameId = ptReservoirGiReceiverCacheHistory.Load(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_FRAME_ID_OFFSET);
+    record.flags = ptReservoirGiReceiverCacheHistory.Load(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_FLAGS_OFFSET);
+    record.sourcePixel = ptReservoirGiReceiverCacheHistory.Load(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_SOURCE_PIXEL_OFFSET);
+
+    if ((record.flags & 1u) == 0u ||
+        record.frameId == 0u ||
+        record.frameId > ubo.frameCount ||
+        ubo.frameCount - record.frameId > 120u ||
+        !isFinitePositive(record.targetWeight) ||
+        record.targetWeight < RESERVOIR_GI_RECEIVER_CACHE_MIN_TARGET_WEIGHT ||
+        !isSaneReservoirGiVector(record.position, 100000.0) ||
+        !isSaneReservoirGiVector(record.normal, 1.1) ||
+        !isSaneReservoirGiVector(record.suffixRadiance, 64.0)) {
+        return false;
+    }
+    return true;
+}
+
+void storeReservoirGiReceiverCacheRecord(uint2 launchID,
+                                         uint2 launchSize,
+                                         ReservoirGiRecord record)
+{
+    updateReservoirGiReceiverCacheHeader(launchID, ubo.frameCount);
+    if ((record.flags & 2u) == 0u ||
+        !isFinitePositive(record.targetWeight) ||
+        record.targetWeight < RESERVOIR_GI_RECEIVER_CACHE_MIN_TARGET_WEIGHT ||
+        pathTracerLuminance(record.suffixRadiance) <= 0.000001 ||
+        !isSaneReservoirGiVector(record.candidatePosition, 100000.0) ||
+        !isSaneReservoirGiVector(record.candidateNormal, 1.1) ||
+        !isSaneReservoirGiVector(record.suffixRadiance, 64.0)) {
+        return;
+    }
+
+    uint pixelIndex = launchID.y * launchSize.x + launchID.x;
+    uint cacheIndex = pcgHash(pixelIndex ^
+                              record.sourcePixel * 747796405u ^
+                              ubo.frameCount * 2891336453u) %
+                      RESERVOIR_GI_RECEIVER_CACHE_CAPACITY;
+    uint offset = reservoirGiReceiverCacheRecordOffset(cacheIndex);
+    storeFloat3ToReservoirGiReceiverCache(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_POSITION_OFFSET,
+        record.candidatePosition);
+    storeFloat3ToReservoirGiReceiverCache(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_NORMAL_OFFSET,
+        record.candidateNormal);
+    storeFloat3ToReservoirGiReceiverCache(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_SUFFIX_RADIANCE_OFFSET,
+        sanitizeReservoirGiContribution(record.suffixRadiance));
+    ptReservoirGiReceiverCacheCurrent.Store(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_TARGET_WEIGHT_OFFSET,
+        asuint(record.targetWeight));
+    ptReservoirGiReceiverCacheCurrent.Store(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_CONFIDENCE_OFFSET,
+        asuint(max(record.confidenceM, 1.0)));
+    ptReservoirGiReceiverCacheCurrent.Store(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_FRAME_ID_OFFSET,
+        ubo.frameCount);
+    ptReservoirGiReceiverCacheCurrent.Store(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_FLAGS_OFFSET,
+        1u);
+    ptReservoirGiReceiverCacheCurrent.Store(
+        offset + RESERVOIR_GI_RECEIVER_CACHE_SOURCE_PIXEL_OFFSET,
+        pixelIndex);
+    ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheStoreOffset, 1u);
 }
 
 void updateReservoirGi(uint2 launchID,
@@ -916,11 +1101,6 @@ void combineSpatialReservoirGi(uint2 pixel,
     }
 }
 
-bool isFinitePositive(float value)
-{
-    return value > 0.0 && abs(value) < 3.402823e+38;
-}
-
 float3 firstHitSunBounceGuideAxis(float3 N)
 {
     float3 axis = normalize(ubo.lightDir.xyz);
@@ -1182,18 +1362,92 @@ FirstHitProbeSample sampleHistoryGuidedReservoirGiProposalDirection(float3 hitPo
     return sample;
 }
 
+bool tryGetReceiverCacheGuidedReservoirGiAxis(float3 hitPos,
+                                              float3 N,
+                                              uint2 launchID,
+                                              uint2 launchSize,
+                                              out float3 guideAxis)
+{
+    guideAxis = float3(0.0, 1.0, 0.0);
+    float bestScore = 0.0;
+    bool hasRecord = false;
+    uint pixelIndex = launchID.y * launchSize.x + launchID.x;
+    uint baseHash = pcgHash(pixelIndex * 747796405u ^
+                            launchSize.x * 2891336453u ^
+                            launchSize.y * 277803737u ^
+                            ubo.frameCount * 2246822519u);
+
+    for (uint i = 0u; i < 8u; ++i) {
+        uint cacheIndex = pcgHash(baseHash + i * 1013904223u) %
+                          RESERVOIR_GI_RECEIVER_CACHE_CAPACITY;
+        ReservoirGiReceiverCacheRecord cacheRecord;
+        if (!loadReservoirGiReceiverCacheHistoryRecord(cacheIndex, cacheRecord)) {
+            continue;
+        }
+
+        float3 toReceiver = cacheRecord.position - hitPos;
+        float distanceSq = dot(toReceiver, toReceiver);
+        if (distanceSq <= 0.0001 || !isFinitePositive(distanceSq)) {
+            continue;
+        }
+
+        float invDistance = rsqrt(distanceSq);
+        float3 axis = toReceiver * invDistance;
+        if (dot(N, axis) <= 0.05 || !isSaneReservoirGiVector(axis, 1.1)) {
+            continue;
+        }
+
+        float age = float(max(ubo.frameCount - cacheRecord.frameId, 0u));
+        float ageWeight = 1.0 / (1.0 + age * 0.05);
+        float distanceWeight = rsqrt(max(distanceSq, 1.0));
+        float score = cacheRecord.targetWeight * max(cacheRecord.confidence, 1.0) *
+                      ageWeight * distanceWeight;
+        if (!hasRecord || score > bestScore) {
+            hasRecord = true;
+            bestScore = score;
+            guideAxis = axis;
+        }
+    }
+    return hasRecord;
+}
+
+bool trySampleReceiverCacheGuidedReservoirGiProposalDirection(float3 hitPos,
+                                                              float3 N,
+                                                              uint2 launchID,
+                                                              uint2 launchSize,
+                                                              float2 xi,
+                                                              out FirstHitProbeSample sample)
+{
+    sample.direction = float3(0.0, 1.0, 0.0);
+    sample.pdf = 0.0;
+    ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheAttemptOffset, 1u);
+
+    float3 cacheAxis;
+    if (!tryGetReceiverCacheGuidedReservoirGiAxis(hitPos, N, launchID, launchSize, cacheAxis)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheMissOffset, 1u);
+        return false;
+    }
+
+    ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheHitOffset, 1u);
+    sample.direction = sampleUniformCone(xi, cacheAxis, RESERVOIR_GI_RECEIVER_CACHE_COS_THETA_MAX);
+    sample.pdf = uniformConePdf(sample.direction, cacheAxis, RESERVOIR_GI_RECEIVER_CACHE_COS_THETA_MAX);
+    return true;
+}
+
 FirstHitProbeSample sampleReservoirGiProposalDirection(float3 hitPos,
                                                        float3 N,
                                                        float currentPrimaryDepth,
                                                        uint2 launchID,
                                                        uint2 launchSize,
                                                        int reservoirGiProposalMode,
+                                                       out bool receiverCacheGuided,
                                                        inout uint rngState)
 {
     float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
     float selector = randomFloat(rngState);
     float3 cosineDirection = cosineSampleHemisphere(xi, N);
     FirstHitProbeSample sample;
+    receiverCacheGuided = false;
     if (reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_SUN_GUIDED) {
         float3 guideAxis = firstHitSunBounceGuideAxis(N);
         float3 guidedDirection = cosineSampleHemisphere(xi, guideAxis);
@@ -1233,6 +1487,30 @@ FirstHitProbeSample sampleReservoirGiProposalDirection(float3 hitPos,
         float sunPdf = max(dot(sunAxis, sample.direction), 0.0) / PI;
         float receiverPdf = max(dot(receiverAxis, sample.direction), 0.0) / PI;
         sample.pdf = 0.50 * cosinePdf + 0.25 * sunPdf + 0.25 * receiverPdf;
+        return sample;
+    }
+
+    if (reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_CACHE_GUIDED) {
+        float3 receiverAxis = sunReceiverBounceGuideAxis(N);
+        float3 receiverDirection = cosineSampleHemisphere(xi, receiverAxis);
+        FirstHitProbeSample cacheSample;
+        bool hasCacheSample = false;
+        if (selector >= 0.75) {
+            hasCacheSample =
+                trySampleReceiverCacheGuidedReservoirGiProposalDirection(hitPos, N,
+                                                                         launchID, launchSize,
+                                                                         xi, cacheSample);
+        }
+
+        sample.direction = (selector < 0.40) ? cosineDirection :
+                           ((selector < 0.75 || !hasCacheSample) ? receiverDirection : cacheSample.direction);
+        receiverCacheGuided = selector >= 0.75 && hasCacheSample;
+        float cosinePdf = max(dot(N, sample.direction), 0.0) / PI;
+        float receiverPdf = max(dot(receiverAxis, sample.direction), 0.0) / PI;
+        float cachePdf = receiverCacheGuided ? cacheSample.pdf : receiverPdf;
+        float receiverWeight = hasCacheSample ? 0.35 : 0.60;
+        float cacheWeight = hasCacheSample ? 0.25 : 0.0;
+        sample.pdf = 0.40 * cosinePdf + receiverWeight * receiverPdf + cacheWeight * cachePdf;
         return sample;
     }
 
@@ -1640,6 +1918,178 @@ bool validateSelectedReservoirGiCandidate(float3 currentPrimaryPosition,
     return true;
 }
 
+bool selectReceiverCacheReconnectRecord(float3 hitPos,
+                                        float3 N,
+                                        uint2 launchID,
+                                        uint2 launchSize,
+                                        out ReservoirGiReceiverCacheRecord selectedCacheRecord)
+{
+    selectedCacheRecord.position = float3(0.0, 0.0, 0.0);
+    selectedCacheRecord.normal = float3(0.0, 1.0, 0.0);
+    selectedCacheRecord.suffixRadiance = float3(0.0, 0.0, 0.0);
+    selectedCacheRecord.targetWeight = 0.0;
+    selectedCacheRecord.confidence = 0.0;
+    selectedCacheRecord.frameId = 0u;
+    selectedCacheRecord.flags = 0u;
+    selectedCacheRecord.sourcePixel = 0u;
+
+    float bestScore = 0.0;
+    bool hasRecord = false;
+    uint pixelIndex = launchID.y * launchSize.x + launchID.x;
+    uint baseHash = pcgHash(pixelIndex * 1597334677u ^
+                            launchSize.x * 3812015801u ^
+                            launchSize.y * 958689787u ^
+                            ubo.frameCount * 1103515245u);
+
+    for (uint i = 0u; i < 8u; ++i) {
+        uint cacheIndex = pcgHash(baseHash + i * 747796405u) %
+                          RESERVOIR_GI_RECEIVER_CACHE_CAPACITY;
+        ReservoirGiReceiverCacheRecord cacheRecord;
+        if (!loadReservoirGiReceiverCacheHistoryRecord(cacheIndex, cacheRecord)) {
+            continue;
+        }
+        if (cacheRecord.targetWeight < 0.05 ||
+            pathTracerLuminance(cacheRecord.suffixRadiance) <= 0.000001) {
+            continue;
+        }
+
+        float3 toReceiver = cacheRecord.position - hitPos;
+        float distanceSq = dot(toReceiver, toReceiver);
+        if (distanceSq <= 0.0001 || !isFinitePositive(distanceSq)) {
+            continue;
+        }
+
+        float invDistance = rsqrt(distanceSq);
+        float3 direction = toReceiver * invDistance;
+        float currentHemisphere = dot(N, direction);
+        float receiverFacing = dot(cacheRecord.normal, -direction);
+        if (currentHemisphere <= 0.05 ||
+            receiverFacing <= 0.05 ||
+            !isSaneReservoirGiVector(direction, 1.1)) {
+            continue;
+        }
+
+        float age = float(max(ubo.frameCount - cacheRecord.frameId, 0u));
+        float ageWeight = 1.0 / (1.0 + age * 0.05);
+        float distanceWeight = rsqrt(max(distanceSq, 1.0));
+        float normalWeight = saturate(receiverFacing);
+        float score = cacheRecord.targetWeight * max(cacheRecord.confidence, 1.0) *
+                      ageWeight * distanceWeight * normalWeight;
+        if (!hasRecord || score > bestScore) {
+            hasRecord = true;
+            bestScore = score;
+            selectedCacheRecord = cacheRecord;
+        }
+    }
+
+    return hasRecord;
+}
+
+bool evaluateReceiverCacheReconnectReservoirGiCandidate(float3 hitPos,
+                                                        float3 N,
+                                                        float3 V,
+                                                        RayPayload payload,
+                                                        uint2 launchID,
+                                                        uint2 launchSize,
+                                                        out ReservoirGiRecord reconnectRecord)
+{
+    reconnectRecord.primaryPosition = hitPos;
+    reconnectRecord.primaryNormal = N;
+    reconnectRecord.candidatePosition = hitPos;
+    reconnectRecord.candidateNormal = float3(0.0, 1.0, 0.0);
+    reconnectRecord.suffixRadiance = float3(0.0, 0.0, 0.0);
+    reconnectRecord.contribution = float3(0.0, 0.0, 0.0);
+    reconnectRecord.sourcePdf = 0.0;
+    reconnectRecord.targetWeight = 0.0;
+    reconnectRecord.weightSum = 0.0;
+    reconnectRecord.selectedWeight = 0.0;
+    reconnectRecord.confidenceM = 0.0;
+    reconnectRecord.sourcePixel = launchID.y * launchSize.x + launchID.x;
+    reconnectRecord.sourceFrameId = ubo.frameCount;
+    reconnectRecord.frameId = ubo.frameCount;
+    reconnectRecord.flags = 0u;
+
+    ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverReconnectAttemptOffset, 1u);
+
+    ReservoirGiReceiverCacheRecord cacheRecord;
+    if (!selectReceiverCacheReconnectRecord(hitPos, N, launchID, launchSize, cacheRecord)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverReconnectMissOffset, 1u);
+        return false;
+    }
+
+    ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverReconnectHitOffset, 1u);
+
+    float3 reconnectOrigin = hitPos + N * 0.002;
+    float3 reconnectVector = cacheRecord.position - reconnectOrigin;
+    float reconnectDistance = length(reconnectVector);
+    if (reconnectDistance <= 0.01 || !isFinitePositive(reconnectDistance)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverReconnectRejectTargetOffset, 1u);
+        return false;
+    }
+
+    float3 reconnectDir = reconnectVector / reconnectDistance;
+    if (dot(N, reconnectDir) <= 0.0001 || !isSaneReservoirGiVector(reconnectDir, 1.1)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverReconnectRejectTargetOffset, 1u);
+        return false;
+    }
+
+    RayPayload reconnectPayload;
+    reconnectPayload.hitT = -1.0;
+    RayDesc reconnectRay;
+    reconnectRay.Origin = reconnectOrigin;
+    reconnectRay.Direction = reconnectDir;
+    reconnectRay.TMin = 0.001;
+    reconnectRay.TMax = reconnectDistance + max(0.05, reconnectDistance * 0.02);
+    TraceRay(tlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, reconnectRay, reconnectPayload);
+
+    if (reconnectPayload.hitT < 0.0 ||
+        !isSaneReservoirGiVector(reconnectPayload.hitPos, 100000.0) ||
+        !isSaneReservoirGiVector(reconnectPayload.worldNormal, 1.1)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverReconnectRejectVisibilityOffset, 1u);
+        return false;
+    }
+
+    float hitDistanceError = abs(reconnectPayload.hitT - reconnectDistance);
+    float hitPositionError = length(reconnectPayload.hitPos - cacheRecord.position);
+    float tolerance = max(0.08, reconnectDistance * 0.03);
+    if (hitDistanceError > tolerance ||
+        hitPositionError > tolerance ||
+        dot(reconnectPayload.worldNormal, cacheRecord.normal) < 0.75) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverReconnectRejectVisibilityOffset, 1u);
+        return false;
+    }
+
+    float sourcePdf = max(dot(N, reconnectDir), 0.0) / PI;
+    sourcePdf = max(sourcePdf, 0.0001);
+    ReservoirGiTargetEvaluation targetEvaluation =
+        evaluateReservoirGiTargetAtPrimary(hitPos, N, V, payload,
+                                           reconnectPayload.hitPos,
+                                           reconnectPayload.worldNormal,
+                                           cacheRecord.suffixRadiance,
+                                           sourcePdf);
+    if (!targetEvaluation.validGeometry || !targetEvaluation.validLight) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverReconnectRejectTargetOffset, 1u);
+        return false;
+    }
+
+    reconnectRecord.candidatePosition = reconnectPayload.hitPos;
+    reconnectRecord.candidateNormal = reconnectPayload.worldNormal;
+    reconnectRecord.suffixRadiance = targetEvaluation.suffixRadiance;
+    reconnectRecord.contribution = targetEvaluation.contribution;
+    reconnectRecord.sourcePdf = targetEvaluation.sourcePdf;
+    reconnectRecord.targetWeight = targetEvaluation.targetWeight;
+    reconnectRecord.weightSum = targetEvaluation.targetWeight;
+    reconnectRecord.selectedWeight = targetEvaluation.targetWeight;
+    reconnectRecord.confidenceM = 1.0;
+    reconnectRecord.sourcePixel = cacheRecord.sourcePixel;
+    reconnectRecord.sourceFrameId = cacheRecord.frameId;
+    reconnectRecord.flags = 1u | 2u |
+                            (pathTracerLuminance(cacheRecord.suffixRadiance) > 0.000001 ? 4u : 0u) |
+                            16u;
+    ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverReconnectAcceptedOffset, 1u);
+    return true;
+}
+
 FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N, float3 V, RayPayload payload,
                                                         int firstHitDiffuseSampleCount,
                                                         int firstHitProbeSamplingMode,
@@ -1652,6 +2102,8 @@ FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N,
     result.reservoirCandidateSunVisibleRatio = 0.0;
     result.reservoirCandidatePositiveWeightRatio = 0.0;
     result.reservoirSelectedWeight = 0.0;
+    result.reservoirLocalNoLightRatio = 0.0;
+    result.reservoirSelectedSource = -1.0;
 
     int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
     if (extraSampleCount <= 0) {
@@ -1719,6 +2171,8 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateSunBounce(float3 hitPos, floa
     result.reservoirCandidateSunVisibleRatio = 0.0;
     result.reservoirCandidatePositiveWeightRatio = 0.0;
     result.reservoirSelectedWeight = 0.0;
+    result.reservoirLocalNoLightRatio = 0.0;
+    result.reservoirSelectedSource = -1.0;
 
     int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
     if (extraSampleCount <= 0) {
@@ -1807,6 +2261,8 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateAverageReference(float3 hitPo
     result.reservoirCandidateSunVisibleRatio = 0.0;
     result.reservoirCandidatePositiveWeightRatio = 0.0;
     result.reservoirSelectedWeight = 0.0;
+    result.reservoirLocalNoLightRatio = 0.0;
+    result.reservoirSelectedSource = -1.0;
 
     int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
     if (extraSampleCount <= 0) {
@@ -1890,6 +2346,8 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateRis(float3 hitPos, float3 N, 
     result.reservoirCandidateSunVisibleRatio = 0.0;
     result.reservoirCandidatePositiveWeightRatio = 0.0;
     result.reservoirSelectedWeight = 0.0;
+    result.reservoirLocalNoLightRatio = 0.0;
+    result.reservoirSelectedSource = -1.0;
 
     int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
     if (extraSampleCount <= 0) {
@@ -1992,6 +2450,8 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     result.reservoirCandidateSunVisibleRatio = 0.0;
     result.reservoirCandidatePositiveWeightRatio = 0.0;
     result.reservoirSelectedWeight = 0.0;
+    result.reservoirLocalNoLightRatio = 0.0;
+    result.reservoirSelectedSource = -1.0;
 
     ReservoirGiRecord record;
     record.primaryPosition = float3(0.0, 0.0, 0.0);
@@ -2024,6 +2484,12 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
                                         reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED;
     if (usesReservoirGiHistoryBuffer) {
         updateReservoirGiHeader(launchID, launchSize, ubo.frameCount);
+    }
+    bool usesReservoirGiReceiverCache =
+        reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_CACHE_GUIDED ||
+        reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_CACHE_RECONNECT;
+    if (usesReservoirGiReceiverCache) {
+        updateReservoirGiReceiverCacheHeader(launchID, ubo.frameCount);
     }
 
     int extraSampleCount = clamp(firstHitDiffuseSampleCount - 1, 0, 7);
@@ -2058,14 +2524,21 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     uint candidateSurfaceHitCount = 0u;
     uint candidateSunVisibleCount = 0u;
     uint candidatePositiveWeightCount = 0u;
+    uint localRejectNoLightCount = 0u;
 
     bool useHistoryGuidedExtraCandidate = reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED;
+    bool useReceiverCacheReconnect =
+        reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_CACHE_RECONNECT;
     int totalLocalCandidateCount = candidateCount + (useHistoryGuidedExtraCandidate ? 1 : 0);
     int localProposalMode = useHistoryGuidedExtraCandidate ?
-                            RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED : reservoirGiProposalMode;
+                            RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED :
+                            (useReceiverCacheReconnect ?
+                             RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_GUIDED :
+                             reservoirGiProposalMode);
 
     for (int c = 0; c < totalLocalCandidateCount; ++c) {
         FirstHitProbeSample reservoirGiProposal;
+        bool receiverCacheGuided = false;
         if (useHistoryGuidedExtraCandidate && c == candidateCount) {
             float2 historyXi = float2(randomFloat(rngState), randomFloat(rngState));
             if (!trySampleHistoryGuidedReservoirGiProposalDirection(hitPos, N, payload.hitT,
@@ -2076,7 +2549,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
         } else {
             reservoirGiProposal =
                 sampleReservoirGiProposalDirection(hitPos, N, payload.hitT, launchID, launchSize,
-                                                   localProposalMode, rngState);
+                                                   localProposalMode, receiverCacheGuided, rngState);
         }
         float3 bounceDir = reservoirGiProposal.direction;
         float NdotBounce = max(dot(N, bounceDir), 0.0);
@@ -2137,9 +2610,18 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
             if (!localSurfaceHit || !localValid) {
                 ptAnalysisCounters.InterlockedAdd(reservoirGiLocalSurfaceInvalidOffset, 1u);
                 recordReservoirGiLocalReject(localRejectReason);
+                if (localRejectReason == RESERVOIR_GI_LOCAL_REJECT_NO_LIGHT) {
+                    localRejectNoLightCount += 1u;
+                    if (receiverCacheGuided) {
+                        ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheRejectNoLightOffset, 1u);
+                    }
+                }
                 continue;
             }
             ptAnalysisCounters.InterlockedAdd(reservoirGiLocalValidSamplesOffset, 1u);
+            if (receiverCacheGuided) {
+                ptAnalysisCounters.InterlockedAdd(reservoirGiReceiverCacheAcceptedOffset, 1u);
+            }
             if (sunVisible) {
                 candidateSunVisibleCount += 1u;
                 if (reservoirGiDetailedDiagnostics) {
@@ -2168,10 +2650,28 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
             ptAnalysisCounters.InterlockedAdd(reservoirGiCandidatePositiveWeightOffset, 1u);
         }
         ReservoirGiRecord candidateRecord = localRecord;
-        combineReservoirGiCandidate(candidateRecord, candidateWeight, RESERVOIR_GI_SOURCE_LOCAL,
+        uint candidateSource = receiverCacheGuided ? RESERVOIR_GI_SOURCE_CACHE : RESERVOIR_GI_SOURCE_LOCAL;
+        combineReservoirGiCandidate(candidateRecord, candidateWeight, candidateSource,
                                     candidateSecondarySun, selectedRecord, selectedTargetWeight,
                                     selectedSource, selectedSecondarySun, reservoirWeightSum,
                                     hasSelectedReservoirCandidate, rngState);
+    }
+
+    if (useReceiverCacheReconnect &&
+        shouldRunReservoirGiBudgetedPixel(launchID, ubo.frameCount, 4, 0x51ed270bu)) {
+        ReservoirGiRecord reconnectRecord;
+        if (evaluateReceiverCacheReconnectReservoirGiCandidate(hitPos, N, V, payload,
+                                                               launchID, launchSize,
+                                                               reconnectRecord)) {
+            combineReservoirGiCandidate(reconnectRecord,
+                                        reconnectRecord.targetWeight,
+                                        RESERVOIR_GI_SOURCE_CACHE_RECONNECT,
+                                        float3(0.0, 0.0, 0.0),
+                                        selectedRecord, selectedTargetWeight,
+                                        selectedSource, selectedSecondarySun,
+                                        reservoirWeightSum,
+                                        hasSelectedReservoirCandidate, rngState);
+        }
     }
 
     bool acceptedReservoir = hasSelectedReservoirCandidate;
@@ -2179,6 +2679,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     result.reservoirCandidateSurfaceHitRatio = float(candidateSurfaceHitCount) * invCandidateCount;
     result.reservoirCandidateSunVisibleRatio = float(candidateSunVisibleCount) * invCandidateCount;
     result.reservoirCandidatePositiveWeightRatio = float(candidatePositiveWeightCount) * invCandidateCount;
+    result.reservoirLocalNoLightRatio = float(localRejectNoLightCount) * invCandidateCount;
     result.reservoirSelectedWeight = selectedWeight;
 
     if (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL) {
@@ -2327,7 +2828,9 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
         }
     }
 
-    if (acceptedReservoir && selectedSource == RESERVOIR_GI_SOURCE_LOCAL) {
+    if (acceptedReservoir &&
+        (selectedSource == RESERVOIR_GI_SOURCE_LOCAL ||
+         selectedSource == RESERVOIR_GI_SOURCE_CACHE)) {
         if (useCandidateRis) {
             float selectedProbability = selectedWeight / max(reservoirWeightSum, 0.000001);
             float risScale = 1.0 / (float(candidateCount) * max(selectedProbability, 0.000001));
@@ -2356,6 +2859,10 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
             ptAnalysisCounters.InterlockedAdd(reservoirGiSelectedTemporalOffset, 1u);
         } else if (selectedSource == RESERVOIR_GI_SOURCE_SPATIAL) {
             ptAnalysisCounters.InterlockedAdd(reservoirGiSelectedSpatialOffset, 1u);
+        } else if (selectedSource == RESERVOIR_GI_SOURCE_CACHE) {
+            ptAnalysisCounters.InterlockedAdd(reservoirGiSelectedCacheOffset, 1u);
+        } else if (selectedSource == RESERVOIR_GI_SOURCE_CACHE_RECONNECT) {
+            ptAnalysisCounters.InterlockedAdd(reservoirGiSelectedCacheReconnectOffset, 1u);
         } else {
             ptAnalysisCounters.InterlockedAdd(reservoirGiSelectedLocalOffset, 1u);
             ptAnalysisCounters.InterlockedAdd(reservoirGiAcceptedLocalSurfaceOffset, 1u);
@@ -2407,16 +2914,21 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
                    (selectedSunVisible ? 4u : 0u) |
                    (useCandidateRis ? 8u : 0u) |
                    (reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL ? 16u : 0u);
+    bool canPersistSelectedReservoirGi = selectedSource != RESERVOIR_GI_SOURCE_CACHE_RECONNECT;
+    if (acceptedReservoir && canPersistSelectedReservoirGi) {
+        storeReservoirGiReceiverCacheRecord(launchID, launchSize, record);
+    }
     bool storeAcceptedReservoirGiForGuidedProposal =
         reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED;
     if ((reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL ||
          storeAcceptedReservoirGiForGuidedProposal) &&
-        acceptedReservoir) {
+        acceptedReservoir && canPersistSelectedReservoirGi) {
         storeAcceptedReservoirGi(launchID, launchSize, record);
     }
 
     float reservoirProbeScale = float(candidateCount) / float(candidateCount + 1);
     result.reservoirSelectedWeight = selectedWeight;
+    result.reservoirSelectedSource = acceptedReservoir ? float(selectedSource) : -1.0;
     result.totalContribution = reservoirTotal * reservoirProbeScale;
     result.secondaryDirectSunContribution = reservoirSecondarySun * reservoirProbeScale;
     return result;
@@ -2493,6 +3005,8 @@ void main() {
     float  debugReservoirGiCandidateSunVisibleRatio = 0.0;
     float  debugReservoirGiCandidatePositiveWeightRatio = 0.0;
     float  debugReservoirGiSelectedWeight = 0.0;
+    float  debugReservoirGiLocalNoLightRatio = 0.0;
+    float  debugReservoirGiSelectedSource = -1.0;
     float  debugShadowVisibility = 0.0;
     int    debugBounceCount = 0;
     uint   primaryInstanceID = 0;
@@ -2530,7 +3044,7 @@ void main() {
     int    reservoirGiProposalMode = clamp(int((packedPathTracerMaterialIndex >> PT_MATERIAL_RESERVOIR_PROPOSAL_SHIFT) &
                                                PT_MATERIAL_RESERVOIR_PROPOSAL_MASK),
                                            RESERVOIR_GI_PROPOSAL_COSINE,
-                                           RESERVOIR_GI_PROPOSAL_MIXED_COSINE_DUAL_SUN_GUIDED);
+                                           RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_CACHE_RECONNECT);
     int    reservoirGiCandidateCount =
         clamp(int((packedPathTracerMaterialIndex >> PT_MATERIAL_RESERVOIR_CANDIDATE_SHIFT) &
                   PT_MATERIAL_RESERVOIR_CANDIDATE_MASK) + 1,
@@ -2659,6 +3173,8 @@ void main() {
                 debugReservoirGiCandidateSunVisibleRatio = firstHitBounce.reservoirCandidateSunVisibleRatio;
                 debugReservoirGiCandidatePositiveWeightRatio = firstHitBounce.reservoirCandidatePositiveWeightRatio;
                 debugReservoirGiSelectedWeight = firstHitBounce.reservoirSelectedWeight;
+                debugReservoirGiLocalNoLightRatio = firstHitBounce.reservoirLocalNoLightRatio;
+                debugReservoirGiSelectedSource = firstHitBounce.reservoirSelectedSource;
             }
         }
 
@@ -2854,6 +3370,24 @@ void main() {
     } else if (push.padding2 == DEBUG_AOV_PATH_RESERVOIR_GI_SELECTED_WEIGHT) {
         float selectedWeight = clamp(debugReservoirGiSelectedWeight, 0.0, 1.0);
         outputColor = float3(selectedWeight, selectedWeight, selectedWeight);
+    } else if (push.padding2 == DEBUG_AOV_PATH_RESERVOIR_GI_LOCAL_NO_LIGHT) {
+        outputColor = float3(debugReservoirGiLocalNoLightRatio,
+                             debugReservoirGiLocalNoLightRatio,
+                             debugReservoirGiLocalNoLightRatio);
+    } else if (push.padding2 == DEBUG_AOV_PATH_RESERVOIR_GI_SELECTED_SOURCE) {
+        if (debugReservoirGiSelectedSource < 0.0) {
+            outputColor = float3(0.0, 0.0, 0.0);
+        } else if (debugReservoirGiSelectedSource < 0.5) {
+            outputColor = float3(1.0, 0.0, 0.0);
+        } else if (debugReservoirGiSelectedSource < 1.5) {
+            outputColor = float3(0.0, 1.0, 0.0);
+        } else if (debugReservoirGiSelectedSource < 2.5) {
+            outputColor = float3(0.0, 0.35, 1.0);
+        } else if (debugReservoirGiSelectedSource < 3.5) {
+            outputColor = float3(0.0, 1.0, 1.0);
+        } else {
+            outputColor = float3(1.0, 0.85, 0.0);
+        }
     }
     float3 appliedFirstHitProbeContribution =
         applyFirstHitProbesToFinal ? debugFirstHitBounceContribution : float3(0.0, 0.0, 0.0);
