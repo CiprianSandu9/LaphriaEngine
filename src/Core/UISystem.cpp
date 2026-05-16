@@ -1147,7 +1147,9 @@ void UISystem::drawPathTracerDebugLab() {
             "Cosine",
             "Sun Guided",
             "Mixed Cosine + Sun Guided",
-            "Mixed Cosine + History Guide"};
+            "Mixed Cosine + History Guide",
+            "Mixed Cosine + Sun Receiver Guide",
+            "Mixed Cosine + Dual Sun Guide"};
         int reservoirGiProposalMode = static_cast<int>(pathTracerSettings.reservoirGiProposalMode);
         if (ImGui::Combo("Reservoir GI Proposal", &reservoirGiProposalMode,
                          reservoirGiProposalModes, IM_ARRAYSIZE(reservoirGiProposalModes))) {
@@ -1190,6 +1192,10 @@ void UISystem::drawPathTracerDebugLab() {
                     pathTracerPerfStats.reservoirGiLocalMissCandidates,
                     pathTracerPerfStats.reservoirGiLocalMissPositiveWeight);
         ImGui::Text("Reservoir GI Local Surface Invalid: %u", pathTracerPerfStats.reservoirGiLocalSurfaceInvalid);
+        ImGui::Text("Reservoir GI Local Reject Geometry: %u", pathTracerPerfStats.reservoirGiLocalRejectGeometry);
+        ImGui::Text("Reservoir GI Local Reject No Light: %u", pathTracerPerfStats.reservoirGiLocalRejectNoLight);
+        ImGui::Text("Reservoir GI Local Reject Zero Target: %u", pathTracerPerfStats.reservoirGiLocalRejectZeroTarget);
+        ImGui::Text("Reservoir GI Local Reject Bad PDF: %u", pathTracerPerfStats.reservoirGiLocalRejectBadPdf);
         ImGui::Text("Reservoir GI Accepted Local Surface: %u", pathTracerPerfStats.reservoirGiAcceptedLocalSurface);
         ImGui::Text("Reservoir GI Accepted Local Miss: %u", pathTracerPerfStats.reservoirGiAcceptedLocalMiss);
         ImGui::Text("Reservoir GI Local Shadow Rays: %u", pathTracerPerfStats.reservoirGiLocalShadowRays);

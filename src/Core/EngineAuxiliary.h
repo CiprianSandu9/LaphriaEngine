@@ -202,6 +202,10 @@ struct PathTracerAnalysisCounters
 	uint32_t reservoirGiHistoryGuideNeighborSearches = 0;
 	uint32_t reservoirGiHistoryGuideNeighborHits = 0;
 	uint32_t reservoirGiHistoryGuideNeighborMisses = 0;
+	uint32_t reservoirGiLocalRejectGeometry = 0;
+	uint32_t reservoirGiLocalRejectNoLight = 0;
+	uint32_t reservoirGiLocalRejectZeroTarget = 0;
+	uint32_t reservoirGiLocalRejectBadPdf = 0;
 };
 
 struct SkinningPushConstants

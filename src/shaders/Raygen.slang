@@ -88,6 +88,8 @@ static const int RESERVOIR_GI_PROPOSAL_COSINE = 0;
 static const int RESERVOIR_GI_PROPOSAL_SUN_GUIDED = 1;
 static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED = 2;
 static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED = 3;
+static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_GUIDED = 4;
+static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_DUAL_SUN_GUIDED = 5;
 static const float RESERVOIR_GI_HISTORY_GUIDE_COS_THETA_MAX = 0.9063078; // cos(25 degrees)
 static const float RESERVOIR_GI_HISTORY_GUIDE_MIN_TARGET_WEIGHT = 0.02;
 static const uint RESERVOIR_GI_HISTORY_GUIDE_REJECT_NONE = 0u;
@@ -104,7 +106,7 @@ static const int RESERVOIR_GI_CANDIDATE_SHADOWED_SUN = 2;
 static const float RESERVOIR_GI_TEMPORAL_M_CLAMP = 32.0;
 static const float RESERVOIR_GI_SPATIAL_M_CLAMP = 8.0;
 static const uint PT_MATERIAL_RESERVOIR_PROPOSAL_SHIFT = 0u;
-static const uint PT_MATERIAL_RESERVOIR_PROPOSAL_MASK = 0x3u;
+static const uint PT_MATERIAL_RESERVOIR_PROPOSAL_MASK = 0x7u;
 static const uint PT_MATERIAL_RESERVOIR_MODE_SHIFT = 18u;
 static const uint PT_MATERIAL_RESERVOIR_MODE_MASK = 0x3u;
 static const uint PT_MATERIAL_RESERVOIR_CANDIDATE_SHIFT = 20u;
@@ -179,6 +181,15 @@ static const uint reservoirGiHistoryGuideRejectGeometryOffset = 204u;
 static const uint reservoirGiHistoryGuideNeighborSearchesOffset = 208u;
 static const uint reservoirGiHistoryGuideNeighborHitsOffset = 212u;
 static const uint reservoirGiHistoryGuideNeighborMissesOffset = 216u;
+static const uint reservoirGiLocalRejectGeometryOffset = 220u;
+static const uint reservoirGiLocalRejectNoLightOffset = 224u;
+static const uint reservoirGiLocalRejectZeroTargetOffset = 228u;
+static const uint reservoirGiLocalRejectBadPdfOffset = 232u;
+static const uint RESERVOIR_GI_LOCAL_REJECT_NONE = 0u;
+static const uint RESERVOIR_GI_LOCAL_REJECT_GEOMETRY = 1u;
+static const uint RESERVOIR_GI_LOCAL_REJECT_NO_LIGHT = 2u;
+static const uint RESERVOIR_GI_LOCAL_REJECT_ZERO_TARGET = 3u;
+static const uint RESERVOIR_GI_LOCAL_REJECT_BAD_PDF = 4u;
 static const uint RESERVOIR_GI_SOURCE_LOCAL = 0u;
 static const uint RESERVOIR_GI_SOURCE_TEMPORAL = 1u;
 static const uint RESERVOIR_GI_SOURCE_SPATIAL = 2u;
@@ -926,6 +937,22 @@ float3 firstHitSunBounceGuideAxis(float3 N)
     return normalize(axis);
 }
 
+float3 sunReceiverBounceGuideAxis(float3 N)
+{
+    float3 axis = normalize(-ubo.lightDir.xyz);
+    float axisNdot = dot(axis, N);
+    if (axisNdot < 0.10) {
+        float3 tangentAxis = axis - N * axisNdot;
+        float tangentLenSq = dot(tangentAxis, tangentAxis);
+        if (tangentLenSq > 0.0001) {
+            axis = normalize(tangentAxis * rsqrt(tangentLenSq) + N * 0.35);
+        } else {
+            axis = N;
+        }
+    }
+    return normalize(axis);
+}
+
 FirstHitProbeSample sampleFirstHitProbeDirection(float2 xi, float selector, float3 N, int firstHitProbeSamplingMode)
 {
     FirstHitProbeSample sample;
@@ -1185,6 +1212,30 @@ FirstHitProbeSample sampleReservoirGiProposalDirection(float3 hitPos,
         return sample;
     }
 
+    if (reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_GUIDED) {
+        float3 guideAxis = sunReceiverBounceGuideAxis(N);
+        float3 guidedDirection = cosineSampleHemisphere(xi, guideAxis);
+        sample.direction = (selector < 0.5) ? cosineDirection : guidedDirection;
+        float cosinePdf = max(dot(N, sample.direction), 0.0) / PI;
+        float guidedPdf = max(dot(guideAxis, sample.direction), 0.0) / PI;
+        sample.pdf = 0.5 * cosinePdf + 0.5 * guidedPdf;
+        return sample;
+    }
+
+    if (reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_DUAL_SUN_GUIDED) {
+        float3 sunAxis = firstHitSunBounceGuideAxis(N);
+        float3 receiverAxis = sunReceiverBounceGuideAxis(N);
+        float3 sunDirection = cosineSampleHemisphere(xi, sunAxis);
+        float3 receiverDirection = cosineSampleHemisphere(xi, receiverAxis);
+        sample.direction = (selector < 0.50) ? cosineDirection :
+                           ((selector < 0.75) ? sunDirection : receiverDirection);
+        float cosinePdf = max(dot(N, sample.direction), 0.0) / PI;
+        float sunPdf = max(dot(sunAxis, sample.direction), 0.0) / PI;
+        float receiverPdf = max(dot(receiverAxis, sample.direction), 0.0) / PI;
+        sample.pdf = 0.50 * cosinePdf + 0.25 * sunPdf + 0.25 * receiverPdf;
+        return sample;
+    }
+
     if (reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED) {
         return sampleHistoryGuidedReservoirGiProposalDirection(hitPos, N, currentPrimaryDepth,
                                                                launchID, launchSize, xi, selector);
@@ -1274,6 +1325,19 @@ float3 evaluateReservoirGiSecondarySunSuffix(float3 hitPos,
     return float3(0.0, 0.0, 0.0);
 }
 
+void recordReservoirGiLocalReject(uint localRejectReason)
+{
+    if (localRejectReason == RESERVOIR_GI_LOCAL_REJECT_GEOMETRY) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiLocalRejectGeometryOffset, 1u);
+    } else if (localRejectReason == RESERVOIR_GI_LOCAL_REJECT_NO_LIGHT) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiLocalRejectNoLightOffset, 1u);
+    } else if (localRejectReason == RESERVOIR_GI_LOCAL_REJECT_ZERO_TARGET) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiLocalRejectZeroTargetOffset, 1u);
+    } else if (localRejectReason == RESERVOIR_GI_LOCAL_REJECT_BAD_PDF) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiLocalRejectBadPdfOffset, 1u);
+    }
+}
+
 ReservoirGiRecord makeLocalReservoirGiSample(
     float3 hitPos,
     float3 N,
@@ -1289,7 +1353,8 @@ ReservoirGiRecord makeLocalReservoirGiSample(
     out float3 secondaryDirectSun,
     out bool surfaceHit,
     out bool sunVisible,
-    out bool validSample)
+    out bool validSample,
+    out uint localRejectReason)
 {
     ReservoirGiRecord record;
     record.primaryPosition = hitPos;
@@ -1312,11 +1377,17 @@ ReservoirGiRecord makeLocalReservoirGiSample(
     surfaceHit = bouncePayload.hitT >= 0.0;
     sunVisible = false;
     validSample = false;
+    localRejectReason = RESERVOIR_GI_LOCAL_REJECT_NONE;
     if (!surfaceHit) {
+        return record;
+    }
+    if (!isFinitePositive(reservoirGiProposalPdf)) {
+        localRejectReason = RESERVOIR_GI_LOCAL_REJECT_BAD_PDF;
         return record;
     }
     if (!isSaneReservoirGiVector(bouncePayload.hitPos, 100000.0) ||
         !isSaneReservoirGiVector(bouncePayload.worldNormal, 1.1)) {
+        localRejectReason = RESERVOIR_GI_LOCAL_REJECT_GEOMETRY;
         return record;
     }
 
@@ -1337,12 +1408,23 @@ ReservoirGiRecord makeLocalReservoirGiSample(
     sunVisible = pathTracerLuminance(candidateSecondarySunSuffix) > 0.000001;
 
     float3 candidateSuffixRadiance = emissiveContribution + candidateSecondarySunSuffix;
+    if (pathTracerLuminance(candidateSuffixRadiance) <= 0.000001) {
+        localRejectReason = RESERVOIR_GI_LOCAL_REJECT_NO_LIGHT;
+        return record;
+    }
     ReservoirGiTargetEvaluation targetEvaluation =
         evaluateReservoirGiTargetAtPrimary(hitPos, N, V, primaryPayload,
                                            record.candidatePosition, record.candidateNormal,
                                            candidateSuffixRadiance,
                                            reservoirGiProposalPdf);
-    if (!targetEvaluation.validGeometry || !targetEvaluation.validLight) {
+    if (!targetEvaluation.validGeometry) {
+        localRejectReason = isFinitePositive(reservoirGiProposalPdf) ?
+            RESERVOIR_GI_LOCAL_REJECT_GEOMETRY :
+            RESERVOIR_GI_LOCAL_REJECT_BAD_PDF;
+        return record;
+    }
+    if (!targetEvaluation.validLight) {
+        localRejectReason = RESERVOIR_GI_LOCAL_REJECT_ZERO_TARGET;
         return record;
     }
 
@@ -2040,6 +2122,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
             }
             bool localSurfaceHit = false;
             bool localValid = false;
+            uint localRejectReason = RESERVOIR_GI_LOCAL_REJECT_NONE;
             localRecord =
                 makeLocalReservoirGiSample(hitPos, N, V, payload, bouncePayload,
                                            reservoirGiProposalPdf,
@@ -2049,9 +2132,11 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
                                            candidateSecondarySun,
                                            localSurfaceHit,
                                            sunVisible,
-                                           localValid);
+                                           localValid,
+                                           localRejectReason);
             if (!localSurfaceHit || !localValid) {
                 ptAnalysisCounters.InterlockedAdd(reservoirGiLocalSurfaceInvalidOffset, 1u);
+                recordReservoirGiLocalReject(localRejectReason);
                 continue;
             }
             ptAnalysisCounters.InterlockedAdd(reservoirGiLocalValidSamplesOffset, 1u);
@@ -2445,7 +2530,7 @@ void main() {
     int    reservoirGiProposalMode = clamp(int((packedPathTracerMaterialIndex >> PT_MATERIAL_RESERVOIR_PROPOSAL_SHIFT) &
                                                PT_MATERIAL_RESERVOIR_PROPOSAL_MASK),
                                            RESERVOIR_GI_PROPOSAL_COSINE,
-                                           RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED);
+                                           RESERVOIR_GI_PROPOSAL_MIXED_COSINE_DUAL_SUN_GUIDED);
     int    reservoirGiCandidateCount =
         clamp(int((packedPathTracerMaterialIndex >> PT_MATERIAL_RESERVOIR_CANDIDATE_SHIFT) &
                   PT_MATERIAL_RESERVOIR_CANDIDATE_MASK) + 1,

@@ -317,6 +317,14 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "reservoirGiLocalMissCandidatesOffset",
 	    "reservoirGiLocalMissPositiveWeightOffset",
 	    "reservoirGiLocalSurfaceInvalidOffset",
+	    "reservoirGiLocalRejectGeometryOffset",
+	    "reservoirGiLocalRejectNoLightOffset",
+	    "reservoirGiLocalRejectZeroTargetOffset",
+	    "reservoirGiLocalRejectBadPdfOffset",
+	    "RESERVOIR_GI_LOCAL_REJECT_GEOMETRY",
+	    "RESERVOIR_GI_LOCAL_REJECT_NO_LIGHT",
+	    "RESERVOIR_GI_LOCAL_REJECT_ZERO_TARGET",
+	    "RESERVOIR_GI_LOCAL_REJECT_BAD_PDF",
 	    "reservoirGiAcceptedLocalSurfaceOffset",
 	    "reservoirGiAcceptedLocalMissOffset",
 	    "reservoirGiLocalShadowRaysOffset",
@@ -326,6 +334,7 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalValidSamplesOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalMissCandidatesOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalSurfaceInvalidOffset, 1u)",
+	    "recordReservoirGiLocalReject(localRejectReason)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiAcceptedLocalSurfaceOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalShadowRaysOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiTemporalReconnectRaysOffset, 1u)",
@@ -803,7 +812,15 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    {"reservoirGiHistoryGuideNeighborHits",
 	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiHistoryGuideNeighborHits), 212u},
 	    {"reservoirGiHistoryGuideNeighborMisses",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiHistoryGuideNeighborMisses), 216u}};
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiHistoryGuideNeighborMisses), 216u},
+	    {"reservoirGiLocalRejectGeometry",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiLocalRejectGeometry), 220u},
+	    {"reservoirGiLocalRejectNoLight",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiLocalRejectNoLight), 224u},
+	    {"reservoirGiLocalRejectZeroTarget",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiLocalRejectZeroTarget), 228u},
+	    {"reservoirGiLocalRejectBadPdf",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiLocalRejectBadPdf), 232u}};
 	for (const auto &counterOffset : counterOffsets)
 	{
 		if (counterOffset.offset != counterOffset.expectedOffset)
@@ -822,6 +839,10 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "localMiss=%.1f",
 	    "localMissPositive=%.1f",
 	    "localSurfaceInvalid=%.1f",
+	    "localRejectGeometry=%.1f",
+	    "localRejectNoLight=%.1f",
+	    "localRejectZeroTarget=%.1f",
+	    "localRejectBadPdf=%.1f",
 	    "acceptedLocalSurface=%.1f",
 	    "acceptedLocalMiss=%.1f",
 	    "localShadowRays=%.1f",
@@ -860,6 +881,10 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "uint32_t reservoirGiLocalMissCandidates = 0",
 	    "uint32_t reservoirGiLocalMissPositiveWeight = 0",
 	    "uint32_t reservoirGiLocalSurfaceInvalid = 0",
+	    "uint32_t reservoirGiLocalRejectGeometry = 0",
+	    "uint32_t reservoirGiLocalRejectNoLight = 0",
+	    "uint32_t reservoirGiLocalRejectZeroTarget = 0",
+	    "uint32_t reservoirGiLocalRejectBadPdf = 0",
 	    "uint32_t reservoirGiAcceptedLocalSurface = 0",
 	    "uint32_t reservoirGiAcceptedLocalMiss = 0",
 	    "uint32_t reservoirGiLocalShadowRays = 0",
@@ -1025,6 +1050,8 @@ bool testPathTracerDebugAovContract()
 	    "Reservoir GI Proposal",
 	    "Sun Guided",
 	    "Mixed Cosine + Sun Guided",
+	    "Mixed Cosine + Sun Receiver Guide",
+	    "Mixed Cosine + Dual Sun Guide",
 	    "Reservoir Spatial Neighbors",
 	    "Reservoir Candidate Surface Hits",
 	    "Reservoir Candidate Sun Visible",
@@ -1151,6 +1178,8 @@ bool testPathTracerDebugAovContract()
 	    "RESERVOIR_GI_PROPOSAL_SUN_GUIDED",
 	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED",
 	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED",
+	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_GUIDED",
+	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_DUAL_SUN_GUIDED",
 	    "PT_MATERIAL_RESERVOIR_PROPOSAL_SHIFT",
 	    "PT_MATERIAL_RESERVOIR_PROPOSAL_MASK",
 	    "PT_MATERIAL_RESERVOIR_MODE_SHIFT",
@@ -1158,6 +1187,10 @@ bool testPathTracerDebugAovContract()
 	    "PT_FLAGS_ENVIRONMENT_BOUNCE_SHIFT",
 	    "PT_FLAGS_FIRST_HIT_PROBE_SAMPLING_SHIFT",
 	    "sampleReservoirGiProposalDirection",
+	    "sunReceiverBounceGuideAxis",
+	    "reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_GUIDED",
+	    "reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_DUAL_SUN_GUIDED",
+	    "0.50 * cosinePdf + 0.25 * sunPdf + 0.25 * receiverPdf",
 	    "sampleHistoryGuidedReservoirGiProposalDirection",
 	    "reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED",
 	    "storeAcceptedReservoirGiForGuidedProposal",
@@ -1336,6 +1369,7 @@ bool testPathTracerDebugAovContract()
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Env First Two",
 	    "environmentNeeMode=%d",
 	    "reservoirTemporalBudget=%d",
@@ -1345,6 +1379,7 @@ bool testPathTracerDebugAovContract()
 	    "pathTracerSettings.reservoirGiMode            = UISystem::PathTracerReservoirGiMode::TemporalSpatial",
 	    "pathTracerSettings.reservoirGiSpatialNeighborCount = 2",
 	    "pathTracerSettings.environmentNeeBounceMode = 0",
+	    "pathTracerSettings.reservoirGiProposalMode    = UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided",
 	    "pathTracerSettings.reservoirGiTemporalBudgetDivisor = 2",
 	    "pathTracerSettings.reservoirGiSpatialBudgetDivisor = 2",
 	    "ptBenchmarkBasePosition",
@@ -1388,6 +1423,8 @@ bool testPathTracerDebugAovContract()
 	    "pathTracerSettings.directSunBounceMode = 1",
 	    "pathTracerSettings.reservoirGiCandidateCount = 1",
 	    "pathTracerSettings.reservoirGiProposalMode",
+	    "MixedCosineDualSunGuided",
+	    "MixedCosineSunReceiverGuided",
 	    "MixedCosineHistoryGuided",
 	    "Mixed Cosine + History Guide",
 	    "ui.renderMode",
@@ -1417,6 +1454,7 @@ bool testPathTracerDebugAovContract()
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Env First Two"};
 	for (const char *rowName : requiredSponzaTemporalSpatialRows)
 	{
@@ -1437,6 +1475,7 @@ bool testPathTracerDebugAovContract()
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal\")") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 1N Budget") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 3") ||
+	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Dual Sun") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed History Guide") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun All") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First\", 1") ||

@@ -160,6 +160,10 @@ class EngineCore
 		double reservoirGiLocalMissCandidates = 0.0;
 		double reservoirGiLocalMissPositiveWeight = 0.0;
 		double reservoirGiLocalSurfaceInvalid = 0.0;
+		double reservoirGiLocalRejectGeometry = 0.0;
+		double reservoirGiLocalRejectNoLight = 0.0;
+		double reservoirGiLocalRejectZeroTarget = 0.0;
+		double reservoirGiLocalRejectBadPdf = 0.0;
 		double reservoirGiAcceptedLocalSurface = 0.0;
 		double reservoirGiAcceptedLocalMiss = 0.0;
 		double reservoirGiLocalShadowRays = 0.0;
