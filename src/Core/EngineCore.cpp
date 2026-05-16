@@ -117,7 +117,7 @@ uint32_t encodeReservoirGiBudgetDivisor(int divisor)
 UISystem::PathTracerReservoirGiProposalMode
 normalizeReservoirGiProposalMode(UISystem::PathTracerReservoirGiProposalMode mode)
 {
-	const int maxMode = static_cast<int>(UISystem::PathTracerReservoirGiProposalMode::MixedCosineOppositeSunGuided);
+	const int maxMode = static_cast<int>(UISystem::PathTracerReservoirGiProposalMode::MixedCosineHistoryGuided);
 	const int clamped = std::clamp(static_cast<int>(mode), 0, maxMode);
 	return static_cast<UISystem::PathTracerReservoirGiProposalMode>(clamped);
 }
@@ -1852,6 +1852,23 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	ui.pathTracerPerfStats.reservoirGiLocalShadowRays             = counters->reservoirGiLocalShadowRays;
 	ui.pathTracerPerfStats.reservoirGiTemporalReconnectRays       = counters->reservoirGiTemporalReconnectRays;
 	ui.pathTracerPerfStats.reservoirGiTemporalShadowRays          = counters->reservoirGiTemporalShadowRays;
+	ui.pathTracerPerfStats.reservoirGiHistoryGuideUsed            = counters->reservoirGiHistoryGuideUsed;
+	ui.pathTracerPerfStats.reservoirGiHistoryGuideRejectedLowWeight =
+	    counters->reservoirGiHistoryGuideRejectedLowWeight;
+	ui.pathTracerPerfStats.reservoirGiHistoryGuideFallbackCosine =
+	    counters->reservoirGiHistoryGuideFallbackCosine;
+	ui.pathTracerPerfStats.reservoirGiHistoryGuideRejectReprojection =
+	    counters->reservoirGiHistoryGuideRejectReprojection;
+	ui.pathTracerPerfStats.reservoirGiHistoryGuideRejectLoad =
+	    counters->reservoirGiHistoryGuideRejectLoad;
+	ui.pathTracerPerfStats.reservoirGiHistoryGuideRejectGeometry =
+	    counters->reservoirGiHistoryGuideRejectGeometry;
+	ui.pathTracerPerfStats.reservoirGiHistoryGuideNeighborSearches =
+	    counters->reservoirGiHistoryGuideNeighborSearches;
+	ui.pathTracerPerfStats.reservoirGiHistoryGuideNeighborHits =
+	    counters->reservoirGiHistoryGuideNeighborHits;
+	ui.pathTracerPerfStats.reservoirGiHistoryGuideNeighborMisses =
+	    counters->reservoirGiHistoryGuideNeighborMisses;
 	ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum =
 	    static_cast<float>(counters->reservoirGiLumaScaledSum) / 64.0f;
 	ui.pathTracerPerfStats.reservoirGiAcceptedAvgLuma =
@@ -2194,11 +2211,11 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		                     "Reservoir 1C Shadowed Sun First Mixed",
 		                     1,
 		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided);
-		auto reservoirMixedOppositeGuideRow =
+		auto reservoirMixedHistoryGuideRow =
 		    makeReservoirRow(scenario,
-		                     "Reservoir 1C Shadowed Sun First Mixed Opposite Guide",
+		                     "Reservoir 1C Shadowed Sun First Mixed History Guide",
 		                     1,
-		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineOppositeSunGuided);
+		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineHistoryGuided);
 		auto reservoirMixedTemporalRow = reservoirMixedRow;
 		reservoirMixedTemporalRow.name =
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal");
@@ -2233,7 +2250,7 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		ptExperimentRows.push_back(base8SunFirstRow);
 		ptExperimentRows.push_back(base8SunAllRow);
 		ptExperimentRows.push_back(reservoirMixedRow);
-		ptExperimentRows.push_back(reservoirMixedOppositeGuideRow);
+		ptExperimentRows.push_back(reservoirMixedHistoryGuideRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalBudget2Row);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialTwoNeighborRow);
@@ -2242,8 +2259,10 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 
 	ptExperimentSweepActive     = !ptExperimentRows.empty();
 	ptExperimentRowIndex        = 0;
-	ptExperimentWarmupRemaining = std::max(1, analysis.warmupFrames);
-	ptExperimentSampleRemaining = std::max(1, analysis.sampleFrames);
+	ptExperimentWarmupFrames    = std::max(1, analysis.sponzaGiSweepWarmupFrames);
+	ptExperimentSampleFrames    = std::max(1, analysis.sponzaGiSweepSampleFrames);
+	ptExperimentWarmupRemaining = ptExperimentWarmupFrames;
+	ptExperimentSampleRemaining = ptExperimentSampleFrames;
 	ptExperimentAccum           = {};
 	ptExperimentCompletionLog   = "PT Experiment Sweep: Sponza PT/GI audit sweep complete";
 
@@ -2330,6 +2349,9 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "reservoirGiSelectedLocal=%.1f, reservoirGiSelectedTemporal=%.1f, reservoirGiSelectedSpatial=%.1f, "
 	     "temporalAccepted=%.1f, temporalReuseAttempts=%.1f, "
 	     "temporalReconnectRays=%.1f, temporalShadowRays=%.1f, "
+	     "historyGuideUsed=%.1f, historyGuideRejectedLowWeight=%.1f, historyGuideFallbackCosine=%.1f, "
+	     "historyGuideRejectReprojection=%.1f, historyGuideRejectLoad=%.1f, historyGuideRejectGeometry=%.1f, "
+	     "historyGuideNeighborSearches=%.1f, historyGuideNeighborHits=%.1f, historyGuideNeighborMisses=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
 	     row.name.c_str(),
 	     accum.sampleCount,
@@ -2367,6 +2389,15 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.reservoirGiTemporalReuseAttempts * invSamples,
 	     accum.reservoirGiTemporalReconnectRays * invSamples,
 	     accum.reservoirGiTemporalShadowRays * invSamples,
+	     accum.reservoirGiHistoryGuideUsed * invSamples,
+	     accum.reservoirGiHistoryGuideRejectedLowWeight * invSamples,
+	     accum.reservoirGiHistoryGuideFallbackCosine * invSamples,
+	     accum.reservoirGiHistoryGuideRejectReprojection * invSamples,
+	     accum.reservoirGiHistoryGuideRejectLoad * invSamples,
+	     accum.reservoirGiHistoryGuideRejectGeometry * invSamples,
+	     accum.reservoirGiHistoryGuideNeighborSearches * invSamples,
+	     accum.reservoirGiHistoryGuideNeighborHits * invSamples,
+	     accum.reservoirGiHistoryGuideNeighborMisses * invSamples,
 	     accum.rayTraceMs * invSamples,
 	     accum.totalFrameMs * invSamples);
 }
@@ -2460,6 +2491,24 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiTemporalReconnectRays);
 	ptExperimentAccum.reservoirGiTemporalShadowRays +=
 	    static_cast<double>(stats.reservoirGiTemporalShadowRays);
+	ptExperimentAccum.reservoirGiHistoryGuideUsed +=
+	    static_cast<double>(stats.reservoirGiHistoryGuideUsed);
+	ptExperimentAccum.reservoirGiHistoryGuideRejectedLowWeight +=
+	    static_cast<double>(stats.reservoirGiHistoryGuideRejectedLowWeight);
+	ptExperimentAccum.reservoirGiHistoryGuideFallbackCosine +=
+	    static_cast<double>(stats.reservoirGiHistoryGuideFallbackCosine);
+	ptExperimentAccum.reservoirGiHistoryGuideRejectReprojection +=
+	    static_cast<double>(stats.reservoirGiHistoryGuideRejectReprojection);
+	ptExperimentAccum.reservoirGiHistoryGuideRejectLoad +=
+	    static_cast<double>(stats.reservoirGiHistoryGuideRejectLoad);
+	ptExperimentAccum.reservoirGiHistoryGuideRejectGeometry +=
+	    static_cast<double>(stats.reservoirGiHistoryGuideRejectGeometry);
+	ptExperimentAccum.reservoirGiHistoryGuideNeighborSearches +=
+	    static_cast<double>(stats.reservoirGiHistoryGuideNeighborSearches);
+	ptExperimentAccum.reservoirGiHistoryGuideNeighborHits +=
+	    static_cast<double>(stats.reservoirGiHistoryGuideNeighborHits);
+	ptExperimentAccum.reservoirGiHistoryGuideNeighborMisses +=
+	    static_cast<double>(stats.reservoirGiHistoryGuideNeighborMisses);
 	ptExperimentAccum.rayTraceMs += stats.rayTraceMs;
 	ptExperimentAccum.totalFrameMs += stats.totalFrameMs;
 	++ptExperimentAccum.sampleCount;
@@ -2482,8 +2531,8 @@ void EngineCore::updatePathTracerExperimentSweep()
 		return;
 	}
 
-	ptExperimentWarmupRemaining = std::max(1, ui.pathTracerAnalysisSettings.warmupFrames);
-	ptExperimentSampleRemaining = std::max(1, ui.pathTracerAnalysisSettings.sampleFrames);
+	ptExperimentWarmupRemaining = std::max(1, ptExperimentWarmupFrames);
+	ptExperimentSampleRemaining = std::max(1, ptExperimentSampleFrames);
 	ptExperimentAccum           = {};
 	vulkan.logicalDevice.waitIdle();
 	applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);

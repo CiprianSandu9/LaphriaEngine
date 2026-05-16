@@ -164,6 +164,15 @@ class EngineCore
 		double reservoirGiLocalShadowRays = 0.0;
 		double reservoirGiTemporalReconnectRays = 0.0;
 		double reservoirGiTemporalShadowRays = 0.0;
+		double reservoirGiHistoryGuideUsed = 0.0;
+		double reservoirGiHistoryGuideRejectedLowWeight = 0.0;
+		double reservoirGiHistoryGuideFallbackCosine = 0.0;
+		double reservoirGiHistoryGuideRejectReprojection = 0.0;
+		double reservoirGiHistoryGuideRejectLoad = 0.0;
+		double reservoirGiHistoryGuideRejectGeometry = 0.0;
+		double reservoirGiHistoryGuideNeighborSearches = 0.0;
+		double reservoirGiHistoryGuideNeighborHits = 0.0;
+		double reservoirGiHistoryGuideNeighborMisses = 0.0;
 		double rayTraceMs = 0.0;
 		double totalFrameMs = 0.0;
 	};
@@ -171,6 +180,8 @@ class EngineCore
 	size_t ptExperimentRowIndex{0};
 	int ptExperimentWarmupRemaining{0};
 	int ptExperimentSampleRemaining{0};
+	int ptExperimentWarmupFrames{0};
+	int ptExperimentSampleFrames{0};
 	std::vector<PathTracerExperimentRow> ptExperimentRows;
 	PathTracerExperimentAccumulator ptExperimentAccum;
 	std::string ptExperimentCompletionLog{"PT Experiment Sweep: complete"};

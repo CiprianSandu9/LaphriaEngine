@@ -193,6 +193,15 @@ struct PathTracerAnalysisCounters
 	uint32_t reservoirGiLocalShadowRays = 0;
 	uint32_t reservoirGiTemporalReconnectRays = 0;
 	uint32_t reservoirGiTemporalShadowRays = 0;
+	uint32_t reservoirGiHistoryGuideUsed = 0;
+	uint32_t reservoirGiHistoryGuideRejectedLowWeight = 0;
+	uint32_t reservoirGiHistoryGuideFallbackCosine = 0;
+	uint32_t reservoirGiHistoryGuideRejectReprojection = 0;
+	uint32_t reservoirGiHistoryGuideRejectLoad = 0;
+	uint32_t reservoirGiHistoryGuideRejectGeometry = 0;
+	uint32_t reservoirGiHistoryGuideNeighborSearches = 0;
+	uint32_t reservoirGiHistoryGuideNeighborHits = 0;
+	uint32_t reservoirGiHistoryGuideNeighborMisses = 0;
 };
 
 struct SkinningPushConstants

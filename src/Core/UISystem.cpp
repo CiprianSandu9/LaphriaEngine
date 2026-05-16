@@ -1142,7 +1142,7 @@ void UISystem::drawPathTracerDebugLab() {
             "Cosine",
             "Sun Guided",
             "Mixed Cosine + Sun Guided",
-            "Mixed Cosine + Opposite Sun Guide"};
+            "Mixed Cosine + History Guide"};
         int reservoirGiProposalMode = static_cast<int>(pathTracerSettings.reservoirGiProposalMode);
         if (ImGui::Combo("Reservoir GI Proposal", &reservoirGiProposalMode,
                          reservoirGiProposalModes, IM_ARRAYSIZE(reservoirGiProposalModes))) {
@@ -1190,6 +1190,23 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::Text("Reservoir GI Local Shadow Rays: %u", pathTracerPerfStats.reservoirGiLocalShadowRays);
         ImGui::Text("Reservoir GI Temporal Reconnect Rays: %u", pathTracerPerfStats.reservoirGiTemporalReconnectRays);
         ImGui::Text("Reservoir GI Temporal Shadow Rays: %u", pathTracerPerfStats.reservoirGiTemporalShadowRays);
+        ImGui::Text("Reservoir GI History Guide Used: %u", pathTracerPerfStats.reservoirGiHistoryGuideUsed);
+        ImGui::Text("Reservoir GI History Guide Rejected Low Weight: %u",
+                    pathTracerPerfStats.reservoirGiHistoryGuideRejectedLowWeight);
+        ImGui::Text("Reservoir GI History Guide Fallback Cosine: %u",
+                    pathTracerPerfStats.reservoirGiHistoryGuideFallbackCosine);
+        ImGui::Text("Reservoir GI History Guide Reject Reprojection: %u",
+                    pathTracerPerfStats.reservoirGiHistoryGuideRejectReprojection);
+        ImGui::Text("Reservoir GI History Guide Reject Load: %u",
+                    pathTracerPerfStats.reservoirGiHistoryGuideRejectLoad);
+        ImGui::Text("Reservoir GI History Guide Reject Geometry: %u",
+                    pathTracerPerfStats.reservoirGiHistoryGuideRejectGeometry);
+        ImGui::Text("Reservoir GI History Guide Neighbor Searches: %u",
+                    pathTracerPerfStats.reservoirGiHistoryGuideNeighborSearches);
+        ImGui::Text("Reservoir GI History Guide Neighbor Hits: %u",
+                    pathTracerPerfStats.reservoirGiHistoryGuideNeighborHits);
+        ImGui::Text("Reservoir GI History Guide Neighbor Misses: %u",
+                    pathTracerPerfStats.reservoirGiHistoryGuideNeighborMisses);
         ImGui::Text("Reservoir GI Temporal: accepted %u | rejected %u",
                     pathTracerPerfStats.reservoirGiTemporalAccepted,
                     pathTracerPerfStats.reservoirGiTemporalRejected);
@@ -1289,6 +1306,8 @@ void UISystem::drawPathTracerDebugLab() {
             pathTracerAnalysisSettings.runSponzaGiPerfSweep = true;
             pathTracerAnalysisSettings.enableAnalysisMode = true;
         }
+        ImGui::SliderInt("Sponza Sweep Warmup", &pathTracerAnalysisSettings.sponzaGiSweepWarmupFrames, 1, 60);
+        ImGui::SliderInt("Sponza Sweep Samples", &pathTracerAnalysisSettings.sponzaGiSweepSampleFrames, 4, 240);
         ImGui::Checkbox("Lock Benchmark Scene (sponza_runtime.glb)", &pathTracerAnalysisSettings.lockBenchmarkScene);
     }
 }
@@ -1401,6 +1420,8 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         pathTracerSettings.firstHitCandidateCount = std::clamp(pathTracerSettings.firstHitCandidateCount, 2, 16);
         pathTracerAnalysisSettings.warmupFrames = std::clamp(pathTracerAnalysisSettings.warmupFrames, 30, 600);
         pathTracerAnalysisSettings.sampleFrames = std::clamp(pathTracerAnalysisSettings.sampleFrames, 60, 1200);
+        pathTracerAnalysisSettings.sponzaGiSweepWarmupFrames = std::clamp(pathTracerAnalysisSettings.sponzaGiSweepWarmupFrames, 1, 60);
+        pathTracerAnalysisSettings.sponzaGiSweepSampleFrames = std::clamp(pathTracerAnalysisSettings.sponzaGiSweepSampleFrames, 4, 240);
         pathTracerAnalysisSettings.minSampleFrames = std::clamp(pathTracerAnalysisSettings.minSampleFrames, 60, pathTracerAnalysisSettings.sampleFrames);
         pathTracerAnalysisSettings.convergenceWindowFrames = std::clamp(pathTracerAnalysisSettings.convergenceWindowFrames, 20, 240);
         pathTracerAnalysisSettings.p95ConvergenceThreshold = std::clamp(pathTracerAnalysisSettings.p95ConvergenceThreshold, 0.005f, 0.10f);

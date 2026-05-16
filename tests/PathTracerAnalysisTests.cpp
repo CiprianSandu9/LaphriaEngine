@@ -433,6 +433,78 @@ bool testPathTracerReservoirGiMeasurementContract()
 			return false;
 		}
 	}
+	const char *requiredHistoryGuidedReservoirSymbols[] = {
+	    "bool usesReservoirGiHistoryBuffer = reservoirGiMode >= PATH_TRACER_RESERVOIR_GI_TEMPORAL ||",
+	    "reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED",
+	    "if (usesReservoirGiHistoryBuffer) {",
+	    "updateReservoirGiHeader(launchID, launchSize, ubo.frameCount)",
+	    "bool useHistoryGuidedExtraCandidate = reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED",
+	    "int totalLocalCandidateCount = candidateCount + (useHistoryGuidedExtraCandidate ? 1 : 0)",
+	    "int localProposalMode = useHistoryGuidedExtraCandidate ?",
+	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED : reservoirGiProposalMode",
+	    "if (useHistoryGuidedExtraCandidate && c == candidateCount)",
+	    "trySampleHistoryGuidedReservoirGiProposalDirection(",
+	    "storeAcceptedReservoirGiForGuidedProposal"};
+	for (const char *symbol : requiredHistoryGuidedReservoirSymbols)
+	{
+		if (!containsText(reservoirSamplingFunction, symbol))
+		{
+			std::cerr << "missing history-guided reservoir buffer contract: " << symbol << "\n";
+			return false;
+		}
+	}
+	const char *requiredHistoryGuideShaderSymbols[] = {
+	    "RESERVOIR_GI_HISTORY_GUIDE_MIN_TARGET_WEIGHT",
+	    "RESERVOIR_GI_HISTORY_GUIDE_REJECT_REPROJECTION",
+	    "RESERVOIR_GI_HISTORY_GUIDE_REJECT_LOAD",
+	    "RESERVOIR_GI_HISTORY_GUIDE_REJECT_GEOMETRY",
+	    "bool loadHistoryGuidedReservoirGiProposalRecord(",
+	    "static const int2 historyGuideNeighborOffsets[5]",
+	    "bestHistoryTargetWeight",
+	    "historyGuideNeighborOffsets[i]",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiHistoryGuideNeighborSearchesOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiHistoryGuideNeighborHitsOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiHistoryGuideNeighborMissesOffset, 1u)",
+	    "bool trySampleHistoryGuidedReservoirGiProposalDirection(",
+	    "loadReservoirGiHistoryMetadata(historyPixel, launchSize, historyMetadata)",
+	    "!isFinitePositive(historyRecord.targetWeight) ||",
+	    "historyRecord.targetWeight < RESERVOIR_GI_HISTORY_GUIDE_MIN_TARGET_WEIGHT",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiHistoryGuideUsedOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiHistoryGuideRejectedLowWeightOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiHistoryGuideFallbackCosineOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiHistoryGuideRejectReprojectionOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiHistoryGuideRejectLoadOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiHistoryGuideRejectGeometryOffset, 1u)"};
+	for (const char *symbol : requiredHistoryGuideShaderSymbols)
+	{
+		if (!containsText(raygen, symbol))
+		{
+			std::cerr << "missing history-guided proposal gate contract: " << symbol << "\n";
+			return false;
+		}
+	}
+	const std::size_t historyGuideAxisPos = raygen.find("bool tryGetHistoryGuidedReservoirGiAxis(");
+	const std::size_t historyGuideSamplePos =
+	    raygen.find("FirstHitProbeSample sampleHistoryGuidedReservoirGiProposalDirection(", historyGuideAxisPos);
+	if (historyGuideAxisPos == std::string::npos || historyGuideSamplePos == std::string::npos)
+	{
+		std::cerr << "history-guided proposal function markers are missing\n";
+		return false;
+	}
+	const std::string historyGuideAxisFunction =
+	    raygen.substr(historyGuideAxisPos, historyGuideSamplePos - historyGuideAxisPos);
+	const std::size_t historyGuideReprojectPos =
+	    historyGuideAxisFunction.find("reprojectReservoirHistoryPixel(hitPos, launchSize, historyPixel)");
+	const std::size_t historyGuideLoadPos =
+	    historyGuideAxisFunction.find("loadHistoryGuidedReservoirGiProposalRecord(neighborPixel, launchSize");
+	if (historyGuideReprojectPos == std::string::npos ||
+	    historyGuideLoadPos == std::string::npos ||
+	    historyGuideReprojectPos > historyGuideLoadPos ||
+	    containsText(historyGuideAxisFunction, "loadTemporalReservoirGi("))
+	{
+		std::cerr << "history-guided proposal must reproject and use its lightweight proposal loader\n";
+		return false;
+	}
 	const char *forbiddenReservoirMissFallbackSymbols[] = {
 	    "candidateTotal = firstLegThroughput * bouncePayload.emission",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalMissPositiveWeightOffset, 1u)",
@@ -713,7 +785,25 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    {"reservoirGiTemporalReconnectRays",
 	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiTemporalReconnectRays), 176u},
 	    {"reservoirGiTemporalShadowRays",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiTemporalShadowRays), 180u}};
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiTemporalShadowRays), 180u},
+	    {"reservoirGiHistoryGuideUsed",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiHistoryGuideUsed), 184u},
+	    {"reservoirGiHistoryGuideRejectedLowWeight",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiHistoryGuideRejectedLowWeight), 188u},
+	    {"reservoirGiHistoryGuideFallbackCosine",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiHistoryGuideFallbackCosine), 192u},
+	    {"reservoirGiHistoryGuideRejectReprojection",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiHistoryGuideRejectReprojection), 196u},
+	    {"reservoirGiHistoryGuideRejectLoad",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiHistoryGuideRejectLoad), 200u},
+	    {"reservoirGiHistoryGuideRejectGeometry",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiHistoryGuideRejectGeometry), 204u},
+	    {"reservoirGiHistoryGuideNeighborSearches",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiHistoryGuideNeighborSearches), 208u},
+	    {"reservoirGiHistoryGuideNeighborHits",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiHistoryGuideNeighborHits), 212u},
+	    {"reservoirGiHistoryGuideNeighborMisses",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiHistoryGuideNeighborMisses), 216u}};
 	for (const auto &counterOffset : counterOffsets)
 	{
 		if (counterOffset.offset != counterOffset.expectedOffset)
@@ -737,6 +827,15 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "localShadowRays=%.1f",
 	    "temporalReconnectRays=%.1f",
 	    "temporalShadowRays=%.1f",
+	    "historyGuideUsed=%.1f",
+	    "historyGuideRejectedLowWeight=%.1f",
+	    "historyGuideFallbackCosine=%.1f",
+	    "historyGuideRejectReprojection=%.1f",
+	    "historyGuideRejectLoad=%.1f",
+	    "historyGuideRejectGeometry=%.1f",
+	    "historyGuideNeighborSearches=%.1f",
+	    "historyGuideNeighborHits=%.1f",
+	    "historyGuideNeighborMisses=%.1f",
 	    "reservoirGiConfidenceMAvg=%.5f",
 	    "reservoirGiConfidenceMAvg",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N",
@@ -766,6 +865,15 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "uint32_t reservoirGiLocalShadowRays = 0",
 	    "uint32_t reservoirGiTemporalReconnectRays = 0",
 	    "uint32_t reservoirGiTemporalShadowRays = 0",
+	    "uint32_t reservoirGiHistoryGuideUsed = 0",
+	    "uint32_t reservoirGiHistoryGuideRejectedLowWeight = 0",
+	    "uint32_t reservoirGiHistoryGuideFallbackCosine = 0",
+	    "uint32_t reservoirGiHistoryGuideRejectReprojection = 0",
+	    "uint32_t reservoirGiHistoryGuideRejectLoad = 0",
+	    "uint32_t reservoirGiHistoryGuideRejectGeometry = 0",
+	    "uint32_t reservoirGiHistoryGuideNeighborSearches = 0",
+	    "uint32_t reservoirGiHistoryGuideNeighborHits = 0",
+	    "uint32_t reservoirGiHistoryGuideNeighborMisses = 0",
 	    "float reservoirGiConfidenceMAvg = 0.0f",
 	    "float reservoirGiLocalValidRatio = 0.0f",
 	    "Reservoir GI Confidence M Avg",
@@ -774,7 +882,16 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "Reservoir GI Accepted Local Surface",
 	    "Reservoir GI Accepted Local Miss",
 	    "Reservoir GI Local Shadow Rays",
-	    "Reservoir GI Temporal Reconnect Rays"};
+	    "Reservoir GI Temporal Reconnect Rays",
+	    "Reservoir GI History Guide Used",
+	    "Reservoir GI History Guide Rejected Low Weight",
+	    "Reservoir GI History Guide Fallback Cosine",
+	    "Reservoir GI History Guide Reject Reprojection",
+	    "Reservoir GI History Guide Reject Load",
+	    "Reservoir GI History Guide Reject Geometry",
+	    "Reservoir GI History Guide Neighbor Searches",
+	    "Reservoir GI History Guide Neighbor Hits",
+	    "Reservoir GI History Guide Neighbor Misses"};
 	for (const char *symbol : requiredCounterAndUiSymbols)
 	{
 		if (!containsText(engineAuxiliaryHeader, symbol) &&
@@ -856,6 +973,14 @@ bool testPathTracerDebugAovContract()
 		std::cerr << "GI cache sweep defaults should stay short enough for interactive runs\n";
 		return false;
 	}
+	if (!containsText(uiHeader, "sponzaGiSweepWarmupFrames = 8") ||
+	    !containsText(uiHeader, "sponzaGiSweepSampleFrames = 32") ||
+	    !containsText(engineSource, "analysis.sponzaGiSweepWarmupFrames") ||
+	    !containsText(engineSource, "analysis.sponzaGiSweepSampleFrames"))
+	{
+		std::cerr << "Sponza PT/GI audit sweep should use dedicated fast frame counts\n";
+		return false;
+	}
 	const char *requiredLabels[] = {
 	    "Raw Final Color",
 	    "Direct Lighting",
@@ -880,6 +1005,8 @@ bool testPathTracerDebugAovContract()
 	    "Core Metrics",
 	    "Scenario: Indirect Bounce Box",
 	    "Scenario: Sponza GI Validation",
+	    "Sponza Sweep Warmup",
+	    "Sponza Sweep Samples",
 	    "Benchmark Automation",
 	    "Frame Stats",
 	    "Target Wall Avg Luma",
@@ -1016,15 +1143,16 @@ bool testPathTracerDebugAovContract()
 	    "RESERVOIR_GI_PROPOSAL_COSINE",
 	    "RESERVOIR_GI_PROPOSAL_SUN_GUIDED",
 	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED",
-	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_OPPOSITE_SUN_GUIDED",
+	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED",
 	    "PT_MATERIAL_RESERVOIR_PROPOSAL_SHIFT",
 	    "PT_MATERIAL_RESERVOIR_PROPOSAL_MASK",
 	    "PT_MATERIAL_RESERVOIR_MODE_SHIFT",
 	    "PT_FLAGS_ENVIRONMENT_NEE_BIT",
 	    "PT_FLAGS_FIRST_HIT_PROBE_SAMPLING_SHIFT",
 	    "sampleReservoirGiProposalDirection",
-	    "oppositeSunBounceGuideAxis",
-	    "reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_OPPOSITE_SUN_GUIDED",
+	    "sampleHistoryGuidedReservoirGiProposalDirection",
+	    "reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_HISTORY_GUIDED",
+	    "storeAcceptedReservoirGiForGuidedProposal",
 	    "reservoirGiProposalPdf",
 	    "reservoirGiProposalMode",
 	    "ptReservoirGiCurrent",
@@ -1195,7 +1323,7 @@ bool testPathTracerDebugAovContract()
 	    "Base 8 Sun First",
 	    "Base 8 Sun All",
 	    "Reservoir 1C Shadowed Sun First Mixed",
-	    "Reservoir 1C Shadowed Sun First Mixed Opposite Guide",
+	    "Reservoir 1C Shadowed Sun First Mixed History Guide",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N",
@@ -1248,8 +1376,8 @@ bool testPathTracerDebugAovContract()
 	    "pathTracerSettings.directSunBounceMode = 1",
 	    "pathTracerSettings.reservoirGiCandidateCount = 1",
 	    "pathTracerSettings.reservoirGiProposalMode",
-	    "MixedCosineOppositeSunGuided",
-	    "Mixed Cosine + Opposite Sun Guide",
+	    "MixedCosineHistoryGuided",
+	    "Mixed Cosine + History Guide",
 	    "ui.renderMode",
 	    "sponza_runtime.glb",
 	    "ptIndirectBounceTargetWallModelId",
@@ -1272,10 +1400,28 @@ bool testPathTracerDebugAovContract()
 			return false;
 		}
 	}
+	const char *requiredSponzaTemporalSpatialRows[] = {
+	    "Reservoir 1C Shadowed Sun First Mixed",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 1N Budget 2",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 1N Budget 3",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 3"};
+	for (const char *rowName : requiredSponzaTemporalSpatialRows)
+	{
+		if (!containsText(engineSource, rowName))
+		{
+			std::cerr << "focused Sponza PT/GI audit sweep is missing row: " << rowName << "\n";
+			return false;
+		}
+	}
 	if (containsText(engineSource, "Sponza / Reservoir GI Temporal") ||
 	    containsText(engineSource, "Sponza / Reservoir GI Temporal Spatial") ||
 	    containsText(engineSource, "Sponza / Reservoir GI Single Frame 2 Candidates No RIS") ||
 	    containsText(engineSource, "Sponza / Reservoir GI Single Frame 2 Candidates RIS") ||
+	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed History Guide") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun All") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First\", 1") ||
 	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Sun Guided") ||
@@ -1292,6 +1438,20 @@ bool testPathTracerDebugAovContract()
 	const std::string activeCacheCleanupSources = uiHeader + uiSource + engineHeader + engineSource +
 	                                              frameContextHeader + frameContextSource +
 	                                              pipelineCollection + raygen;
+	const char *forbiddenOppositeGuideSymbols[] = {
+	    "MixedCosineOppositeSunGuided",
+	    "Mixed Cosine + Opposite Sun Guide",
+	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_OPPOSITE_SUN_GUIDED",
+	    "oppositeSunBounceGuideAxis"};
+	for (const char *symbol : forbiddenOppositeGuideSymbols)
+	{
+		if (containsText(activeCacheCleanupSources, symbol))
+		{
+			std::cerr << "retired opposite-guide proposal path remains in active source: " << symbol << "\n";
+			return false;
+		}
+	}
+
 	const char *forbiddenCacheSymbols[] = {
 	    "Sun-Visible Cache",
 	    "Enable Sun-Visible Cache",

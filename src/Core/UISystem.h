@@ -94,7 +94,7 @@ public:
         Cosine = 0,
         SunGuided = 1,
         MixedCosineSunGuided = 2,
-        MixedCosineOppositeSunGuided = 3
+        MixedCosineHistoryGuided = 3
     };
 
     enum class PathTracerSponzaValidationView
@@ -198,6 +198,15 @@ public:
         uint32_t reservoirGiLocalShadowRays = 0;
         uint32_t reservoirGiTemporalReconnectRays = 0;
         uint32_t reservoirGiTemporalShadowRays = 0;
+        uint32_t reservoirGiHistoryGuideUsed = 0;
+        uint32_t reservoirGiHistoryGuideRejectedLowWeight = 0;
+        uint32_t reservoirGiHistoryGuideFallbackCosine = 0;
+        uint32_t reservoirGiHistoryGuideRejectReprojection = 0;
+        uint32_t reservoirGiHistoryGuideRejectLoad = 0;
+        uint32_t reservoirGiHistoryGuideRejectGeometry = 0;
+        uint32_t reservoirGiHistoryGuideNeighborSearches = 0;
+        uint32_t reservoirGiHistoryGuideNeighborHits = 0;
+        uint32_t reservoirGiHistoryGuideNeighborMisses = 0;
         float reservoirGiAcceptedAvgLuma = 0.0f;
         float reservoirGiAcceptedLumaSum = 0.0f;
         float reservoirGiCandidateSurfaceHitRatio = 0.0f;
@@ -233,6 +242,8 @@ public:
         int                          debugAtrousIteration = 0;
         int                          warmupFrames = 30;
         int                          sampleFrames = 120;
+        int                          sponzaGiSweepWarmupFrames = 8;
+        int                          sponzaGiSweepSampleFrames = 32;
         float                        benchmarkVisualFidelityScore = 0.80f;
         bool                         runPhysicalSanityChecks = false;
         bool                         physicalSanityActive = false;
