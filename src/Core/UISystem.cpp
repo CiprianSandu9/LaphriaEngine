@@ -1151,6 +1151,13 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::SliderInt("Reservoir GI Candidates", &pathTracerSettings.reservoirGiCandidateCount, 1, 4);
         ImGui::SliderInt("Reservoir Spatial Neighbors", &pathTracerSettings.reservoirGiSpatialNeighborCount, 1, 8);
         ImGui::Checkbox("Reservoir GI Candidate RIS", &pathTracerSettings.reservoirGiUseCandidateRis);
+        ImGui::Checkbox("Detailed Reservoir Diagnostics", &pathTracerSettings.reservoirGiDetailedDiagnostics);
+        ImGui::SliderInt("Temporal Reuse Budget Divisor", &pathTracerSettings.reservoirGiTemporalBudgetDivisor, 1, 4);
+        ImGui::SliderInt("Spatial Reuse Budget Divisor", &pathTracerSettings.reservoirGiSpatialBudgetDivisor, 1, 4);
+        pathTracerSettings.reservoirGiTemporalBudgetDivisor =
+            std::clamp(pathTracerSettings.reservoirGiTemporalBudgetDivisor, 1, 4);
+        pathTracerSettings.reservoirGiSpatialBudgetDivisor =
+            std::clamp(pathTracerSettings.reservoirGiSpatialBudgetDivisor, 1, 4);
         ImGui::Text("Reservoir GI Candidates: %u", pathTracerPerfStats.reservoirGiCandidates);
         ImGui::Text("Reservoir GI Accepted: %u", pathTracerPerfStats.reservoirGiAccepted);
         ImGui::Text("Reservoir Candidate Surface Hits: %u (%.2f%%)",
@@ -1164,6 +1171,18 @@ void UISystem::drawPathTracerDebugLab() {
                     pathTracerPerfStats.reservoirGiCandidatePositiveWeightRatio * 100.0f);
         ImGui::Text("Reservoir GI Zero Weight: %u", pathTracerPerfStats.reservoirGiZeroWeight);
         ImGui::Text("Reservoir GI Selected Weight Avg: %.5f", pathTracerPerfStats.reservoirGiSelectedWeightAverage);
+        ImGui::Text("Reservoir GI Target Weight Avg: %.5f", pathTracerPerfStats.reservoirGiTargetWeightAverage);
+        ImGui::Text("Reservoir GI Confidence M Avg: %.5f", pathTracerPerfStats.reservoirGiConfidenceMAvg);
+        ImGui::Text("Reservoir GI Selected Local: %u", pathTracerPerfStats.reservoirGiSelectedLocal);
+        ImGui::Text("Reservoir GI Selected Temporal: %u", pathTracerPerfStats.reservoirGiSelectedTemporal);
+        ImGui::Text("Reservoir GI Selected Spatial: %u", pathTracerPerfStats.reservoirGiSelectedSpatial);
+        ImGui::Text("Reservoir GI Local Valid: %u / %u (%.2f%%)",
+                    pathTracerPerfStats.reservoirGiLocalValidSamples,
+                    pathTracerPerfStats.reservoirGiCandidates,
+                    pathTracerPerfStats.reservoirGiLocalValidRatio * 100.0f);
+        ImGui::Text("Reservoir GI Local Shadow Rays: %u", pathTracerPerfStats.reservoirGiLocalShadowRays);
+        ImGui::Text("Reservoir GI Temporal Reconnect Rays: %u", pathTracerPerfStats.reservoirGiTemporalReconnectRays);
+        ImGui::Text("Reservoir GI Temporal Shadow Rays: %u", pathTracerPerfStats.reservoirGiTemporalShadowRays);
         ImGui::Text("Reservoir GI Temporal: accepted %u | rejected %u",
                     pathTracerPerfStats.reservoirGiTemporalAccepted,
                     pathTracerPerfStats.reservoirGiTemporalRejected);

@@ -68,6 +68,11 @@ constexpr uint32_t    kPtFlagsFirstHitCandidateCountShift    = 9u;
 constexpr uint32_t    kPtFlagsFirstHitCandidateCountMask     = 0xFu;
 constexpr uint32_t    kPtFlagsFirstHitProbeSamplingShift     = 13u;
 constexpr uint32_t    kPtFlagsFirstHitProbeSamplingMask      = 0x7u;
+constexpr uint32_t    kPtFlagsReservoirGiDetailedDiagnosticsBit = 1u << 16u;
+constexpr uint32_t    kPtFlagsReservoirTemporalBudgetShift   = 17u;
+constexpr uint32_t    kPtFlagsReservoirTemporalBudgetMask    = 0x3u;
+constexpr uint32_t    kPtFlagsReservoirSpatialBudgetShift    = 19u;
+constexpr uint32_t    kPtFlagsReservoirSpatialBudgetMask     = 0x3u;
 constexpr int         PATH_TRACER_BLACK_ENVIRONMENT_BIT      = static_cast<int>(kPtFlagsBlackEnvironmentBit);
 constexpr int         PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = static_cast<int>(kPtFlagsApplyFirstHitProbesBit);
 constexpr double      kWindowTitleUpdateIntervalSeconds      = 0.5;
@@ -90,6 +95,23 @@ uint32_t encodePathTracerMaxBounceCode(int maxBounces)
 		return 1u;
 	}
 	return 2u;
+}
+
+uint32_t encodeReservoirGiBudgetDivisor(int divisor)
+{
+	if (divisor <= 1)
+	{
+		return 0u;
+	}
+	if (divisor <= 2)
+	{
+		return 1u;
+	}
+	if (divisor <= 3)
+	{
+		return 2u;
+	}
+	return 3u;
 }
 
 UISystem::PathTracerReservoirGiProposalMode
@@ -134,6 +156,7 @@ uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
 	return (settings.enableEnvironmentNEE ? kPtFlagsEnvironmentNeeBit : 0u) |
 	       (settings.blackEnvironment ? kPtFlagsBlackEnvironmentBit : 0u) |
 	       (settings.applyFirstHitProbesToFinal ? kPtFlagsApplyFirstHitProbesBit : 0u) |
+	       (settings.reservoirGiDetailedDiagnostics ? kPtFlagsReservoirGiDetailedDiagnosticsBit : 0u) |
 	       packPathTracerBits(static_cast<uint32_t>(settings.environmentNeeSamplingMode),
 	                          kPtFlagsEnvironmentSamplingShift,
 	                          kPtFlagsEnvironmentSamplingMask) |
@@ -145,7 +168,13 @@ uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
 	                          kPtFlagsFirstHitCandidateCountMask) |
 	       packPathTracerBits(static_cast<uint32_t>(settings.firstHitProbeSamplingMode),
 	                          kPtFlagsFirstHitProbeSamplingShift,
-	                          kPtFlagsFirstHitProbeSamplingMask);
+	                          kPtFlagsFirstHitProbeSamplingMask) |
+	       packPathTracerBits(encodeReservoirGiBudgetDivisor(settings.reservoirGiTemporalBudgetDivisor),
+	                          kPtFlagsReservoirTemporalBudgetShift,
+	                          kPtFlagsReservoirTemporalBudgetMask) |
+	       packPathTracerBits(encodeReservoirGiBudgetDivisor(settings.reservoirGiSpatialBudgetDivisor),
+	                          kPtFlagsReservoirSpatialBudgetShift,
+	                          kPtFlagsReservoirSpatialBudgetMask);
 }
 
 std::filesystem::path resolveProjectRootPath()
@@ -1810,6 +1839,14 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	ui.pathTracerPerfStats.reservoirGiTemporalRejectLight         = counters->reservoirGiTemporalRejectLight;
 	ui.pathTracerPerfStats.reservoirGiSpatialAccepted             = counters->reservoirGiSpatialAccepted;
 	ui.pathTracerPerfStats.reservoirGiSpatialRejected             = counters->reservoirGiSpatialRejected;
+	ui.pathTracerPerfStats.reservoirGiSelectedLocal               = counters->reservoirGiSelectedLocal;
+	ui.pathTracerPerfStats.reservoirGiSelectedTemporal            = counters->reservoirGiSelectedTemporal;
+	ui.pathTracerPerfStats.reservoirGiSelectedSpatial             = counters->reservoirGiSelectedSpatial;
+	ui.pathTracerPerfStats.reservoirGiLocalSurfaceHits            = counters->reservoirGiLocalSurfaceHits;
+	ui.pathTracerPerfStats.reservoirGiLocalValidSamples           = counters->reservoirGiLocalValidSamples;
+	ui.pathTracerPerfStats.reservoirGiLocalShadowRays             = counters->reservoirGiLocalShadowRays;
+	ui.pathTracerPerfStats.reservoirGiTemporalReconnectRays       = counters->reservoirGiTemporalReconnectRays;
+	ui.pathTracerPerfStats.reservoirGiTemporalShadowRays          = counters->reservoirGiTemporalShadowRays;
 	ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum =
 	    static_cast<float>(counters->reservoirGiLumaScaledSum) / 64.0f;
 	ui.pathTracerPerfStats.reservoirGiAcceptedAvgLuma =
@@ -1823,8 +1860,18 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    static_cast<float>(counters->reservoirGiCandidateSunVisible) / reservoirCandidateTotal;
 	ui.pathTracerPerfStats.reservoirGiCandidatePositiveWeightRatio =
 	    static_cast<float>(counters->reservoirGiCandidatePositiveWeight) / reservoirCandidateTotal;
+	ui.pathTracerPerfStats.reservoirGiLocalValidRatio =
+	    static_cast<float>(counters->reservoirGiLocalValidSamples) / reservoirCandidateTotal;
 	ui.pathTracerPerfStats.reservoirGiSelectedWeightAverage =
 	    (counters->reservoirGiAccepted > 0) ? static_cast<float>(counters->reservoirGiSelectedWeightScaledSum) /
+	                                              (static_cast<float>(counters->reservoirGiAccepted) * 64.0f) :
+	                                          0.0f;
+	ui.pathTracerPerfStats.reservoirGiTargetWeightAverage =
+	    (counters->reservoirGiAccepted > 0) ? static_cast<float>(counters->reservoirGiTargetWeightScaledSum) /
+	                                              (static_cast<float>(counters->reservoirGiAccepted) * 64.0f) :
+	                                          0.0f;
+	ui.pathTracerPerfStats.reservoirGiConfidenceMAvg =
+	    (counters->reservoirGiAccepted > 0) ? static_cast<float>(counters->reservoirGiConfidenceMScaledSum) /
 	                                              (static_cast<float>(counters->reservoirGiAccepted) * 64.0f) :
 	                                          0.0f;
 
@@ -2099,6 +2146,8 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		row.firstHitDiffuseSamples             = 1;
 		row.firstHitCandidateCount             = 4;
 		row.reservoirGiMode                    = UISystem::PathTracerReservoirGiMode::Off;
+		row.reservoirGiTemporalBudgetDivisor   = 1;
+		row.reservoirGiSpatialBudgetDivisor    = 1;
 		row.pathTracerMaxBounces               = 8;
 		row.directSunBounceMode                = directSunMode;
 		row.reservoirGiCandidateEvaluationMode = 2;
@@ -2123,6 +2172,8 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		row.firstHitCandidateCount             = 4;
 		row.reservoirGiCandidateCount          = 1;
 		row.reservoirGiUseCandidateRis         = false;
+		row.reservoirGiTemporalBudgetDivisor   = 1;
+		row.reservoirGiSpatialBudgetDivisor    = 1;
 		row.pathTracerMaxBounces               = 8;
 		row.directSunBounceMode                = directSunMode;
 		row.reservoirGiCandidateEvaluationMode = 2;
@@ -2133,15 +2184,6 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 	ptExperimentRows.clear();
 	for (const auto &scenario : sponzaScenarioPresets())
 	{
-		auto reservoirSunFirstRow =
-		    makeReservoirRow(scenario, "Reservoir 1C Shadowed Sun First", 1);
-		reservoirSunFirstRow.directSunBounceMode       = 1;
-		reservoirSunFirstRow.reservoirGiCandidateCount = 1;
-		auto reservoirSunGuidedRow =
-		    makeReservoirRow(scenario,
-		                     "Reservoir 1C Shadowed Sun First Sun Guided",
-		                     1,
-		                     UISystem::PathTracerReservoirGiProposalMode::SunGuided);
 		auto reservoirMixedRow =
 		    makeReservoirRow(scenario,
 		                     "Reservoir 1C Shadowed Sun First Mixed",
@@ -2151,26 +2193,40 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		reservoirMixedTemporalRow.name =
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal");
 		reservoirMixedTemporalRow.reservoirGiMode = UISystem::PathTracerReservoirGiMode::Temporal;
-		auto reservoirMixedTwoCandidateRow =
-		    makeReservoirRow(scenario,
-		                     "Reservoir 2C Shadowed Sun First Mixed",
-		                     1,
-		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided);
-		reservoirMixedTwoCandidateRow.reservoirGiCandidateCount = 2;
-		auto reservoirMixedTwoCandidateRisRow = reservoirMixedTwoCandidateRow;
-		reservoirMixedTwoCandidateRisRow.name =
-		    makeScenarioRowName(scenario, "Reservoir 2C Shadowed Sun First Mixed RIS");
-		reservoirMixedTwoCandidateRisRow.reservoirGiUseCandidateRis = true;
+		auto reservoirMixedTemporalBudget2Row = reservoirMixedTemporalRow;
+		reservoirMixedTemporalBudget2Row.name =
+		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2");
+		reservoirMixedTemporalBudget2Row.reservoirGiTemporalBudgetDivisor = 2;
+		reservoirMixedTemporalBudget2Row.reservoirGiSpatialBudgetDivisor = 1;
+		auto reservoirMixedTemporalSpatialTwoNeighborRow = reservoirMixedTemporalRow;
+		reservoirMixedTemporalSpatialTwoNeighborRow.name =
+		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N");
+		reservoirMixedTemporalSpatialTwoNeighborRow.reservoirGiMode = UISystem::PathTracerReservoirGiMode::TemporalSpatial;
+		reservoirMixedTemporalSpatialTwoNeighborRow.reservoirGiSpatialNeighborCount = 2;
+		auto reservoirMixedTemporalSpatialBudget2Row = reservoirMixedTemporalSpatialTwoNeighborRow;
+		reservoirMixedTemporalSpatialBudget2Row.name =
+		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2");
+		reservoirMixedTemporalSpatialBudget2Row.reservoirGiTemporalBudgetDivisor = 2;
+		reservoirMixedTemporalSpatialBudget2Row.reservoirGiSpatialBudgetDivisor = 2;
 
-		ptExperimentRows.push_back(makeBaseTransportRow(scenario, "Base 8 Sun All", 0));
-		ptExperimentRows.push_back(makeBaseTransportRow(scenario, "Base 8 Sun First", 1));
-		ptExperimentRows.push_back(makeReservoirRow(scenario, "Reservoir 1C Shadowed Sun All", 0));
-		ptExperimentRows.push_back(reservoirSunFirstRow);
-		ptExperimentRows.push_back(reservoirSunGuidedRow);
+		auto base3SunFirstRow = makeBaseTransportRow(scenario, "Base 3 Sun First", 1);
+		base3SunFirstRow.pathTracerMaxBounces = 3;
+		auto base5SunFirstRow = makeBaseTransportRow(scenario, "Base 5 Sun First", 1);
+		base5SunFirstRow.pathTracerMaxBounces = 5;
+		auto base8SunFirstRow = makeBaseTransportRow(scenario, "Base 8 Sun First", 1);
+		base8SunFirstRow.pathTracerMaxBounces = 8;
+		auto base8SunAllRow = makeBaseTransportRow(scenario, "Base 8 Sun All", 0);
+		base8SunAllRow.pathTracerMaxBounces = 8;
+
+		ptExperimentRows.push_back(base3SunFirstRow);
+		ptExperimentRows.push_back(base5SunFirstRow);
+		ptExperimentRows.push_back(base8SunFirstRow);
+		ptExperimentRows.push_back(base8SunAllRow);
 		ptExperimentRows.push_back(reservoirMixedRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalRow);
-		ptExperimentRows.push_back(reservoirMixedTwoCandidateRow);
-		ptExperimentRows.push_back(reservoirMixedTwoCandidateRisRow);
+		ptExperimentRows.push_back(reservoirMixedTemporalBudget2Row);
+		ptExperimentRows.push_back(reservoirMixedTemporalSpatialTwoNeighborRow);
+		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);
 	}
 
 	ptExperimentSweepActive     = !ptExperimentRows.empty();
@@ -2178,11 +2234,11 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 	ptExperimentWarmupRemaining = std::max(1, analysis.warmupFrames);
 	ptExperimentSampleRemaining = std::max(1, analysis.sampleFrames);
 	ptExperimentAccum           = {};
-	ptExperimentCompletionLog   = "PT Experiment Sweep: Sponza GI perf sweep complete";
+	ptExperimentCompletionLog   = "PT Experiment Sweep: Sponza PT/GI audit sweep complete";
 
 	if (ptExperimentSweepActive)
 	{
-		LOGI("PT Experiment Sweep: starting Sponza GI perf sweep (%zu rows, warmup=%d, samples=%d)",
+		LOGI("PT Experiment Sweep: starting Sponza PT/GI audit sweep (%zu rows, warmup=%d, samples=%d)",
 		     ptExperimentRows.size(), ptExperimentWarmupRemaining, ptExperimentSampleRemaining);
 		applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
 	}
@@ -2215,6 +2271,9 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
 	settings.reservoirGiCandidateCount          = row.reservoirGiCandidateCount;
 	settings.reservoirGiSpatialNeighborCount    = row.reservoirGiSpatialNeighborCount;
 	settings.reservoirGiUseCandidateRis         = row.reservoirGiUseCandidateRis;
+	settings.reservoirGiTemporalBudgetDivisor   = row.reservoirGiTemporalBudgetDivisor;
+	settings.reservoirGiSpatialBudgetDivisor    = row.reservoirGiSpatialBudgetDivisor;
+	settings.reservoirGiDetailedDiagnostics = false;
 	settings.pathTracerMaxBounces               = row.pathTracerMaxBounces;
 	settings.directSunBounceMode                = row.directSunBounceMode;
 	settings.reservoirGiCandidateEvaluationMode = row.reservoirGiCandidateEvaluationMode;
@@ -2248,13 +2307,16 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	LOGI("PT Experiment Row Summary: name=\"%s\", samples=%u, mode=%d, "
 	     "maxBounces=%d, directSunMode=%d, reservoirEvalMode=%d, "
 	     "reservoirGiMode=%d, reservoirProposalMode=%d, reservoirCandidates=%d, reservoirUseRis=%d, "
+	     "reservoirTemporalBudget=%d, reservoirSpatialBudget=%d, "
 	     "firstHitProbeAvgLuma=%.5f, firstHitSunVisibleAvgLuma=%.5f, "
 	     "reservoirGiCandidateRays=%.1f, reservoirGiAccepted=%.1f, "
+	     "localSurfaceHits=%.1f, localValid=%.1f, localShadowRays=%.1f, "
 	     "reservoirGiAcceptedAvgLuma=%.5f, reservoirGiAcceptedLumaSum=%.1f, "
-	     "reservoirGiCandidateSurfaceHit=%.2f%%, reservoirGiCandidateSunVisible=%.2f%%, "
-	     "reservoirGiCandidatePositiveWeight=%.2f%%, reservoirGiZeroWeight=%.1f, "
-	     "reservoirGiSelectedWeightAvg=%.5f, temporalAccepted=%.1f, temporalReuseAttempts=%.1f, "
-	     "temporalRejectGeometry=%.1f, temporalRejectVisibility=%.1f, temporalRejectLight=%.1f, "
+	     "reservoirGiSelectedWeightAvg=%.5f, reservoirGiTargetWeightAvg=%.5f, "
+	     "reservoirGiConfidenceMAvg=%.5f, "
+	     "reservoirGiSelectedLocal=%.1f, reservoirGiSelectedTemporal=%.1f, reservoirGiSelectedSpatial=%.1f, "
+	     "temporalAccepted=%.1f, temporalReuseAttempts=%.1f, "
+	     "temporalReconnectRays=%.1f, temporalShadowRays=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
 	     row.name.c_str(),
 	     accum.sampleCount,
@@ -2266,22 +2328,27 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     static_cast<int>(row.reservoirGiProposalMode),
 	     row.reservoirGiCandidateCount,
 	     row.reservoirGiUseCandidateRis ? 1 : 0,
+	     row.reservoirGiTemporalBudgetDivisor,
+	     row.reservoirGiSpatialBudgetDivisor,
 	     accum.firstHitProbeAvgLuma * invSamples,
 	     accum.firstHitProbeSunVisibleAvgLuma * invSamples,
 	     accum.reservoirGiCandidates * invSamples,
 	     accum.reservoirGiAccepted * invSamples,
+	     accum.reservoirGiLocalSurfaceHits * invSamples,
+	     accum.reservoirGiLocalValidSamples * invSamples,
+	     accum.reservoirGiLocalShadowRays * invSamples,
 	     accum.reservoirGiAcceptedAvgLuma * invSamples,
 	     accum.reservoirGiAcceptedLumaSum * invSamples,
-	     accum.reservoirGiCandidateSurfaceHitRatio * invSamples * 100.0,
-	     accum.reservoirGiCandidateSunVisibleRatio * invSamples * 100.0,
-	     accum.reservoirGiCandidatePositiveWeightRatio * invSamples * 100.0,
-	     accum.reservoirGiZeroWeight * invSamples,
 	     accum.reservoirGiSelectedWeightAverage * invSamples,
+	     accum.reservoirGiTargetWeightAverage * invSamples,
+	     accum.reservoirGiConfidenceMAvg * invSamples,
+	     accum.reservoirGiSelectedLocal * invSamples,
+	     accum.reservoirGiSelectedTemporal * invSamples,
+	     accum.reservoirGiSelectedSpatial * invSamples,
 	     accum.reservoirGiTemporalAccepted * invSamples,
 	     accum.reservoirGiTemporalReuseAttempts * invSamples,
-	     accum.reservoirGiTemporalRejectGeometry * invSamples,
-	     accum.reservoirGiTemporalRejectVisibility * invSamples,
-	     accum.reservoirGiTemporalRejectLight * invSamples,
+	     accum.reservoirGiTemporalReconnectRays * invSamples,
+	     accum.reservoirGiTemporalShadowRays * invSamples,
 	     accum.rayTraceMs * invSamples,
 	     accum.totalFrameMs * invSamples);
 }
@@ -2329,6 +2396,10 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiZeroWeight);
 	ptExperimentAccum.reservoirGiSelectedWeightAverage +=
 	    static_cast<double>(stats.reservoirGiSelectedWeightAverage);
+	ptExperimentAccum.reservoirGiTargetWeightAverage +=
+	    static_cast<double>(stats.reservoirGiTargetWeightAverage);
+	ptExperimentAccum.reservoirGiConfidenceMAvg +=
+	    static_cast<double>(stats.reservoirGiConfidenceMAvg);
 	ptExperimentAccum.reservoirGiTemporalAccepted +=
 	    static_cast<double>(stats.reservoirGiTemporalAccepted);
 	ptExperimentAccum.reservoirGiTemporalRejected +=
@@ -2345,6 +2416,22 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiSpatialAccepted);
 	ptExperimentAccum.reservoirGiSpatialRejected +=
 	    static_cast<double>(stats.reservoirGiSpatialRejected);
+	ptExperimentAccum.reservoirGiSelectedLocal +=
+	    static_cast<double>(stats.reservoirGiSelectedLocal);
+	ptExperimentAccum.reservoirGiSelectedTemporal +=
+	    static_cast<double>(stats.reservoirGiSelectedTemporal);
+	ptExperimentAccum.reservoirGiSelectedSpatial +=
+	    static_cast<double>(stats.reservoirGiSelectedSpatial);
+	ptExperimentAccum.reservoirGiLocalSurfaceHits +=
+	    static_cast<double>(stats.reservoirGiLocalSurfaceHits);
+	ptExperimentAccum.reservoirGiLocalValidSamples +=
+	    static_cast<double>(stats.reservoirGiLocalValidSamples);
+	ptExperimentAccum.reservoirGiLocalShadowRays +=
+	    static_cast<double>(stats.reservoirGiLocalShadowRays);
+	ptExperimentAccum.reservoirGiTemporalReconnectRays +=
+	    static_cast<double>(stats.reservoirGiTemporalReconnectRays);
+	ptExperimentAccum.reservoirGiTemporalShadowRays +=
+	    static_cast<double>(stats.reservoirGiTemporalShadowRays);
 	ptExperimentAccum.rayTraceMs += stats.rayTraceMs;
 	ptExperimentAccum.totalFrameMs += stats.totalFrameMs;
 	++ptExperimentAccum.sampleCount;

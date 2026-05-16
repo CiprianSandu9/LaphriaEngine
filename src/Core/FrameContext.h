@@ -97,7 +97,7 @@ class FrameContext
 	std::vector<void *>                          ptAnalysisCounterMapped;
 
 	static constexpr vk::DeviceSize kReservoirGiHeaderSize = 16;
-	static constexpr vk::DeviceSize kReservoirGiRecordSize = 96;
+	static constexpr vk::DeviceSize kReservoirGiRecordSize = 160;
 	static constexpr uint32_t       kReservoirGiCurrentCapacity = 262144;
 	vk::DeviceSize reservoirGiCurrentBufferSize = kReservoirGiHeaderSize;
 	uint32_t       reservoirGiCurrentCapacity = 0;

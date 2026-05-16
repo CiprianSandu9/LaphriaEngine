@@ -121,6 +121,9 @@ public:
         int                   reservoirGiCandidateCount = 2;
         int                   reservoirGiSpatialNeighborCount = 4;
         bool                  reservoirGiUseCandidateRis = true;
+        bool                  reservoirGiDetailedDiagnostics = true;
+        int                   reservoirGiTemporalBudgetDivisor = 1;
+        int                   reservoirGiSpatialBudgetDivisor = 1;
         int                   pathTracerMaxBounces = 8;
         // 0 = all bounces, 1 = first bounce only, 2 = first 2 bounces.
         int                   directSunBounceMode = 0;
@@ -181,12 +184,23 @@ public:
         uint32_t reservoirGiTemporalRejectLight = 0;
         uint32_t reservoirGiSpatialAccepted = 0;
         uint32_t reservoirGiSpatialRejected = 0;
+        uint32_t reservoirGiSelectedLocal = 0;
+        uint32_t reservoirGiSelectedTemporal = 0;
+        uint32_t reservoirGiSelectedSpatial = 0;
+        uint32_t reservoirGiLocalSurfaceHits = 0;
+        uint32_t reservoirGiLocalValidSamples = 0;
+        uint32_t reservoirGiLocalShadowRays = 0;
+        uint32_t reservoirGiTemporalReconnectRays = 0;
+        uint32_t reservoirGiTemporalShadowRays = 0;
         float reservoirGiAcceptedAvgLuma = 0.0f;
         float reservoirGiAcceptedLumaSum = 0.0f;
         float reservoirGiCandidateSurfaceHitRatio = 0.0f;
         float reservoirGiCandidateSunVisibleRatio = 0.0f;
         float reservoirGiCandidatePositiveWeightRatio = 0.0f;
+        float reservoirGiLocalValidRatio = 0.0f;
         float reservoirGiSelectedWeightAverage = 0.0f;
+        float reservoirGiTargetWeightAverage = 0.0f;
+        float reservoirGiConfidenceMAvg = 0.0f;
         float cameraMotionFactor = 0.0f;
     };
 

@@ -111,6 +111,8 @@ class EngineCore
 		int reservoirGiCandidateCount = 2;
 		int reservoirGiSpatialNeighborCount = 4;
 		bool reservoirGiUseCandidateRis = true;
+		int reservoirGiTemporalBudgetDivisor = 1;
+		int reservoirGiSpatialBudgetDivisor = 1;
 		int pathTracerMaxBounces = 8;
 		// 0 = all bounces, 1 = first bounce only, 2 = first 2 bounces.
 		int directSunBounceMode = 0;
@@ -139,6 +141,8 @@ class EngineCore
 		double reservoirGiCandidatePositiveWeightRatio = 0.0;
 		double reservoirGiZeroWeight = 0.0;
 		double reservoirGiSelectedWeightAverage = 0.0;
+		double reservoirGiTargetWeightAverage = 0.0;
+		double reservoirGiConfidenceMAvg = 0.0;
 		double reservoirGiTemporalAccepted = 0.0;
 		double reservoirGiTemporalRejected = 0.0;
 		double reservoirGiTemporalReuseAttempts = 0.0;
@@ -147,6 +151,14 @@ class EngineCore
 		double reservoirGiTemporalRejectLight = 0.0;
 		double reservoirGiSpatialAccepted = 0.0;
 		double reservoirGiSpatialRejected = 0.0;
+		double reservoirGiSelectedLocal = 0.0;
+		double reservoirGiSelectedTemporal = 0.0;
+		double reservoirGiSelectedSpatial = 0.0;
+		double reservoirGiLocalSurfaceHits = 0.0;
+		double reservoirGiLocalValidSamples = 0.0;
+		double reservoirGiLocalShadowRays = 0.0;
+		double reservoirGiTemporalReconnectRays = 0.0;
+		double reservoirGiTemporalShadowRays = 0.0;
 		double rayTraceMs = 0.0;
 		double totalFrameMs = 0.0;
 	};
