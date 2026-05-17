@@ -61,6 +61,51 @@ std::string extractFunctionBody(const std::string &source, const char *signature
 	return {};
 }
 
+std::string stripComments(const std::string &source)
+{
+	std::string stripped;
+	stripped.reserve(source.size());
+
+	bool inLineComment = false;
+	bool inBlockComment = false;
+	for (size_t i = 0; i < source.size(); ++i)
+	{
+		if (inLineComment)
+		{
+			if (source[i] == '\n')
+			{
+				inLineComment = false;
+				stripped.push_back(source[i]);
+			}
+			continue;
+		}
+		if (inBlockComment)
+		{
+			if (source[i] == '*' && i + 1u < source.size() && source[i + 1u] == '/')
+			{
+				inBlockComment = false;
+				++i;
+			}
+			continue;
+		}
+		if (source[i] == '/' && i + 1u < source.size() && source[i + 1u] == '/')
+		{
+			inLineComment = true;
+			++i;
+			continue;
+		}
+		if (source[i] == '/' && i + 1u < source.size() && source[i + 1u] == '*')
+		{
+			inBlockComment = true;
+			++i;
+			continue;
+		}
+		stripped.push_back(source[i]);
+	}
+
+	return stripped;
+}
+
 bool brightSurfelCombineUsesTargetWeight(const std::string &raygen)
 {
 	const std::string reservoirSampling =
@@ -303,6 +348,45 @@ bool requireSurfelGeneratePassContracts(const std::string &cmakeLists,
 	       containsText(pipelineSource, "sizeof(SurfelGiPushConstants)") &&
 	       containsText(surfelGenerate, "surfelGiGenerateRejectInvalidOffset") &&
 	       containsText(surfelGenerate, "surfelGiGenerateRejectCoverageOffset");
+}
+
+bool requireSurfelBuildCellsPassContracts(const std::string &cmakeLists,
+                                          const std::string &pipelineHeader,
+                                          const std::string &pipelineSource,
+                                          const std::string &engineHeader,
+                                          const std::string &engineCore,
+                                          const std::string &surfelBuildCells)
+{
+	const char *requiredSymbols[] = {
+	    "surfelGiBuildCellsPipeline",
+	    "createSurfelGiBuildCellsPipeline",
+	    "void surfelBuildCellsMain",
+	    "surfelGiCellInsertAttemptsOffset",
+	    "surfelGiCellInsertedOffset",
+	    "surfelGiCellOverflowOffset"};
+
+	for (const char *symbol : requiredSymbols)
+	{
+		if (!containsText(cmakeLists, symbol) &&
+		    !containsText(pipelineHeader, symbol) &&
+		    !containsText(pipelineSource, symbol) &&
+		    !containsText(engineHeader, symbol) &&
+		    !containsText(engineCore, symbol) &&
+		    !containsText(surfelBuildCells, symbol))
+			return false;
+	}
+
+	const std::string buildCellsMain =
+	    stripComments(extractFunctionBody(surfelBuildCells, "void surfelBuildCellsMain("));
+	if (buildCellsMain.empty())
+		return false;
+
+	return containsText(cmakeLists, "SurfelBuildCells.slang|surfelBuildCellsMain") &&
+	       containsText(surfelBuildCells, "[shader(\"compute\")]") &&
+	       containsText(surfelBuildCells, "[numthreads(128, 1, 1)]") &&
+	       !containsText(surfelBuildCells, "Contract anchor for Task 6") &&
+	       !containsText(surfelBuildCells, "// Contract anchor") &&
+	       containsText(buildCellsMain, "InterlockedAdd(cell.count");
 }
 
 bool requireIndexedBrightSurfelShaderContracts(const std::string &raygen)
@@ -699,6 +783,7 @@ bool testPathTracerReservoirGiMeasurementContract()
 	const std::string engineHeader = readTextFile(sourceRoot / "src" / "Core" / "EngineCore.h");
 	const std::string surfelClear = readTextFile(sourceRoot / "src" / "shaders" / "SurfelClear.slang");
 	const std::string surfelGenerate = readTextFile(sourceRoot / "src" / "shaders" / "SurfelGenerate.slang");
+	const std::string surfelBuildCells = readTextFile(sourceRoot / "src" / "shaders" / "SurfelBuildCells.slang");
 	const std::string resourceManager = readTextFile(sourceRoot / "src" / "Core" / "ResourceManager.cpp");
 	const std::string gltfImporter    = readTextFile(sourceRoot / "src" / "Core" / "GltfImporter.cpp");
 
@@ -733,6 +818,13 @@ bool testPathTracerReservoirGiMeasurementContract()
 	                                        engineHeader, engineCore, surfelGenerate))
 	{
 		std::cerr << "persistent surfel GI generate pass contract is incomplete\n";
+		return false;
+	}
+
+	if (!requireSurfelBuildCellsPassContracts(cmakeLists, pipelineHeader, pipelineSource,
+	                                          engineHeader, engineCore, surfelBuildCells))
+	{
+		std::cerr << "persistent surfel GI build-cells pass contract is incomplete\n";
 		return false;
 	}
 

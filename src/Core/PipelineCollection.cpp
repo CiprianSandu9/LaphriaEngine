@@ -956,6 +956,19 @@ void PipelineCollection::createSurfelGiGeneratePipeline(const VulkanDevice &dev)
 	surfelGiGeneratePipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
 }
 
+void PipelineCollection::createSurfelGiBuildCellsPipeline(const VulkanDevice &dev)
+{
+	vk::raii::ShaderModule shaderModule = createShaderModule(dev, readFile("Shaders/SurfelBuildCells.slang.spv"));
+	vk::PipelineShaderStageCreateInfo computeShaderStageInfo{
+	    .stage  = vk::ShaderStageFlagBits::eCompute,
+	    .module = *shaderModule,
+	    .pName  = "surfelBuildCellsMain"};
+	vk::ComputePipelineCreateInfo pipelineInfo{
+	    .stage  = computeShaderStageInfo,
+	    .layout = *surfelGiPipelineLayout};
+	surfelGiBuildCellsPipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
+}
+
 vk::raii::ShaderModule PipelineCollection::createShaderModule(const VulkanDevice            &dev,
                                                               const std::vector<char> &code) const
 {

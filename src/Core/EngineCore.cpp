@@ -489,6 +489,7 @@ void EngineCore::initVulkan()
 	pipelines.createDenoiserPipelines(vulkan);
 	pipelines.createSurfelGiClearPipeline(vulkan);
 	pipelines.createSurfelGiGeneratePipeline(vulkan);
+	pipelines.createSurfelGiBuildCellsPipeline(vulkan);
 	pipelines.createClassicRTPipeline(vulkan);
 	pipelines.createClassicRTShaderBindingTable(vulkan);
 
@@ -1596,6 +1597,55 @@ void EngineCore::recordSurfelGiGeneratePass(const vk::raii::CommandBuffer &comma
 	commandBuffer.pipelineBarrier2(dependency);
 }
 
+void EngineCore::recordSurfelGiBuildCellsPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
+{
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiBuildCellsPipeline);
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+	                                 *pipelines.surfelGiPipelineLayout, 0,
+	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
+
+	constexpr uint32_t groups = (FrameContext::kSurfelGiMaxSurfels + 127u) / 128u;
+	commandBuffer.dispatch(groups, 1, 1);
+
+	std::array<vk::BufferMemoryBarrier2, 4> barriers = {
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.surfelGiRecordBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = FrameContext::kSurfelGiMaxSurfels * FrameContext::kSurfelGiRecordSize},
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.surfelGiCellBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = FrameContext::kSurfelGiCellCount * FrameContext::kSurfelGiCellSize},
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.surfelGiCellSlotBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = FrameContext::kSurfelGiCellCount * FrameContext::kSurfelGiCellSlotCount * FrameContext::kSurfelGiCellSlotSize},
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.ptAnalysisCounterBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = sizeof(Laphria::PathTracerAnalysisCounters)}};
+	vk::DependencyInfo dependency{
+	    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
+	    .pBufferMemoryBarriers    = barriers.data()};
+	commandBuffer.pipelineBarrier2(dependency);
+}
+
 void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
 {
 	const uint32_t fi         = frames.frameIndex;
@@ -1690,6 +1740,7 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 
 	recordSurfelGiClearPass(commandBuffer, fi);
 	recordSurfelGiGeneratePass(commandBuffer, fi);
+	recordSurfelGiBuildCellsPass(commandBuffer, fi);
 
 	// 4. Reprojection pass.
 	if (ui.pathTracerSettings.enableReprojection)
