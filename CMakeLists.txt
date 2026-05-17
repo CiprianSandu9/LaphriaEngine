@@ -34,6 +34,7 @@ set(SHADER_SOURCES
         "Reprojection.slang|reprojectionMain"
         "Denoiser.slang|atrousMain"
         "SurfelClear.slang|surfelClearMain"
+        "SurfelGenerate.slang|surfelGenerateMain"
 )
 
 if (CMAKE_CONFIGURATION_TYPES)

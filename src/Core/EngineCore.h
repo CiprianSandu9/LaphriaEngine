@@ -292,6 +292,7 @@ class EngineCore
 	void recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordSurfelGiClearPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
+	void recordSurfelGiGeneratePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
 
 	void createDescriptorPool();
 

@@ -337,13 +337,15 @@ void PipelineCollection::createSurfelGiDescriptorSetLayout(const VulkanDevice &d
 {
 	constexpr vk::ShaderStageFlags surfelBufferStages =
 	    vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eRaygenKHR;
-	std::array<vk::DescriptorSetLayoutBinding, 6> bindings = {
+	std::array<vk::DescriptorSetLayoutBinding, 8> bindings = {
 	    vk::DescriptorSetLayoutBinding{.binding = 0, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = surfelBufferStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = surfelBufferStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 2, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = surfelBufferStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 3, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = surfelBufferStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 4, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = surfelBufferStages},
-	    vk::DescriptorSetLayoutBinding{.binding = 5, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute}};
+	    vk::DescriptorSetLayoutBinding{.binding = 5, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+	    vk::DescriptorSetLayoutBinding{.binding = 6, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+	    vk::DescriptorSetLayoutBinding{.binding = 7, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute}};
 	vk::DescriptorSetLayoutCreateInfo layoutInfo{
 	    .bindingCount = static_cast<uint32_t>(bindings.size()),
 	    .pBindings    = bindings.data()};
@@ -447,9 +449,15 @@ void PipelineCollection::createRayTracingPipelineLayout(const VulkanDevice &dev)
 void PipelineCollection::createSurfelGiPipelineLayout(const VulkanDevice &dev)
 {
 	std::array layouts = {*surfelGiDescriptorSetLayout, *descriptorSetLayoutGlobal};
+	vk::PushConstantRange pushConstantRange{
+	    .stageFlags = vk::ShaderStageFlagBits::eCompute,
+	    .offset     = 0,
+	    .size       = sizeof(SurfelGiPushConstants)};
 	vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
-	    .setLayoutCount = static_cast<uint32_t>(layouts.size()),
-	    .pSetLayouts    = layouts.data()};
+	    .setLayoutCount         = static_cast<uint32_t>(layouts.size()),
+	    .pSetLayouts            = layouts.data(),
+	    .pushConstantRangeCount = 1,
+	    .pPushConstantRanges    = &pushConstantRange};
 	surfelGiPipelineLayout = vk::raii::PipelineLayout(dev.logicalDevice, pipelineLayoutInfo);
 }
 
@@ -933,6 +941,19 @@ void PipelineCollection::createSurfelGiClearPipeline(const VulkanDevice &dev)
 	    .stage  = computeShaderStageInfo,
 	    .layout = *surfelGiPipelineLayout};
 	surfelGiClearPipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
+}
+
+void PipelineCollection::createSurfelGiGeneratePipeline(const VulkanDevice &dev)
+{
+	vk::raii::ShaderModule shaderModule = createShaderModule(dev, readFile("Shaders/SurfelGenerate.slang.spv"));
+	vk::PipelineShaderStageCreateInfo computeShaderStageInfo{
+	    .stage  = vk::ShaderStageFlagBits::eCompute,
+	    .module = *shaderModule,
+	    .pName  = "surfelGenerateMain"};
+	vk::ComputePipelineCreateInfo pipelineInfo{
+	    .stage  = computeShaderStageInfo,
+	    .layout = *surfelGiPipelineLayout};
+	surfelGiGeneratePipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
 }
 
 vk::raii::ShaderModule PipelineCollection::createShaderModule(const VulkanDevice            &dev,

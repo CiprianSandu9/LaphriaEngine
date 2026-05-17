@@ -266,6 +266,45 @@ bool requireSurfelClearPassContracts(const std::string &pipelineHeader,
 	       containsText(surfelClear, "surfelGiClearDispatchesOffset");
 }
 
+bool requireSurfelGeneratePassContracts(const std::string &cmakeLists,
+                                        const std::string &pipelineHeader,
+                                        const std::string &pipelineSource,
+                                        const std::string &engineHeader,
+                                        const std::string &engineCore,
+                                        const std::string &surfelGenerate)
+{
+	const char *requiredSymbols[] = {
+	    "surfelGiGeneratePipeline",
+	    "createSurfelGiGeneratePipeline",
+	    "void surfelGenerateMain",
+	    "surfelGiGenerateAttemptsOffset",
+	    "surfelGiGeneratedOffset",
+	    "rtGBufferNormalsViews",
+	    "rtGBufferDepthViews"};
+
+	for (const char *symbol : requiredSymbols)
+	{
+		if (!containsText(cmakeLists, symbol) &&
+		    !containsText(pipelineHeader, symbol) &&
+		    !containsText(pipelineSource, symbol) &&
+		    !containsText(engineHeader, symbol) &&
+		    !containsText(engineCore, symbol) &&
+		    !containsText(surfelGenerate, symbol))
+			return false;
+	}
+
+	return containsText(cmakeLists, "SurfelGenerate.slang|surfelGenerateMain") &&
+	       containsText(surfelGenerate, "[shader(\"compute\")]") &&
+	       containsText(surfelGenerate, "[numthreads(8, 8, 1)]") &&
+	       containsText(surfelGenerate, "SurfelGiPushConstants") &&
+	       containsText(surfelGenerate, "push.renderWidth") &&
+	       containsText(surfelGenerate, "push.renderHeight") &&
+	       containsText(engineCore, "commandBuffer.pushConstants<SurfelGiPushConstants>") &&
+	       containsText(pipelineSource, "sizeof(SurfelGiPushConstants)") &&
+	       containsText(surfelGenerate, "surfelGiGenerateRejectInvalidOffset") &&
+	       containsText(surfelGenerate, "surfelGiGenerateRejectCoverageOffset");
+}
+
 bool requireIndexedBrightSurfelShaderContracts(const std::string &raygen)
 {
 	const std::string brightSurfelStore =
@@ -659,6 +698,7 @@ bool testPathTracerReservoirGiMeasurementContract()
 	const std::string pipelineSource = readTextFile(sourceRoot / "src" / "Core" / "PipelineCollection.cpp");
 	const std::string engineHeader = readTextFile(sourceRoot / "src" / "Core" / "EngineCore.h");
 	const std::string surfelClear = readTextFile(sourceRoot / "src" / "shaders" / "SurfelClear.slang");
+	const std::string surfelGenerate = readTextFile(sourceRoot / "src" / "shaders" / "SurfelGenerate.slang");
 	const std::string resourceManager = readTextFile(sourceRoot / "src" / "Core" / "ResourceManager.cpp");
 	const std::string gltfImporter    = readTextFile(sourceRoot / "src" / "Core" / "GltfImporter.cpp");
 
@@ -686,6 +726,13 @@ bool testPathTracerReservoirGiMeasurementContract()
 	if (!requireSurfelClearPassContracts(pipelineHeader, pipelineSource, engineHeader, engineCore, surfelClear))
 	{
 		std::cerr << "persistent surfel GI clear pass contract is incomplete\n";
+		return false;
+	}
+
+	if (!requireSurfelGeneratePassContracts(cmakeLists, pipelineHeader, pipelineSource,
+	                                        engineHeader, engineCore, surfelGenerate))
+	{
+		std::cerr << "persistent surfel GI generate pass contract is incomplete\n";
 		return false;
 	}
 

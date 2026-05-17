@@ -26,6 +26,7 @@ class PipelineCollection
 	void createShaderBindingTable(const VulkanDevice &dev);
 	void createDenoiserPipelines(const VulkanDevice &dev);
 	void createSurfelGiClearPipeline(const VulkanDevice &dev);
+	void createSurfelGiGeneratePipeline(const VulkanDevice &dev);
 	void createClassicRTPipeline(const VulkanDevice &dev);
 	void createClassicRTShaderBindingTable(const VulkanDevice &dev);
 
@@ -53,6 +54,7 @@ class PipelineCollection
 	vk::raii::Pipeline reprojectionPipeline{nullptr};
 	vk::raii::Pipeline atrousPipeline{nullptr};
 	vk::raii::Pipeline surfelGiClearPipeline{nullptr};
+	vk::raii::Pipeline surfelGiGeneratePipeline{nullptr};
 
 	// ── Pipeline Layouts ──────────────────────────────────────────────────
 	vk::raii::PipelineLayout graphicsPipelineLayout{nullptr};

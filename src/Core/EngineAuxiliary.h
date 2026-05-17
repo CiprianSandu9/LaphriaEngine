@@ -145,6 +145,14 @@ struct DenoisePushConstants
 	int32_t debugAtrousIteration;
 };
 
+struct SurfelGiPushConstants
+{
+	uint32_t renderWidth = 1;
+	uint32_t renderHeight = 1;
+	uint32_t _pad0 = 0;
+	uint32_t _pad1 = 0;
+};
+
 struct PathTracerAnalysisCounters
 {
 	uint32_t pixelCount = 0;

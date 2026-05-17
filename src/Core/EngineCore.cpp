@@ -488,6 +488,7 @@ void EngineCore::initVulkan()
 	pipelines.createShaderBindingTable(vulkan);
 	pipelines.createDenoiserPipelines(vulkan);
 	pipelines.createSurfelGiClearPipeline(vulkan);
+	pipelines.createSurfelGiGeneratePipeline(vulkan);
 	pipelines.createClassicRTPipeline(vulkan);
 	pipelines.createClassicRTShaderBindingTable(vulkan);
 
@@ -1108,7 +1109,7 @@ void EngineCore::createSurfelGiDescriptorSets()
 
 	std::array<vk::DescriptorPoolSize, 2> poolSizes = {
 	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT * 5},
-	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, MAX_FRAMES_IN_FLIGHT}};
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, MAX_FRAMES_IN_FLIGHT * 3}};
 	vk::DescriptorPoolCreateInfo poolInfo{
 	    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
 	    .maxSets       = MAX_FRAMES_IN_FLIGHT,
@@ -1146,17 +1147,26 @@ void EngineCore::createSurfelGiDescriptorSets()
 		        .buffer = *frames.ptAnalysisCounterBuffers[i],
 		        .offset = 0,
 		        .range  = sizeof(Laphria::PathTracerAnalysisCounters)}};
-		vk::DescriptorImageInfo imageInfo{
-		    .imageView   = *frames.surfelGiDebugImageViews[i],
-		    .imageLayout = vk::ImageLayout::eGeneral};
+		std::array<vk::DescriptorImageInfo, 3> imageInfos = {
+		    vk::DescriptorImageInfo{
+		        .imageView   = *frames.surfelGiDebugImageViews[i],
+		        .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{
+		        .imageView   = *frames.rtGBufferNormalsViews[i],
+		        .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{
+		        .imageView   = *frames.rtGBufferDepthViews[i],
+		        .imageLayout = vk::ImageLayout::eGeneral}};
 
-		std::array<vk::WriteDescriptorSet, 6> writes = {
+		std::array<vk::WriteDescriptorSet, 8> writes = {
 		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &bufferInfos[0]},
 		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &bufferInfos[1]},
 		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &bufferInfos[2]},
 		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 3, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &bufferInfos[3]},
 		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 4, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &bufferInfos[4]},
-		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 5, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfo}};
+		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 5, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfos[0]},
+		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 6, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfos[1]},
+		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 7, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfos[2]}};
 		vulkan.logicalDevice.updateDescriptorSets(writes, {});
 	}
 }
@@ -1535,6 +1545,57 @@ void EngineCore::recordSurfelGiClearPass(const vk::raii::CommandBuffer &commandB
 	commandBuffer.pipelineBarrier2(dependency);
 }
 
+void EngineCore::recordSurfelGiGeneratePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
+{
+	const float    clampedScale   = std::clamp(ui.pathTracerSettings.resolutionScale, 0.5f, 1.0f);
+	const float    secondaryScale = ui.pathTracerSettings.reduceSecondaryEffects ? 0.90f : 1.0f;
+	const float    effectiveScale = std::clamp(clampedScale * secondaryScale, 0.5f, 1.0f);
+	const uint32_t rtWidth        = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.width) * effectiveScale));
+	const uint32_t rtHeight       = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.height) * effectiveScale));
+
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiGeneratePipeline);
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+	                                 *pipelines.surfelGiPipelineLayout, 0,
+	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
+	SurfelGiPushConstants pushConstants{
+	    .renderWidth  = rtWidth,
+	    .renderHeight = rtHeight};
+	commandBuffer.pushConstants<SurfelGiPushConstants>(*pipelines.surfelGiPipelineLayout,
+	                                                   vk::ShaderStageFlagBits::eCompute, 0,
+	                                                   pushConstants);
+	commandBuffer.dispatch((rtWidth + 7u) / 8u, (rtHeight + 7u) / 8u, 1);
+
+	std::array<vk::BufferMemoryBarrier2, 3> barriers = {
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.surfelGiRecordBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = FrameContext::kSurfelGiMaxSurfels * FrameContext::kSurfelGiRecordSize},
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.surfelGiCounterBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = FrameContext::kSurfelGiCounterSize},
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.ptAnalysisCounterBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = sizeof(Laphria::PathTracerAnalysisCounters)}};
+	vk::DependencyInfo dependency{
+	    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
+	    .pBufferMemoryBarriers    = barriers.data()};
+	commandBuffer.pipelineBarrier2(dependency);
+}
+
 void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
 {
 	const uint32_t fi         = frames.frameIndex;
@@ -1628,6 +1689,7 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	barrierRTtoCompute(*frames.rtMotionVectors[fi]);
 
 	recordSurfelGiClearPass(commandBuffer, fi);
+	recordSurfelGiGeneratePass(commandBuffer, fi);
 
 	// 4. Reprojection pass.
 	if (ui.pathTracerSettings.enableReprojection)
