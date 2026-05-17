@@ -2360,31 +2360,6 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		reservoirMixedSingleFrameSunReceiverRow.reservoirGiTemporalBudgetDivisor = 1;
 		reservoirMixedSingleFrameSunReceiverRow.reservoirGiSpatialBudgetDivisor = 1;
 		reservoirMixedSingleFrameSunReceiverRow.reservoirGiCandidateEvaluationMode = 2;
-		auto reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow =
-		    reservoirMixedTemporalSpatialBudget2SunReceiverRow;
-		reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow.name =
-		    makeScenarioRowName(scenario,
-		                        "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Bright Surfel");
-		reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow.reservoirGiProposalMode =
-		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverBrightSurfel;
-		reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow.reservoirGiMode =
-		    UISystem::PathTracerReservoirGiMode::TemporalSpatial;
-		reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow.reservoirGiTemporalBudgetDivisor = 2;
-		reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow.reservoirGiSpatialBudgetDivisor = 2;
-		reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow.reservoirGiCandidateEvaluationMode = 2;
-		auto reservoirMixedSingleFrameSunReceiverBrightSurfelRow =
-		    reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow;
-		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.name =
-		    makeScenarioRowName(scenario,
-		                        "Reservoir 1C Shadowed Sun First Mixed Single Frame Sun Receiver Bright Surfel");
-		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.reservoirGiMode =
-		    UISystem::PathTracerReservoirGiMode::SingleFrame;
-		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.reservoirGiCandidateCount = 1;
-		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.reservoirGiProposalMode =
-		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverBrightSurfel;
-		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.reservoirGiTemporalBudgetDivisor = 1;
-		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.reservoirGiSpatialBudgetDivisor = 1;
-		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.reservoirGiCandidateEvaluationMode = 2;
 		auto reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow =
 		    reservoirMixedTemporalSpatialBudget2SunReceiverRow;
 		reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow.name =
@@ -2398,8 +2373,6 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);
 		ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);
-		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow);
-		ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverBrightSurfelRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);
 	}

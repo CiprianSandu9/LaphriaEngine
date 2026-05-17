@@ -86,6 +86,32 @@ bool brightSurfelCombineUsesTargetWeight(const std::string &raygen)
 	return containsText(combineSnippet, "surfelRecord.targetWeight");
 }
 
+bool requireBrightSurfelProposalDisabledForSweeps(const std::string &raygen,
+                                                  const std::string &engineCore)
+{
+	if (!containsText(raygen, "static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_BRIGHT_SURFEL"))
+		return false;
+
+	const std::string reservoirMain =
+	    extractFunctionBody(raygen, "FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(");
+	if (reservoirMain.empty())
+		return false;
+
+	if (!containsText(reservoirMain, "const bool enableBrightSurfelProposal = false"))
+		return false;
+
+	if (!containsText(reservoirMain,
+	                  "enableBrightSurfelProposal &&\n"
+	                  "        reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_BRIGHT_SURFEL"))
+		return false;
+
+	if (containsText(engineCore, "reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow") ||
+	    containsText(engineCore, "reservoirMixedSingleFrameSunReceiverBrightSurfelRow"))
+		return false;
+
+	return true;
+}
+
 bool requireIndexedBrightSurfelShaderContracts(const std::string &raygen)
 {
 	const std::string brightSurfelStore =
@@ -481,6 +507,12 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    frameContextSource.empty() || resourceManager.empty() || gltfImporter.empty())
 	{
 		std::cerr << "failed to read reservoir GI measurement contract sources\n";
+		return false;
+	}
+
+	if (!requireBrightSurfelProposalDisabledForSweeps(raygen, engineCore))
+	{
+		std::cerr << "Bright surfel reservoir proposal must be disabled for sweeps before persistent surfel cache work\n";
 		return false;
 	}
 
@@ -1390,9 +1422,7 @@ bool testPathTracerReservoirGiMeasurementContract()
 	const char *requiredSponzaAuditRows[] = {
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
 	    "Reservoir 1C Shadowed Sun First Mixed Single Frame Sun Receiver",
-	    "Reservoir 1C Shadowed Sun First Mixed Single Frame Sun Receiver Bright Surfel",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Bright Surfel",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two Cache Continuation"};
 	const std::size_t sponzaSweepStartPos =
@@ -1422,8 +1452,6 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);",
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);",
 	    "ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);",
-	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow);",
-	    "ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverBrightSurfelRow);",
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow);",
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);"};
 	const std::size_t expectedSponzaAuditRowScheduleCount =

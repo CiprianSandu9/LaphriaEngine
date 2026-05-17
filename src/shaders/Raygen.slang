@@ -3359,7 +3359,9 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     if (usesReservoirGiReceiverCache) {
         updateReservoirGiReceiverCacheHeader(launchID, ubo.frameCount);
     }
+    const bool enableBrightSurfelProposal = false;
     bool useBrightReceiverSurfel =
+        enableBrightSurfelProposal &&
         reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_BRIGHT_SURFEL;
     if (useBrightReceiverSurfel) {
         updateReservoirGiBrightSurfelHeader(launchID, ubo.frameCount);
