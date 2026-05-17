@@ -39,6 +39,45 @@ static const int DEBUG_AOV_PATH_RESERVOIR_GI_ACCEPTED_LUMA = 18;
 
 float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
+float3 selectPathTracerDebugAovOutput(uint2 pixel, float3 linearColor)
+{
+    float3 outColor = applyAcesTonemap(linearColor, push.exposureScale);
+    if (push.debugAov == 1) {
+        float validity = analysisReprojectionDebug[pixel].r;
+        outColor = float3(validity, validity, validity);
+    } else if (push.debugAov == 2) {
+        float alpha = analysisReprojectionDebug[pixel].g;
+        outColor = float3(alpha, alpha, alpha);
+    } else if (push.debugAov == 3) {
+        float motionMag = saturate(analysisReprojectionDebug[pixel].b * 20.0);
+        outColor = float3(motionMag, motionMag, motionMag);
+    } else if (push.debugAov == 4) {
+        float2 moments = historyMomentsOut[pixel];
+        float variance = max(moments.y - moments.x * moments.x, 0.0);
+        float v = saturate(variance * 8.0);
+        outColor = float3(v, v, v);
+    } else if (push.debugAov == 5) {
+        outColor = applyAcesTonemap(linearColor, push.exposureScale);
+    } else if (push.debugAov == DEBUG_AOV_PATH_RAW_FINAL_COLOR ||
+               push.debugAov == DEBUG_AOV_PATH_DIRECT_LIGHTING ||
+               push.debugAov == DEBUG_AOV_PATH_INDIRECT_LIGHTING ||
+               push.debugAov == DEBUG_AOV_PATH_SKY_CONTRIBUTION ||
+               push.debugAov == DEBUG_AOV_PATH_ENVIRONMENT_NEE ||
+               push.debugAov == DEBUG_AOV_PATH_FIRST_HIT_BOUNCE ||
+               push.debugAov == DEBUG_AOV_PATH_SECONDARY_SUN ||
+               push.debugAov == DEBUG_AOV_PATH_BASELINE_CONTINUATION ||
+               push.debugAov == DEBUG_AOV_PATH_RESERVOIR_GI_CONTRIBUTION ||
+               push.debugAov == DEBUG_AOV_PATH_RESERVOIR_GI_ACCEPTED_LUMA) {
+        float3 debugRaw = noisyColor[pixel].rgb;
+        outColor = applyAcesTonemap(debugRaw, push.exposureScale);
+    } else if (push.debugAov == DEBUG_AOV_PATH_THROUGHPUT ||
+               push.debugAov == DEBUG_AOV_PATH_BOUNCE_COUNT ||
+               push.debugAov == DEBUG_AOV_PATH_SHADOW_VISIBILITY) {
+        outColor = saturate(noisyColor[pixel].rgb);
+    }
+    return outColor;
+}
+
 // A-Trous 5×5 kernel weights (separable gaussian approximation used in SVGF).
 static const float kWeights[3] = { 3.0 / 8.0, 1.0 / 4.0, 1.0 / 16.0 };
 
@@ -64,8 +103,7 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
         // Pass-through mode: denoiser disabled, just apply tonemap.
         float3 color = (push.useRawInput != 0) ? noisyColor[pixel].rgb : atrousTempA[pixel].rgb;
         if (push.isLastPass != 0) {
-            float3 tonemapped = applyAcesTonemap(color, push.exposureScale);
-            finalOutput[pixel] = float4(tonemapped, 1.0);
+            finalOutput[pixel] = float4(selectPathTracerDebugAovOutput(pixel, color), 1.0);
         }
         return;
     }
@@ -141,40 +179,7 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
     float3 filtered = colorSum / max(weightSum, 0.0001);
 
     if (push.isLastPass != 0) {
-        float3 outColor = applyAcesTonemap(filtered, push.exposureScale);
-        if (push.debugAov == 1) {
-            float validity = analysisReprojectionDebug[pixel].r;
-            outColor = float3(validity, validity, validity);
-        } else if (push.debugAov == 2) {
-            float alpha = analysisReprojectionDebug[pixel].g;
-            outColor = float3(alpha, alpha, alpha);
-        } else if (push.debugAov == 3) {
-            float motionMag = saturate(analysisReprojectionDebug[pixel].b * 20.0);
-            outColor = float3(motionMag, motionMag, motionMag);
-        } else if (push.debugAov == 4) {
-            float2 moments = historyMomentsOut[pixel];
-            float variance = max(moments.y - moments.x * moments.x, 0.0);
-            float v = saturate(variance * 8.0);
-            outColor = float3(v, v, v);
-        } else if (push.debugAov == 5) {
-            outColor = applyAcesTonemap(filtered, push.exposureScale);
-        } else if (push.debugAov == DEBUG_AOV_PATH_RAW_FINAL_COLOR ||
-                   push.debugAov == DEBUG_AOV_PATH_DIRECT_LIGHTING ||
-                   push.debugAov == DEBUG_AOV_PATH_INDIRECT_LIGHTING ||
-                   push.debugAov == DEBUG_AOV_PATH_SKY_CONTRIBUTION ||
-                   push.debugAov == DEBUG_AOV_PATH_ENVIRONMENT_NEE ||
-                   push.debugAov == DEBUG_AOV_PATH_FIRST_HIT_BOUNCE ||
-                   push.debugAov == DEBUG_AOV_PATH_SECONDARY_SUN ||
-                   push.debugAov == DEBUG_AOV_PATH_BASELINE_CONTINUATION ||
-                   push.debugAov == DEBUG_AOV_PATH_RESERVOIR_GI_CONTRIBUTION ||
-                   push.debugAov == DEBUG_AOV_PATH_RESERVOIR_GI_ACCEPTED_LUMA) {
-            float3 debugRaw = noisyColor[pixel].rgb;
-            outColor = applyAcesTonemap(debugRaw, push.exposureScale);
-        } else if (push.debugAov == DEBUG_AOV_PATH_THROUGHPUT ||
-                   push.debugAov == DEBUG_AOV_PATH_BOUNCE_COUNT ||
-                   push.debugAov == DEBUG_AOV_PATH_SHADOW_VISIBILITY) {
-            outColor = saturate(noisyColor[pixel].rgb);
-        }
+        float3 outColor = selectPathTracerDebugAovOutput(pixel, filtered);
         finalOutput[pixel] = float4(outColor, 1.0);
     } else {
         // Intermediate iteration: write to the OTHER ping-pong buffer.

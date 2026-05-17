@@ -341,9 +341,15 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "RESERVOIR_GI_BRIGHT_SURFEL_HISTORY_BINDING",
 	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_BRIGHT_SURFEL",
 	    "RESERVOIR_GI_SOURCE_BRIGHT_SURFEL",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_GLOBAL_SCAN_COUNT",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_ATTEMPT_STRIDE",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_CANDIDATE_MIN_TARGET_WEIGHT",
 	    "storeReservoirGiBrightSurfelRecord",
 	    "loadReservoirGiBrightSurfelHistoryRecord",
-	    "selectBrightReceiverSurfelRecord",
+	    "shouldAttemptBrightReceiverSurfel",
+	    "reservoirGiBrightSurfelGlobalIndex",
+	    "reservoirGiBrightSurfelGlobalStoreIndex",
+	    "selectGlobalBrightReceiverSurfelRecord",
 	    "evaluateBrightReceiverSurfelReservoirGiCandidate",
 	    "reservoirGiBrightSurfelStoreOffset",
 	    "reservoirGiBrightSurfelAttemptOffset",
@@ -1210,6 +1216,12 @@ bool testPathTracerDebugAovContract()
 			return false;
 		}
 	}
+	if (!containsText(denoiser, "selectPathTracerDebugAovOutput(pixel, color)") ||
+	    !containsText(denoiser, "selectPathTracerDebugAovOutput(pixel, filtered)"))
+	{
+		std::cerr << "path debug AOVs must bypass temporal/denoised display in both pass-through and A-Trous paths\n";
+		return false;
+	}
 
 	const char *requiredShaderSymbols[] = {
 	    "ReservoirGiTargetEvaluation",
@@ -1311,9 +1323,15 @@ bool testPathTracerDebugAovContract()
 	    "RESERVOIR_GI_BRIGHT_SURFEL_HISTORY_BINDING",
 	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_BRIGHT_SURFEL",
 	    "RESERVOIR_GI_SOURCE_BRIGHT_SURFEL",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_GLOBAL_SCAN_COUNT",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_ATTEMPT_STRIDE",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_CANDIDATE_MIN_TARGET_WEIGHT",
 	    "storeReservoirGiBrightSurfelRecord",
 	    "loadReservoirGiBrightSurfelHistoryRecord",
-	    "selectBrightReceiverSurfelRecord",
+	    "shouldAttemptBrightReceiverSurfel",
+	    "reservoirGiBrightSurfelGlobalIndex",
+	    "reservoirGiBrightSurfelGlobalStoreIndex",
+	    "selectGlobalBrightReceiverSurfelRecord",
 	    "evaluateBrightReceiverSurfelReservoirGiCandidate",
 	    "reservoirGiBrightSurfelStoreOffset",
 	    "reservoirGiBrightSurfelAttemptOffset",
