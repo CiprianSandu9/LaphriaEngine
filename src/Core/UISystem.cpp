@@ -1310,8 +1310,10 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::Text("Reservoir GI Bright Surfel Selector Reject Invalid Vector: %u",
                     pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectInvalidVector);
         ImGui::Text("Surfel GI Generated: %u", pathTracerPerfStats.surfelGiGenerated);
+        ImGui::Text("Surfel GI Cell Insert Attempts: %u", pathTracerPerfStats.surfelGiCellInsertAttempts);
         ImGui::Text("Surfel GI Cell Inserted: %u", pathTracerPerfStats.surfelGiCellInserted);
         ImGui::Text("Surfel GI Cell Overflow: %u", pathTracerPerfStats.surfelGiCellOverflow);
+        ImGui::Text("Surfel GI Eval Attempts: %u", pathTracerPerfStats.surfelGiEvalAttempts);
         ImGui::Text("Surfel GI Eval Candidates: %u", pathTracerPerfStats.surfelGiEvalCandidates);
         ImGui::Text("Surfel GI Eval Accepted: %u", pathTracerPerfStats.surfelGiEvalAccepted);
         ImGui::Text("Surfel GI Eval Empty Cells: %u", pathTracerPerfStats.surfelGiEvalCellEmpty);

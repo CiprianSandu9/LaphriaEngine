@@ -124,6 +124,8 @@ class EngineCore
 		int reservoirGiCandidateEvaluationMode = 2;
 		bool blackEnvironment = true;
 		bool applyDebugLightPreset = true;
+		bool enableSurfelGi = false;
+		bool surfelGiDebug = false;
 		int firstHitDiffuseSamples = 8;
 		int firstHitCandidateCount = 4;
 		UISystem::PathTracerDebugLightPreset lightPreset = UISystem::PathTracerDebugLightPreset::HardBounce;
@@ -225,8 +227,10 @@ class EngineCore
 		double brightSurfelSelectorRejectSurfelHemisphere = 0.0;
 		double brightSurfelSelectorRejectInvalidVector = 0.0;
 		double surfelGiGenerated = 0.0;
+		double surfelGiCellInsertAttempts = 0.0;
 		double surfelGiCellInserted = 0.0;
 		double surfelGiCellOverflow = 0.0;
+		double surfelGiEvalAttempts = 0.0;
 		double surfelGiEvalCandidates = 0.0;
 		double surfelGiEvalAccepted = 0.0;
 		double surfelGiEvalCellEmpty = 0.0;

@@ -2331,10 +2331,14 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    counters->reservoirGiBrightSurfelSelectorRejectInvalidVector;
 	ui.pathTracerPerfStats.surfelGiGenerated =
 	    counters->surfelGiGenerated;
+	ui.pathTracerPerfStats.surfelGiCellInsertAttempts =
+	    counters->surfelGiCellInsertAttempts;
 	ui.pathTracerPerfStats.surfelGiCellInserted =
 	    counters->surfelGiCellInserted;
 	ui.pathTracerPerfStats.surfelGiCellOverflow =
 	    counters->surfelGiCellOverflow;
+	ui.pathTracerPerfStats.surfelGiEvalAttempts =
+	    counters->surfelGiEvalAttempts;
 	ui.pathTracerPerfStats.surfelGiEvalCandidates =
 	    counters->surfelGiEvalCandidates;
 	ui.pathTracerPerfStats.surfelGiEvalAccepted =
@@ -2672,6 +2676,14 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver");
 		reservoirMixedTemporalSpatialBudget2SunReceiverRow.reservoirGiProposalMode =
 		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
+		auto reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow =
+		    reservoirMixedTemporalSpatialBudget2SunReceiverRow;
+		reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow.name =
+		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Surfel Cache Debug");
+		reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow.reservoirGiProposalMode =
+		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
+		reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow.enableSurfelGi = true;
+		reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow.surfelGiDebug = true;
 		auto reservoirMixedSingleFrameSunReceiverRow =
 		    reservoirMixedTemporalSpatialBudget2SunReceiverRow;
 		reservoirMixedSingleFrameSunReceiverRow.name =
@@ -2696,6 +2708,7 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow.reservoirGiCandidateEvaluationMode = 3;
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);
+		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow);
 		ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);
@@ -2762,6 +2775,8 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
 	settings.reservoirGiUseCandidateRis         = row.reservoirGiUseCandidateRis;
 	settings.reservoirGiTemporalBudgetDivisor   = row.reservoirGiTemporalBudgetDivisor;
 	settings.reservoirGiSpatialBudgetDivisor    = row.reservoirGiSpatialBudgetDivisor;
+	settings.enableSurfelGi                     = row.enableSurfelGi;
+	settings.surfelGiDebug                      = row.surfelGiDebug;
 	settings.reservoirGiDetailedDiagnostics = false;
 	settings.pathTracerMaxBounces               = row.pathTracerMaxBounces;
 	settings.directSunBounceMode                = row.directSunBounceMode;
@@ -2835,8 +2850,10 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "brightSurfelSelectorRejectReceiverHemisphere=%.1f, "
 	     "brightSurfelSelectorRejectSurfelHemisphere=%.1f, "
 	     "brightSurfelSelectorRejectInvalidVector=%.1f, "
-	     "surfelGiGenerated=%.1f, surfelGiCellInserted=%.1f, surfelGiCellOverflow=%.1f, "
-	     "surfelGiEvalCandidates=%.1f, surfelGiEvalAccepted=%.1f, surfelGiEvalCellEmpty=%.1f, "
+	     "surfelGiGenerated=%.1f, surfelGiCellInsertAttempts=%.1f, "
+	     "surfelGiCellInserted=%.1f, surfelGiCellOverflow=%.1f, "
+	     "surfelGiEvalAttempts=%.1f, surfelGiEvalCandidates=%.1f, "
+	     "surfelGiEvalAccepted=%.1f, surfelGiEvalCellEmpty=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
 	     row.name.c_str(),
 	     accum.sampleCount,
@@ -2931,8 +2948,10 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.brightSurfelSelectorRejectSurfelHemisphere * invSamples,
 	     accum.brightSurfelSelectorRejectInvalidVector * invSamples,
 	     accum.surfelGiGenerated * invSamples,
+	     accum.surfelGiCellInsertAttempts * invSamples,
 	     accum.surfelGiCellInserted * invSamples,
 	     accum.surfelGiCellOverflow * invSamples,
+	     accum.surfelGiEvalAttempts * invSamples,
 	     accum.surfelGiEvalCandidates * invSamples,
 	     accum.surfelGiEvalAccepted * invSamples,
 	     accum.surfelGiEvalCellEmpty * invSamples,
@@ -3141,10 +3160,14 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectInvalidVector);
 	ptExperimentAccum.surfelGiGenerated +=
 	    static_cast<double>(stats.surfelGiGenerated);
+	ptExperimentAccum.surfelGiCellInsertAttempts +=
+	    static_cast<double>(stats.surfelGiCellInsertAttempts);
 	ptExperimentAccum.surfelGiCellInserted +=
 	    static_cast<double>(stats.surfelGiCellInserted);
 	ptExperimentAccum.surfelGiCellOverflow +=
 	    static_cast<double>(stats.surfelGiCellOverflow);
+	ptExperimentAccum.surfelGiEvalAttempts +=
+	    static_cast<double>(stats.surfelGiEvalAttempts);
 	ptExperimentAccum.surfelGiEvalCandidates +=
 	    static_cast<double>(stats.surfelGiEvalCandidates);
 	ptExperimentAccum.surfelGiEvalAccepted +=

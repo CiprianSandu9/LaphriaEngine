@@ -79,6 +79,16 @@ Environment NEE is configurable:
 
 Sun Receiver is now the Sponza validation preset default.
 
+### Persistent Surfel Cache Diagnostic Gates
+
+The surfel cache remains diagnostic-only unless all of these are true:
+
+- `surfelGiGenerated` is non-zero in all three Sponza validation views.
+- `surfelGiEvalCandidates / surfelGiEvalAttempts` is bounded below 16 candidates per valid pixel.
+- `surfelGiCellOverflow` is below 10% of `surfelGiCellInsertAttempts`.
+- Enabling surfel diagnostics does not increase `totalMs` by more than 25% over Sun Receiver.
+- Debug AOVs show coherent local coverage rather than sparse isolated points.
+
 ### History Guide
 
 History-guided proposal instrumentation remains in code/UI, but the focused sweep no longer includes it. It was safe and technically functional, but it did not pull its weight because history loads and neighbor hits were too sparse or too weak in the hardest views.

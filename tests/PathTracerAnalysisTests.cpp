@@ -1150,21 +1150,27 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "ImGui::Checkbox(\"Surfel GI Debug\", &pathTracerSettings.surfelGiDebug)",
 	    "ImGui::SliderInt(\"Surfel Eval Candidates\", &pathTracerSettings.surfelGiMaxEvalCandidates, 1, 16)",
 	    "Surfel GI Generated",
+	    "Surfel GI Cell Insert Attempts",
 	    "Surfel GI Cell Overflow",
+	    "Surfel GI Eval Attempts",
 	    "Surfel GI Eval Accepted",
 	    "SurfelGiOccupancy = 25",
 	    "SurfelGiGather = 26",
 	    "PathTracerDebugAov::SurfelGiOccupancy",
 	    "PathTracerDebugAov::SurfelGiGather",
 	    "surfelGiGenerated=%.1f",
+	    "surfelGiCellInsertAttempts=%.1f",
 	    "surfelGiCellInserted=%.1f",
 	    "surfelGiCellOverflow=%.1f",
+	    "surfelGiEvalAttempts=%.1f",
 	    "surfelGiEvalCandidates=%.1f",
 	    "surfelGiEvalAccepted=%.1f",
 	    "surfelGiEvalCellEmpty=%.1f",
 	    "stats.surfelGiGenerated",
+	    "stats.surfelGiCellInsertAttempts",
 	    "stats.surfelGiCellInserted",
 	    "stats.surfelGiCellOverflow",
+	    "stats.surfelGiEvalAttempts",
 	    "stats.surfelGiEvalCandidates",
 	    "stats.surfelGiEvalAccepted",
 	    "stats.surfelGiEvalCellEmpty"};
@@ -2087,6 +2093,7 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
 	    "Reservoir 1C Shadowed Sun First Mixed Single Frame Sun Receiver",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Surfel Cache Debug",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two",
 	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two Cache Continuation"};
 	const std::size_t sponzaSweepStartPos =
@@ -2115,6 +2122,7 @@ bool testPathTracerReservoirGiMeasurementContract()
 	const char *requiredSponzaAuditRowSchedule[] = {
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);",
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);",
+	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow);",
 	    "ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);",
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow);",
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);"};
@@ -2148,6 +2156,45 @@ bool testPathTracerReservoirGiMeasurementContract()
 			return false;
 		}
 		sponzaAuditRowScheduleSearchPos = scheduledRowPos + std::string(scheduledRow).size();
+	}
+	const char *requiredSurfelDiagnosticRowSymbols[] = {
+	    "bool enableSurfelGi = false",
+	    "bool surfelGiDebug = false",
+	    "settings.enableSurfelGi",
+	    "settings.surfelGiDebug",
+	    "auto reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow =",
+	    "reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow.enableSurfelGi = true;",
+	    "reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow.surfelGiDebug = true;"};
+	for (const char *symbol : requiredSurfelDiagnosticRowSymbols)
+	{
+		if (!containsText(engineCore, symbol) && !containsText(engineHeader, symbol))
+		{
+			std::cerr << "missing diagnostic-only Sponza surfel cache sweep contract: "
+			          << symbol << "\n";
+			return false;
+		}
+	}
+	const std::size_t surfelDiagnosticRowStart =
+	    sponzaSweepSource.find("reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow");
+	const std::size_t surfelDiagnosticRowSchedule =
+	    sponzaSweepSource.find("ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow);");
+	if (surfelDiagnosticRowStart == std::string::npos ||
+	    surfelDiagnosticRowSchedule == std::string::npos ||
+	    surfelDiagnosticRowSchedule <= surfelDiagnosticRowStart)
+	{
+		std::cerr << "focused Sponza PT/GI audit sweep is missing the diagnostic-only surfel cache row setup\n";
+		return false;
+	}
+	const std::string surfelDiagnosticRowSource =
+	    sponzaSweepSource.substr(surfelDiagnosticRowStart,
+	                             surfelDiagnosticRowSchedule - surfelDiagnosticRowStart);
+	if (!containsText(surfelDiagnosticRowSource, "MixedCosineSunReceiverGuided") ||
+	    containsText(surfelDiagnosticRowSource, "MixedCosineSunReceiverBrightSurfel") ||
+	    containsText(surfelDiagnosticRowSource, "settings.enableSurfelGi") ||
+	    containsText(surfelDiagnosticRowSource, "settings.surfelGiDebug"))
+	{
+		std::cerr << "diagnostic-only Sponza surfel cache row must keep the Sun Receiver proposal and only set row flags\n";
+		return false;
 	}
 	const std::size_t experimentSweepUpdatePos =
 	    engineCore.find("void EngineCore::updatePathTracerExperimentSweep()");
