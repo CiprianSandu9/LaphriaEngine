@@ -241,6 +241,13 @@ struct PathTracerAnalysisCounters
 	uint32_t reservoirGiBrightSurfelSelectorRejectGeometry = 0;
 	uint32_t reservoirGiBrightSurfelSelectorRejectTarget = 0;
 	uint32_t reservoirGiBrightSurfelSelectorViable = 0;
+	uint32_t reservoirGiBrightSurfelIndexedQuery = 0;
+	uint32_t reservoirGiBrightSurfelIndexedEmpty = 0;
+	uint32_t reservoirGiBrightSurfelIndexedProbe = 0;
+	uint32_t reservoirGiBrightSurfelSelectorRejectDistance = 0;
+	uint32_t reservoirGiBrightSurfelSelectorRejectReceiverHemisphere = 0;
+	uint32_t reservoirGiBrightSurfelSelectorRejectSurfelHemisphere = 0;
+	uint32_t reservoirGiBrightSurfelSelectorRejectInvalidVector = 0;
 };
 
 struct SkinningPushConstants

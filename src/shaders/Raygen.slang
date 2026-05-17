@@ -135,10 +135,15 @@ static const float RESERVOIR_GI_BRIGHT_SURFEL_MIN_TARGET_WEIGHT = 0.02;
 static const float RESERVOIR_GI_BRIGHT_SURFEL_MIN_LUMA = 0.02;
 static const float RESERVOIR_GI_BRIGHT_SURFEL_RADIUS = 0.15;
 static const float RESERVOIR_GI_BRIGHT_SURFEL_COS_THETA_MAX = 0.8660254;
-static const uint RESERVOIR_GI_BRIGHT_SURFEL_SCAN_COUNT = 8u;
-static const uint RESERVOIR_GI_BRIGHT_SURFEL_GLOBAL_SCAN_COUNT = 8u;
 static const uint RESERVOIR_GI_BRIGHT_SURFEL_ATTEMPT_STRIDE = 4u;
 static const float RESERVOIR_GI_BRIGHT_SURFEL_CANDIDATE_MIN_TARGET_WEIGHT = 0.005;
+static const float RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_SIZE = 0.75;
+static const uint RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_SLOTS = 2u;
+static const uint RESERVOIR_GI_BRIGHT_SURFEL_INDEX_RADIUS_CELLS = 1u;
+static const uint RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_COUNT =
+    (RESERVOIR_GI_BRIGHT_SURFEL_INDEX_RADIUS_CELLS * 2u + 1u) *
+    (RESERVOIR_GI_BRIGHT_SURFEL_INDEX_RADIUS_CELLS * 2u + 1u) *
+    (RESERVOIR_GI_BRIGHT_SURFEL_INDEX_RADIUS_CELLS * 2u + 1u);
 static const uint RESERVOIR_GI_HISTORY_GUIDE_REJECT_NONE = 0u;
 static const uint RESERVOIR_GI_HISTORY_GUIDE_REJECT_REPROJECTION = 1u;
 static const uint RESERVOIR_GI_HISTORY_GUIDE_REJECT_LOAD = 2u;
@@ -270,6 +275,13 @@ static const uint reservoirGiBrightSurfelTrainingRejectTargetOffset = 360u;
 static const uint reservoirGiBrightSurfelSelectorRejectGeometryOffset = 364u;
 static const uint reservoirGiBrightSurfelSelectorRejectTargetOffset = 368u;
 static const uint reservoirGiBrightSurfelSelectorViableOffset = 372u;
+static const uint reservoirGiBrightSurfelIndexedQueryOffset = 376u;
+static const uint reservoirGiBrightSurfelIndexedEmptyOffset = 380u;
+static const uint reservoirGiBrightSurfelIndexedProbeOffset = 384u;
+static const uint reservoirGiBrightSurfelSelectorRejectDistanceOffset = 388u;
+static const uint reservoirGiBrightSurfelSelectorRejectReceiverHemisphereOffset = 392u;
+static const uint reservoirGiBrightSurfelSelectorRejectSurfelHemisphereOffset = 396u;
+static const uint reservoirGiBrightSurfelSelectorRejectInvalidVectorOffset = 400u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_NONE = 0u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_GEOMETRY = 1u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_NO_LIGHT = 2u;
@@ -357,9 +369,20 @@ struct ReservoirGiBrightSurfelRecord {
     uint sourcePixel;
 };
 
+struct ReservoirGiBrightSurfelPrecheck {
+    float3 position;
+    float targetWeight;
+    uint frameId;
+    uint flags;
+};
+
 static const uint BRIGHT_SURFEL_TARGET_REJECT_NONE = 0u;
 static const uint BRIGHT_SURFEL_TARGET_REJECT_GEOMETRY = 1u;
 static const uint BRIGHT_SURFEL_TARGET_REJECT_TARGET = 2u;
+static const uint BRIGHT_SURFEL_TARGET_REJECT_DISTANCE = 3u;
+static const uint BRIGHT_SURFEL_TARGET_REJECT_RECEIVER_HEMISPHERE = 4u;
+static const uint BRIGHT_SURFEL_TARGET_REJECT_SURFEL_HEMISPHERE = 5u;
+static const uint BRIGHT_SURFEL_TARGET_REJECT_INVALID_VECTOR = 6u;
 
 struct BrightSurfelTargetEstimateResult {
     ReservoirGiTargetEvaluation targetEvaluation;
@@ -702,6 +725,17 @@ bool loadReservoirGiReceiverCacheHistoryRecord(uint cacheIndex,
     return true;
 }
 
+bool loadReservoirGiBrightSurfelHistoryHeader(out uint surfelCapacity,
+                                              out uint surfelHistoryFrameId)
+{
+    surfelCapacity = ptReservoirGiBrightSurfelHistory.Load(0);
+    surfelHistoryFrameId = ptReservoirGiBrightSurfelHistory.Load(4);
+    return surfelCapacity > 0u &&
+           surfelCapacity <= RESERVOIR_GI_BRIGHT_SURFEL_CAPACITY &&
+           surfelHistoryFrameId > 0u &&
+           surfelHistoryFrameId <= ubo.frameCount;
+}
+
 bool loadReservoirGiBrightSurfelHistoryRecord(uint surfelIndex,
                                               out ReservoirGiBrightSurfelRecord record)
 {
@@ -715,12 +749,9 @@ bool loadReservoirGiBrightSurfelHistoryRecord(uint surfelIndex,
     record.flags = 0u;
     record.sourcePixel = 0u;
 
-    uint surfelCapacity = ptReservoirGiBrightSurfelHistory.Load(0);
-    uint surfelHistoryFrameId = ptReservoirGiBrightSurfelHistory.Load(4);
-    if (surfelCapacity == 0u ||
-        surfelCapacity > RESERVOIR_GI_BRIGHT_SURFEL_CAPACITY ||
-        surfelHistoryFrameId == 0u ||
-        surfelHistoryFrameId > ubo.frameCount ||
+    uint surfelCapacity;
+    uint surfelHistoryFrameId;
+    if (!loadReservoirGiBrightSurfelHistoryHeader(surfelCapacity, surfelHistoryFrameId) ||
         surfelIndex >= surfelCapacity) {
         return false;
     }
@@ -779,9 +810,24 @@ uint reservoirGiReceiverCacheSpatialIndex(float3 position, uint slotSalt)
     return hash % RESERVOIR_GI_RECEIVER_CACHE_CAPACITY;
 }
 
-uint reservoirGiBrightSurfelSpatialIndex(float3 position, uint slotSalt)
+int3 reservoirGiBrightSurfelIndexCell(float3 position)
 {
-    int3 cell = int3(floor(position / RESERVOIR_GI_BRIGHT_SURFEL_RADIUS));
+    return int3(floor(position / RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_SIZE));
+}
+
+int3 reservoirGiBrightSurfelCellOffset(uint offsetIndex)
+{
+    uint span = RESERVOIR_GI_BRIGHT_SURFEL_INDEX_RADIUS_CELLS * 2u + 1u;
+    uint z = offsetIndex / (span * span);
+    uint rem = offsetIndex - z * span * span;
+    uint y = rem / span;
+    uint x = rem - y * span;
+    int radius = int(RESERVOIR_GI_BRIGHT_SURFEL_INDEX_RADIUS_CELLS);
+    return int3(int(x) - radius, int(y) - radius, int(z) - radius);
+}
+
+uint reservoirGiBrightSurfelIndexHash(int3 cell, uint slotSalt)
+{
     uint hash = pcgHash(uint(cell.x) * 73856093u ^
                         uint(cell.y) * 19349663u ^
                         uint(cell.z) * 83492791u ^
@@ -789,31 +835,128 @@ uint reservoirGiBrightSurfelSpatialIndex(float3 position, uint slotSalt)
     return hash % RESERVOIR_GI_BRIGHT_SURFEL_CAPACITY;
 }
 
-uint reservoirGiBrightSurfelGlobalIndex(uint2 launchID,
-                                        uint2 launchSize,
-                                        uint slot)
+uint reservoirGiBrightSurfelIndexedStoreIndex(float3 position, uint slotSalt)
 {
-    uint sourcePixel = launchID.y * launchSize.x + launchID.x;
-    uint hash = pcgHash(sourcePixel * 1664525u ^
-                        ubo.frameCount * 1013904223u ^
-                        slot * 2654435761u ^
-                        uint(launchSize.x) * 2246822519u ^
-                        uint(launchSize.y) * 3266489917u);
-    return hash % RESERVOIR_GI_BRIGHT_SURFEL_CAPACITY;
+    int3 cell = reservoirGiBrightSurfelIndexCell(position);
+    return reservoirGiBrightSurfelIndexHash(cell, slotSalt);
 }
 
-uint reservoirGiBrightSurfelGlobalStoreIndex(uint2 launchID,
-                                             uint2 launchSize,
-                                             ReservoirGiRecord selectedRecord)
+int3 reservoirGiBrightSurfelIndexedQueryCell(float3 receiverPosition, uint cellOffsetIndex)
 {
-    uint sourcePixel = launchID.y * launchSize.x + launchID.x;
-    uint hash = pcgHash(sourcePixel * 1664525u ^
-                        selectedRecord.sourcePixel * 1013904223u ^
-                        ubo.frameCount * 747796405u ^
-                        asuint(selectedRecord.candidatePosition.x) * 2246822519u ^
-                        asuint(selectedRecord.candidatePosition.y) * 3266489917u ^
-                        asuint(selectedRecord.candidatePosition.z) * 668265263u);
-    return hash % RESERVOIR_GI_BRIGHT_SURFEL_CAPACITY;
+    return reservoirGiBrightSurfelIndexCell(receiverPosition) +
+           reservoirGiBrightSurfelCellOffset(cellOffsetIndex);
+}
+
+bool reservoirGiBrightSurfelMatchesIndexedQueryCell(float3 surfelPosition,
+                                                     float3 receiverPosition,
+                                                     uint cellOffsetIndex)
+{
+    int3 surfelCell = reservoirGiBrightSurfelIndexCell(surfelPosition);
+    int3 queryCell = reservoirGiBrightSurfelIndexedQueryCell(receiverPosition, cellOffsetIndex);
+    return surfelCell.x == queryCell.x &&
+           surfelCell.y == queryCell.y &&
+           surfelCell.z == queryCell.z;
+}
+
+bool precheckReservoirGiBrightSurfelHistoryRecord(uint surfelIndex,
+                                                  uint surfelCapacity,
+                                                  uint surfelHistoryFrameId,
+                                                  float3 receiverPosition,
+                                                  uint cellOffsetIndex,
+                                                  out ReservoirGiBrightSurfelPrecheck precheck)
+{
+    precheck.position = float3(0.0, 0.0, 0.0);
+    precheck.targetWeight = 0.0;
+    precheck.frameId = 0u;
+    precheck.flags = 0u;
+
+    if (surfelIndex >= surfelCapacity) {
+        return false;
+    }
+
+    uint offset = reservoirGiBrightSurfelRecordOffset(surfelIndex);
+    precheck.flags = ptReservoirGiBrightSurfelHistory.Load(
+        offset + RESERVOIR_GI_BRIGHT_SURFEL_FLAGS_OFFSET);
+    if ((precheck.flags & 1u) == 0u) {
+        return false;
+    }
+
+    precheck.frameId = ptReservoirGiBrightSurfelHistory.Load(
+        offset + RESERVOIR_GI_BRIGHT_SURFEL_FRAME_ID_OFFSET);
+    if (precheck.frameId == 0u ||
+        precheck.frameId > ubo.frameCount ||
+        precheck.frameId > surfelHistoryFrameId ||
+        ubo.frameCount - precheck.frameId > 120u) {
+        return false;
+    }
+
+    precheck.targetWeight = asfloat(ptReservoirGiBrightSurfelHistory.Load(
+        offset + RESERVOIR_GI_BRIGHT_SURFEL_TARGET_WEIGHT_OFFSET));
+    if (!isFinitePositive(precheck.targetWeight) ||
+        precheck.targetWeight < RESERVOIR_GI_BRIGHT_SURFEL_MIN_TARGET_WEIGHT) {
+        return false;
+    }
+
+    precheck.position = loadFloat3FromReservoirGiBrightSurfelHistory(
+        offset + RESERVOIR_GI_BRIGHT_SURFEL_POSITION_OFFSET);
+    if (!isSaneReservoirGiVector(precheck.position, 100000.0) ||
+        !reservoirGiBrightSurfelMatchesIndexedQueryCell(precheck.position, receiverPosition, cellOffsetIndex)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool loadPrecheckedReservoirGiBrightSurfelHistoryRecord(uint surfelIndex,
+                                                        ReservoirGiBrightSurfelPrecheck precheck,
+                                                        out ReservoirGiBrightSurfelRecord record)
+{
+    record.position = precheck.position;
+    record.normal = float3(0.0, 1.0, 0.0);
+    record.radiance = float3(0.0, 0.0, 0.0);
+    record.targetWeight = precheck.targetWeight;
+    record.confidence = 0.0;
+    record.radius = 0.0;
+    record.frameId = precheck.frameId;
+    record.flags = precheck.flags;
+    record.sourcePixel = 0u;
+
+    uint offset = reservoirGiBrightSurfelRecordOffset(surfelIndex);
+    record.normal = loadFloat3FromReservoirGiBrightSurfelHistory(
+        offset + RESERVOIR_GI_BRIGHT_SURFEL_NORMAL_OFFSET);
+    record.radiance = loadFloat3FromReservoirGiBrightSurfelHistory(
+        offset + RESERVOIR_GI_BRIGHT_SURFEL_RADIANCE_OFFSET);
+    record.confidence = asfloat(ptReservoirGiBrightSurfelHistory.Load(
+        offset + RESERVOIR_GI_BRIGHT_SURFEL_CONFIDENCE_OFFSET));
+    record.radius = asfloat(ptReservoirGiBrightSurfelHistory.Load(
+        offset + RESERVOIR_GI_BRIGHT_SURFEL_RADIUS_OFFSET));
+    record.sourcePixel = ptReservoirGiBrightSurfelHistory.Load(
+        offset + RESERVOIR_GI_BRIGHT_SURFEL_SOURCE_PIXEL_OFFSET);
+
+    float radianceLuma = pathTracerLuminance(record.radiance);
+    float normalLengthSquared = dot(record.normal, record.normal);
+    if (!isFinitePositive(record.confidence) ||
+        !isFinitePositive(record.radius) ||
+        record.radius <= 0.0 ||
+        !isFinitePositive(normalLengthSquared) ||
+        normalLengthSquared <= 0.0001 ||
+        !isSaneReservoirGiVector(record.normal, 1.1) ||
+        !isSaneReservoirGiVector(record.radiance, 64.0) ||
+        !isFinitePositive(radianceLuma) ||
+        radianceLuma < RESERVOIR_GI_BRIGHT_SURFEL_MIN_LUMA) {
+        return false;
+    }
+    return true;
+}
+
+uint reservoirGiBrightSurfelIndexedQueryIndex(float3 receiverPosition,
+                                              uint cellOffsetIndex,
+                                              uint slot)
+{
+    int3 queryCell = reservoirGiBrightSurfelIndexedQueryCell(receiverPosition, cellOffsetIndex);
+    // Store and query must use the same per-cell slot salt. The offset changes the cell,
+    // not the slot namespace; otherwise a stored surfel cannot be found from a neighbor query.
+    return reservoirGiBrightSurfelIndexHash(queryCell, slot);
 }
 
 void storeReservoirGiReceiverCacheRecord(uint2 launchID,
@@ -885,10 +1028,13 @@ bool storeReservoirGiBrightSurfelRecord(uint2 launchID,
     }
 
     uint sourcePixel = launchID.y * launchSize.x + launchID.x;
-    uint surfelIndex = reservoirGiBrightSurfelGlobalStoreIndex(
-        launchID,
-        launchSize,
-        selectedRecord);
+    uint storeSalt = pcgHash(sourcePixel ^
+                             selectedRecord.sourcePixel * 1013904223u ^
+                             ubo.frameCount * 747796405u) %
+                     RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_SLOTS;
+    uint surfelIndex = reservoirGiBrightSurfelIndexedStoreIndex(
+        selectedRecord.candidatePosition,
+        storeSalt);
     uint offset = reservoirGiBrightSurfelRecordOffset(surfelIndex);
     storeFloat3ToReservoirGiBrightSurfel(
         offset + RESERVOIR_GI_BRIGHT_SURFEL_POSITION_OFFSET,
@@ -2429,16 +2575,16 @@ bool shouldTrainBrightReceiverSurfel(uint2 launchID, uint2 launchSize)
     return (hash & 7u) == 0u;
 }
 
-bool selectWeightedGlobalBrightReceiverSurfelRecord(float3 hitPos,
-                                                    float3 N,
-                                                    float3 V,
-                                                    RayPayload primaryPayload,
-                                                    uint2 launchID,
-                                                    uint2 launchSize,
-                                                    inout uint rngState,
-                                                    out ReservoirGiBrightSurfelRecord selectedSurfel,
-                                                    out ReservoirGiTargetEvaluation selectedTargetEvaluation,
-                                                    out float surfelSelectionPdf)
+bool selectWeightedIndexedBrightReceiverSurfelRecord(float3 hitPos,
+                                                     float3 N,
+                                                     float3 V,
+                                                     RayPayload primaryPayload,
+                                                     uint2 launchID,
+                                                     uint2 launchSize,
+                                                     inout uint rngState,
+                                                     out ReservoirGiBrightSurfelRecord selectedSurfel,
+                                                     out ReservoirGiTargetEvaluation selectedTargetEvaluation,
+                                                     out float surfelSelectionPdf)
 {
     selectedSurfel.position = float3(0.0, 0.0, 0.0);
     selectedSurfel.normal = float3(0.0, 1.0, 0.0);
@@ -2462,39 +2608,66 @@ bool selectWeightedGlobalBrightReceiverSurfelRecord(float3 hitPos,
     float scoreSum = 0.0;
     float selectedScore = 0.0;
     bool found = false;
+    uint surfelCapacity;
+    uint surfelHistoryFrameId;
+    if (!loadReservoirGiBrightSurfelHistoryHeader(surfelCapacity, surfelHistoryFrameId)) {
+        ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelMissOffset, 1u);
+        return false;
+    }
 
     [unroll]
-    for (uint slot = 0u; slot < RESERVOIR_GI_BRIGHT_SURFEL_GLOBAL_SCAN_COUNT; ++slot) {
-        uint surfelIndex = reservoirGiBrightSurfelGlobalIndex(launchID, launchSize, slot);
-        ReservoirGiBrightSurfelRecord surfel;
-        if (!loadReservoirGiBrightSurfelHistoryRecord(surfelIndex, surfel)) {
-            continue;
-        }
-
-        BrightSurfelTargetEstimateResult estimate;
-        if (!estimateBrightSurfelTargetForReceiver(hitPos, N, V, primaryPayload,
-                                                   surfel, estimate)) {
-            if (estimate.rejectReason == BRIGHT_SURFEL_TARGET_REJECT_GEOMETRY) {
-                ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectGeometryOffset, 1u);
-            } else {
-                ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u);
+    for (uint cellOffset = 0u; cellOffset < RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_COUNT; ++cellOffset) {
+        [unroll]
+        for (uint slot = 0u; slot < RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_SLOTS; ++slot) {
+            ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelIndexedQueryOffset, 1u);
+            uint surfelIndex = reservoirGiBrightSurfelIndexedQueryIndex(hitPos, cellOffset, slot);
+            ReservoirGiBrightSurfelPrecheck precheck;
+            if (!precheckReservoirGiBrightSurfelHistoryRecord(surfelIndex, surfelCapacity, surfelHistoryFrameId,
+                                                              hitPos, cellOffset, precheck)) {
+                ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelIndexedEmptyOffset, 1u);
+                continue;
             }
-            continue;
-        }
 
-        float score = estimate.targetEvaluation.targetWeight;
-        if (!isFinitePositive(score)) {
-            ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u);
-            continue;
-        }
-        ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorViableOffset, 1u);
+            ReservoirGiBrightSurfelRecord surfel;
+            if (!loadPrecheckedReservoirGiBrightSurfelHistoryRecord(surfelIndex, precheck, surfel)) {
+                ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelIndexedEmptyOffset, 1u);
+                continue;
+            }
 
-        scoreSum += score;
-        if (randomFloat(rngState) < score / max(scoreSum, 0.000001)) {
-            selectedScore = score;
-            selectedSurfel = surfel;
-            selectedTargetEvaluation = estimate.targetEvaluation;
-            found = true;
+            ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelIndexedProbeOffset, 1u);
+            BrightSurfelTargetEstimateResult estimate;
+            if (!estimateBrightSurfelTargetForReceiver(hitPos, N, V, primaryPayload,
+                                                       surfel, estimate)) {
+                if (estimate.rejectReason == BRIGHT_SURFEL_TARGET_REJECT_DISTANCE) {
+                    ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectDistanceOffset, 1u);
+                } else if (estimate.rejectReason == BRIGHT_SURFEL_TARGET_REJECT_RECEIVER_HEMISPHERE) {
+                    ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectReceiverHemisphereOffset, 1u);
+                } else if (estimate.rejectReason == BRIGHT_SURFEL_TARGET_REJECT_SURFEL_HEMISPHERE) {
+                    ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectSurfelHemisphereOffset, 1u);
+                } else if (estimate.rejectReason == BRIGHT_SURFEL_TARGET_REJECT_INVALID_VECTOR) {
+                    ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectInvalidVectorOffset, 1u);
+                } else if (estimate.rejectReason == BRIGHT_SURFEL_TARGET_REJECT_GEOMETRY) {
+                    ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectGeometryOffset, 1u);
+                } else {
+                    ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u);
+                }
+                continue;
+            }
+
+            float score = estimate.targetEvaluation.targetWeight;
+            if (!isFinitePositive(score)) {
+                ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u);
+                continue;
+            }
+
+            ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorViableOffset, 1u);
+            scoreSum += score;
+            if (randomFloat(rngState) < score / max(scoreSum, 0.000001)) {
+                selectedScore = score;
+                selectedSurfel = surfel;
+                selectedTargetEvaluation = estimate.targetEvaluation;
+                found = true;
+            }
         }
     }
 
@@ -2526,15 +2699,25 @@ bool estimateBrightSurfelTargetForReceiver(float3 hitPos,
     float3 toSurfel = surfel.position - hitPos;
     float dist2 = dot(toSurfel, toSurfel);
     if (dist2 <= 0.0001 || !isFinitePositive(dist2)) {
+        estimate.rejectReason = BRIGHT_SURFEL_TARGET_REJECT_DISTANCE;
         return false;
     }
 
     float3 wi = toSurfel * rsqrt(dist2);
+    if (!isSaneReservoirGiVector(wi, 1.1)) {
+        estimate.rejectReason = BRIGHT_SURFEL_TARGET_REJECT_INVALID_VECTOR;
+        return false;
+    }
+
     float receiverCos = dot(N, wi);
+    if (receiverCos <= 0.0) {
+        estimate.rejectReason = BRIGHT_SURFEL_TARGET_REJECT_RECEIVER_HEMISPHERE;
+        return false;
+    }
+
     float surfelCos = dot(surfel.normal, -wi);
-    if (receiverCos <= 0.0 ||
-        surfelCos <= RESERVOIR_GI_BRIGHT_SURFEL_COS_THETA_MAX ||
-        !isSaneReservoirGiVector(wi, 1.1)) {
+    if (surfelCos <= RESERVOIR_GI_BRIGHT_SURFEL_COS_THETA_MAX) {
+        estimate.rejectReason = BRIGHT_SURFEL_TARGET_REJECT_SURFEL_HEMISPHERE;
         return false;
     }
 
@@ -2596,10 +2779,10 @@ bool evaluateBrightReceiverSurfelReservoirGiCandidate(float3 hitPos,
     ReservoirGiTargetEvaluation selectedTargetEvaluation;
     float surfelSelectionPdf;
     // Scan-local selector diagnostic only; do not feed it into target sourcePdf or reservoir weight.
-    if (!selectWeightedGlobalBrightReceiverSurfelRecord(hitPos, N, V, primaryPayload,
-                                                       launchID, launchSize,
-                                                       rngState, surfel, selectedTargetEvaluation,
-                                                       surfelSelectionPdf)) {
+    if (!selectWeightedIndexedBrightReceiverSurfelRecord(hitPos, N, V, primaryPayload,
+                                                        launchID, launchSize,
+                                                        rngState, surfel, selectedTargetEvaluation,
+                                                        surfelSelectionPdf)) {
         return false;
     }
 

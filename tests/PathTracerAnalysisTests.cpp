@@ -86,6 +86,229 @@ bool brightSurfelCombineUsesTargetWeight(const std::string &raygen)
 	return containsText(combineSnippet, "surfelRecord.targetWeight");
 }
 
+bool requireIndexedBrightSurfelShaderContracts(const std::string &raygen)
+{
+	const std::string brightSurfelStore =
+	    extractFunctionBody(raygen, "bool storeReservoirGiBrightSurfelRecord(");
+	if (brightSurfelStore.empty())
+	{
+		std::cerr << "missing bright surfel store function body\n";
+		return false;
+	}
+	if (!containsText(brightSurfelStore, "reservoirGiBrightSurfelIndexedStoreIndex("))
+	{
+		std::cerr << "bright surfel store must use indexed store lookup\n";
+		return false;
+	}
+	if (containsText(brightSurfelStore, "reservoirGiBrightSurfelGlobalStoreIndex"))
+	{
+		std::cerr << "bright surfel store must not use old global store lookup\n";
+		return false;
+	}
+
+	const std::string brightSurfelEvaluator =
+	    extractFunctionBody(raygen, "bool evaluateBrightReceiverSurfelReservoirGiCandidate(");
+	if (brightSurfelEvaluator.empty())
+	{
+		std::cerr << "missing bright surfel candidate evaluator function body\n";
+		return false;
+	}
+	if (!containsText(brightSurfelEvaluator, "selectWeightedIndexedBrightReceiverSurfelRecord("))
+	{
+		std::cerr << "bright surfel candidate evaluator must call indexed selector\n";
+		return false;
+	}
+	if (containsText(brightSurfelEvaluator, "selectWeightedGlobalBrightReceiverSurfelRecord"))
+	{
+		std::cerr << "bright surfel candidate evaluator must not call old global selector\n";
+		return false;
+	}
+
+	const std::string brightSurfelSelector =
+	    extractFunctionBody(raygen, "bool selectWeightedIndexedBrightReceiverSurfelRecord");
+	if (brightSurfelSelector.empty())
+	{
+		std::cerr << "missing indexed bright surfel selector function body\n";
+		return false;
+	}
+	const char *forbiddenSelectorSymbols[] = {
+	    "RESERVOIR_GI_BRIGHT_SURFEL_GLOBAL_SCAN_COUNT",
+	    "reservoirGiBrightSurfelGlobalIndex",
+	    "reservoirGiBrightSurfelGlobalStoreIndex"};
+	for (const char *symbol : forbiddenSelectorSymbols)
+	{
+		if (containsText(brightSurfelSelector, symbol))
+		{
+			std::cerr << "indexed bright surfel selector still uses old global lookup: "
+			          << symbol << "\n";
+			return false;
+		}
+	}
+	const char *requiredSelectorCollisionSymbols[] = {
+	    "precheckReservoirGiBrightSurfelHistoryRecord(surfelIndex, surfelCapacity, surfelHistoryFrameId",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelIndexedEmptyOffset, 1u)"};
+	for (const char *symbol : requiredSelectorCollisionSymbols)
+	{
+		if (!containsText(brightSurfelSelector, symbol))
+		{
+			std::cerr << "missing indexed bright surfel selector collision guard: "
+			          << symbol << "\n";
+			return false;
+		}
+	}
+	const std::size_t collisionPrecheckPos =
+	    brightSurfelSelector.find("precheckReservoirGiBrightSurfelHistoryRecord(surfelIndex, surfelCapacity, surfelHistoryFrameId");
+	const std::size_t collisionEmptyCountPos =
+	    brightSurfelSelector.find("ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelIndexedEmptyOffset, 1u)",
+	                              collisionPrecheckPos);
+	const std::size_t collisionContinuePos = brightSurfelSelector.find("continue;", collisionPrecheckPos);
+	if (collisionPrecheckPos == std::string::npos ||
+	    collisionEmptyCountPos == std::string::npos ||
+	    collisionContinuePos == std::string::npos ||
+	    collisionEmptyCountPos > collisionContinuePos)
+	{
+		std::cerr << "indexed bright surfel selector collision/precheck rejection must count IndexedEmpty\n";
+		return false;
+	}
+
+	const std::string brightSurfelPrecheck =
+	    extractFunctionBody(raygen, "bool precheckReservoirGiBrightSurfelHistoryRecord");
+	if (brightSurfelPrecheck.empty())
+	{
+		std::cerr << "missing indexed bright surfel cheap precheck helper body\n";
+		return false;
+	}
+	const char *requiredPrecheckSymbols[] = {
+	    "surfelIndex >= surfelCapacity",
+	    "precheck.frameId > surfelHistoryFrameId",
+	    "precheck.flags = ptReservoirGiBrightSurfelHistory.Load(",
+	    "precheck.frameId = ptReservoirGiBrightSurfelHistory.Load(",
+	    "precheck.targetWeight = asfloat(ptReservoirGiBrightSurfelHistory.Load(",
+	    "precheck.position = loadFloat3FromReservoirGiBrightSurfelHistory(",
+	    "reservoirGiBrightSurfelMatchesIndexedQueryCell(precheck.position, receiverPosition, cellOffsetIndex)"};
+	for (const char *symbol : requiredPrecheckSymbols)
+	{
+		if (!containsText(brightSurfelPrecheck, symbol))
+		{
+			std::cerr << "missing indexed bright surfel cheap precheck contract: "
+			          << symbol << "\n";
+			return false;
+		}
+	}
+	const char *forbiddenPrecheckSymbols[] = {
+	    "RESERVOIR_GI_BRIGHT_SURFEL_NORMAL_OFFSET",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_RADIANCE_OFFSET",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_RADIUS_OFFSET",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_CONFIDENCE_OFFSET"};
+	for (const char *symbol : forbiddenPrecheckSymbols)
+	{
+		if (containsText(brightSurfelPrecheck, symbol))
+		{
+			std::cerr << "indexed bright surfel cheap precheck must not load full record field: "
+			          << symbol << "\n";
+			return false;
+		}
+	}
+	return true;
+}
+
+struct BrightSurfelDiagnosticContract
+{
+	const char *counterName;
+	const char *rowFieldName;
+	const char *uiLabel;
+};
+
+constexpr BrightSurfelDiagnosticContract kBrightSurfelIndexedDiagnostics[] = {
+    {"reservoirGiBrightSurfelIndexedQuery",
+     "brightSurfelIndexedQuery",
+     "Reservoir GI Bright Surfel Indexed Query"},
+    {"reservoirGiBrightSurfelIndexedEmpty",
+     "brightSurfelIndexedEmpty",
+     "Reservoir GI Bright Surfel Indexed Empty"},
+    {"reservoirGiBrightSurfelIndexedProbe",
+     "brightSurfelIndexedProbe",
+     "Reservoir GI Bright Surfel Indexed Probe"},
+    {"reservoirGiBrightSurfelSelectorRejectDistance",
+     "brightSurfelSelectorRejectDistance",
+     "Reservoir GI Bright Surfel Selector Reject Distance"},
+    {"reservoirGiBrightSurfelSelectorRejectReceiverHemisphere",
+     "brightSurfelSelectorRejectReceiverHemisphere",
+     "Reservoir GI Bright Surfel Selector Reject Receiver Hemisphere"},
+    {"reservoirGiBrightSurfelSelectorRejectSurfelHemisphere",
+     "brightSurfelSelectorRejectSurfelHemisphere",
+     "Reservoir GI Bright Surfel Selector Reject Surfel Hemisphere"},
+    {"reservoirGiBrightSurfelSelectorRejectInvalidVector",
+     "brightSurfelSelectorRejectInvalidVector",
+     "Reservoir GI Bright Surfel Selector Reject Invalid Vector"}};
+
+bool requireIndexedBrightSurfelDiagnosticPlumbing(const std::string &engineAuxiliaryHeader,
+                                                  const std::string &uiHeader,
+                                                  const std::string &uiSource,
+                                                  const std::string &engineCore)
+{
+	for (const auto &diagnostic : kBrightSurfelIndexedDiagnostics)
+	{
+		const std::string counterField =
+		    std::string("uint32_t ") + diagnostic.counterName + " = 0";
+		if (!containsText(engineAuxiliaryHeader, counterField.c_str()))
+		{
+			std::cerr << "missing indexed bright surfel CPU counter field: "
+			          << diagnostic.counterName << "\n";
+			return false;
+		}
+		if (!containsText(uiHeader, counterField.c_str()))
+		{
+			std::cerr << "missing indexed bright surfel UI stat field: "
+			          << diagnostic.counterName << "\n";
+			return false;
+		}
+		if (!containsText(uiSource, diagnostic.uiLabel))
+		{
+			std::cerr << "missing indexed bright surfel UI label: "
+			          << diagnostic.uiLabel << "\n";
+			return false;
+		}
+
+		const std::string uiCopyTarget =
+		    std::string("ui.pathTracerPerfStats.") + diagnostic.counterName + " =";
+		const std::string uiCopySource =
+		    std::string("counters->") + diagnostic.counterName;
+		if (!containsText(engineCore, uiCopyTarget.c_str()) ||
+		    !containsText(engineCore, uiCopySource.c_str()))
+		{
+			std::cerr << "missing indexed bright surfel UI counter copy path: "
+			          << diagnostic.counterName << "\n";
+			return false;
+		}
+
+		const std::string accumulationTarget =
+		    std::string("ptExperimentAccum.") + diagnostic.rowFieldName + " +=";
+		const std::string accumulationSource =
+		    std::string("stats.") + diagnostic.counterName;
+		if (!containsText(engineCore, accumulationTarget.c_str()) ||
+		    !containsText(engineCore, accumulationSource.c_str()))
+		{
+			std::cerr << "missing indexed bright surfel accumulation path: "
+			          << diagnostic.rowFieldName << "\n";
+			return false;
+		}
+
+		const std::string rowFormat =
+		    std::string(diagnostic.rowFieldName) + "=%.1f";
+		const std::string rowArgument =
+		    std::string("accum.") + diagnostic.rowFieldName + " * invSamples";
+		if (!containsText(engineCore, rowFormat.c_str()) ||
+		    !containsText(engineCore, rowArgument.c_str()))
+		{
+			std::cerr << "missing indexed bright surfel row-summary format/argument: "
+			          << diagnostic.rowFieldName << "\n";
+			return false;
+		}
+	}
+	return true;
+}
+
 uint64_t packConfigKey(const Laphria::PathTracerSweepConfig &cfg)
 {
 	const int scaled = static_cast<int>(std::lround(cfg.resolutionScale * 100.0f));
@@ -398,22 +621,33 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "RESERVOIR_GI_BRIGHT_SURFEL_HISTORY_BINDING",
 	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_BRIGHT_SURFEL",
 	    "RESERVOIR_GI_SOURCE_BRIGHT_SURFEL",
-	    "RESERVOIR_GI_BRIGHT_SURFEL_GLOBAL_SCAN_COUNT",
 	    "RESERVOIR_GI_BRIGHT_SURFEL_ATTEMPT_STRIDE",
 	    "RESERVOIR_GI_BRIGHT_SURFEL_CANDIDATE_MIN_TARGET_WEIGHT",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_SIZE",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_SLOTS",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_INDEX_RADIUS_CELLS",
 	    "storeReservoirGiBrightSurfelRecord",
 	    "loadReservoirGiBrightSurfelHistoryRecord",
+	    "loadReservoirGiBrightSurfelHistoryHeader",
+	    "ReservoirGiBrightSurfelPrecheck",
+	    "precheckReservoirGiBrightSurfelHistoryRecord",
+	    "loadPrecheckedReservoirGiBrightSurfelHistoryRecord",
 	    "shouldAttemptBrightReceiverSurfel",
 	    "shouldTrainBrightReceiverSurfel",
-	    "reservoirGiBrightSurfelGlobalIndex",
-	    "reservoirGiBrightSurfelGlobalStoreIndex",
+	    "reservoirGiBrightSurfelIndexedStoreIndex",
+	    "reservoirGiBrightSurfelIndexedQueryIndex",
 	    "tryStoreBrightSurfelTrainingCandidate",
-	    "selectWeightedGlobalBrightReceiverSurfelRecord",
+	    "selectWeightedIndexedBrightReceiverSurfelRecord",
 	    "surfelSelectionPdf",
+	    "Scan-local selector diagnostic only; do not feed it into target sourcePdf or reservoir weight.",
 	    "BrightSurfelTargetEstimateResult",
 	    "BRIGHT_SURFEL_TARGET_REJECT_NONE",
 	    "BRIGHT_SURFEL_TARGET_REJECT_GEOMETRY",
 	    "BRIGHT_SURFEL_TARGET_REJECT_TARGET",
+	    "BRIGHT_SURFEL_TARGET_REJECT_DISTANCE",
+	    "BRIGHT_SURFEL_TARGET_REJECT_RECEIVER_HEMISPHERE",
+	    "BRIGHT_SURFEL_TARGET_REJECT_SURFEL_HEMISPHERE",
+	    "BRIGHT_SURFEL_TARGET_REJECT_INVALID_VECTOR",
 	    "estimateBrightSurfelTargetForReceiver",
 	    "selectedTargetEvaluation",
 	    "evaluateBrightReceiverSurfelReservoirGiCandidate",
@@ -434,9 +668,13 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "reservoirGiBrightSurfelSelectorRejectGeometryOffset",
 	    "reservoirGiBrightSurfelSelectorRejectTargetOffset",
 	    "reservoirGiBrightSurfelSelectorViableOffset",
-	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectGeometryOffset, 1u)",
-	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u)",
-	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorViableOffset, 1u)",
+	    "reservoirGiBrightSurfelIndexedQueryOffset",
+	    "reservoirGiBrightSurfelIndexedEmptyOffset",
+	    "reservoirGiBrightSurfelIndexedProbeOffset",
+	    "reservoirGiBrightSurfelSelectorRejectDistanceOffset",
+	    "reservoirGiBrightSurfelSelectorRejectReceiverHemisphereOffset",
+	    "reservoirGiBrightSurfelSelectorRejectSurfelHemisphereOffset",
+	    "reservoirGiBrightSurfelSelectorRejectInvalidVectorOffset",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalSurfaceHitsOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalValidSamplesOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalMissCandidatesOffset, 1u)",
@@ -466,15 +704,30 @@ bool testPathTracerReservoirGiMeasurementContract()
 		    << "old bright surfel target estimator must be replaced by estimateBrightSurfelTargetForReceiver\n";
 		return false;
 	}
+	if (!requireIndexedBrightSurfelShaderContracts(raygen))
+	{
+		return false;
+	}
 	const std::string brightSurfelSelector =
-	    extractFunctionBody(raygen, "bool selectWeightedGlobalBrightReceiverSurfelRecord");
+	    extractFunctionBody(raygen, "bool selectWeightedIndexedBrightReceiverSurfelRecord");
 	if (brightSurfelSelector.empty())
 	{
-		std::cerr << "missing bright surfel selector function body\n";
+		std::cerr << "missing indexed bright surfel selector function body\n";
 		return false;
 	}
 	const char *requiredBrightSurfelSelectorSymbols[] = {
+	    "loadReservoirGiBrightSurfelHistoryHeader(surfelCapacity, surfelHistoryFrameId)",
+	    "reservoirGiBrightSurfelIndexedQueryIndex(hitPos, cellOffset, slot)",
+	    "precheckReservoirGiBrightSurfelHistoryRecord(surfelIndex, surfelCapacity, surfelHistoryFrameId",
+	    "loadPrecheckedReservoirGiBrightSurfelHistoryRecord(surfelIndex, precheck, surfel)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelIndexedQueryOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelIndexedEmptyOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelIndexedProbeOffset, 1u)",
 	    "estimateBrightSurfelTargetForReceiver(hitPos, N, V, primaryPayload",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectDistanceOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectReceiverHemisphereOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectSurfelHemisphereOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectInvalidVectorOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectGeometryOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorViableOffset, 1u)",
@@ -494,6 +747,9 @@ bool testPathTracerReservoirGiMeasurementContract()
 		return false;
 	}
 	const char *forbiddenRaygenSymbols[] = {
+	    "selectWeightedGlobalBrightReceiverSurfelRecord",
+	    "reservoirGiBrightSurfelGlobalIndex",
+	    "reservoirGiBrightSurfelGlobalStoreIndex",
 	    "candidateSecondarySun = targetEvaluation.suffixRadiance",
 	    "selectedTargetWeight = temporalRecord.targetWeight",
 	    "selectedTargetWeight = spatialRecord.targetWeight",
@@ -1033,7 +1289,21 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    {"reservoirGiBrightSurfelSelectorRejectTarget",
 	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorRejectTarget), 368u},
 	    {"reservoirGiBrightSurfelSelectorViable",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorViable), 372u}};
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorViable), 372u},
+	    {"reservoirGiBrightSurfelIndexedQuery",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelIndexedQuery), 376u},
+	    {"reservoirGiBrightSurfelIndexedEmpty",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelIndexedEmpty), 380u},
+	    {"reservoirGiBrightSurfelIndexedProbe",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelIndexedProbe), 384u},
+	    {"reservoirGiBrightSurfelSelectorRejectDistance",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorRejectDistance), 388u},
+	    {"reservoirGiBrightSurfelSelectorRejectReceiverHemisphere",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorRejectReceiverHemisphere), 392u},
+	    {"reservoirGiBrightSurfelSelectorRejectSurfelHemisphere",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorRejectSurfelHemisphere), 396u},
+	    {"reservoirGiBrightSurfelSelectorRejectInvalidVector",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorRejectInvalidVector), 400u}};
 	for (const auto &counterOffset : counterOffsets)
 	{
 		if (counterOffset.offset != counterOffset.expectedOffset)
@@ -1094,7 +1364,14 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "brightSurfelTrainingRejectTarget",
 	    "brightSurfelSelectorRejectGeometry",
 	    "brightSurfelSelectorRejectTarget",
-	    "brightSurfelSelectorViable"};
+	    "brightSurfelSelectorViable",
+	    "brightSurfelIndexedQuery",
+	    "brightSurfelIndexedEmpty",
+	    "brightSurfelIndexedProbe",
+	    "brightSurfelSelectorRejectDistance",
+	    "brightSurfelSelectorRejectReceiverHemisphere",
+	    "brightSurfelSelectorRejectSurfelHemisphere",
+	    "brightSurfelSelectorRejectInvalidVector"};
 	for (const char *fieldName : requiredBrightSurfelRowSummaryFields)
 	{
 		if (!containsText(engineCore, fieldName))
@@ -1103,6 +1380,11 @@ bool testPathTracerReservoirGiMeasurementContract()
 			          << fieldName << "\n";
 			return false;
 		}
+	}
+	if (!requireIndexedBrightSurfelDiagnosticPlumbing(
+	        engineAuxiliaryHeader, uiHeader, uiSource, engineCore))
+	{
+		return false;
 	}
 
 	const char *requiredSponzaAuditRows[] = {
@@ -1290,7 +1572,14 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "Reservoir GI Bright Surfel Training Reject Target",
 	    "Reservoir GI Bright Surfel Selector Reject Geometry",
 	    "Reservoir GI Bright Surfel Selector Reject Target",
-	    "Reservoir GI Bright Surfel Selector Viable"};
+	    "Reservoir GI Bright Surfel Selector Viable",
+	    "Reservoir GI Bright Surfel Indexed Query",
+	    "Reservoir GI Bright Surfel Indexed Empty",
+	    "Reservoir GI Bright Surfel Indexed Probe",
+	    "Reservoir GI Bright Surfel Selector Reject Distance",
+	    "Reservoir GI Bright Surfel Selector Reject Receiver Hemisphere",
+	    "Reservoir GI Bright Surfel Selector Reject Surfel Hemisphere",
+	    "Reservoir GI Bright Surfel Selector Reject Invalid Vector"};
 	for (const char *symbol : requiredCounterAndUiSymbols)
 	{
 		if (!containsText(engineAuxiliaryHeader, symbol) &&
@@ -1599,22 +1888,33 @@ bool testPathTracerDebugAovContract()
 	    "RESERVOIR_GI_BRIGHT_SURFEL_HISTORY_BINDING",
 	    "RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_BRIGHT_SURFEL",
 	    "RESERVOIR_GI_SOURCE_BRIGHT_SURFEL",
-	    "RESERVOIR_GI_BRIGHT_SURFEL_GLOBAL_SCAN_COUNT",
 	    "RESERVOIR_GI_BRIGHT_SURFEL_ATTEMPT_STRIDE",
 	    "RESERVOIR_GI_BRIGHT_SURFEL_CANDIDATE_MIN_TARGET_WEIGHT",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_SIZE",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_SLOTS",
+	    "RESERVOIR_GI_BRIGHT_SURFEL_INDEX_RADIUS_CELLS",
 	    "storeReservoirGiBrightSurfelRecord",
 	    "loadReservoirGiBrightSurfelHistoryRecord",
+	    "loadReservoirGiBrightSurfelHistoryHeader",
+	    "ReservoirGiBrightSurfelPrecheck",
+	    "precheckReservoirGiBrightSurfelHistoryRecord",
+	    "loadPrecheckedReservoirGiBrightSurfelHistoryRecord",
 	    "shouldAttemptBrightReceiverSurfel",
 	    "shouldTrainBrightReceiverSurfel",
-	    "reservoirGiBrightSurfelGlobalIndex",
-	    "reservoirGiBrightSurfelGlobalStoreIndex",
+	    "reservoirGiBrightSurfelIndexedStoreIndex",
+	    "reservoirGiBrightSurfelIndexedQueryIndex",
 	    "tryStoreBrightSurfelTrainingCandidate",
-	    "selectWeightedGlobalBrightReceiverSurfelRecord",
+	    "selectWeightedIndexedBrightReceiverSurfelRecord",
 	    "surfelSelectionPdf",
+	    "Scan-local selector diagnostic only; do not feed it into target sourcePdf or reservoir weight.",
 	    "BrightSurfelTargetEstimateResult",
 	    "BRIGHT_SURFEL_TARGET_REJECT_NONE",
 	    "BRIGHT_SURFEL_TARGET_REJECT_GEOMETRY",
 	    "BRIGHT_SURFEL_TARGET_REJECT_TARGET",
+	    "BRIGHT_SURFEL_TARGET_REJECT_DISTANCE",
+	    "BRIGHT_SURFEL_TARGET_REJECT_RECEIVER_HEMISPHERE",
+	    "BRIGHT_SURFEL_TARGET_REJECT_SURFEL_HEMISPHERE",
+	    "BRIGHT_SURFEL_TARGET_REJECT_INVALID_VECTOR",
 	    "estimateBrightSurfelTargetForReceiver",
 	    "selectedTargetEvaluation",
 	    "evaluateBrightReceiverSurfelReservoirGiCandidate",
@@ -1635,9 +1935,13 @@ bool testPathTracerDebugAovContract()
 	    "reservoirGiBrightSurfelSelectorRejectGeometryOffset",
 	    "reservoirGiBrightSurfelSelectorRejectTargetOffset",
 	    "reservoirGiBrightSurfelSelectorViableOffset",
-	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectGeometryOffset, 1u)",
-	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u)",
-	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorViableOffset, 1u)",
+	    "reservoirGiBrightSurfelIndexedQueryOffset",
+	    "reservoirGiBrightSurfelIndexedEmptyOffset",
+	    "reservoirGiBrightSurfelIndexedProbeOffset",
+	    "reservoirGiBrightSurfelSelectorRejectDistanceOffset",
+	    "reservoirGiBrightSurfelSelectorRejectReceiverHemisphereOffset",
+	    "reservoirGiBrightSurfelSelectorRejectSurfelHemisphereOffset",
+	    "reservoirGiBrightSurfelSelectorRejectInvalidVectorOffset",
 	    "RESERVOIR_GI_CANDIDATE_SHADOWED_SUN_CACHE_CONTINUATION",
 	    "tryEvaluateReservoirGiReceiverCacheContinuation",
 	    "RESERVOIR_GI_CACHE_CONTINUATION_FLAG",
@@ -1736,15 +2040,30 @@ bool testPathTracerDebugAovContract()
 		    << "old bright surfel target estimator must be replaced by estimateBrightSurfelTargetForReceiver\n";
 		return false;
 	}
+	if (!requireIndexedBrightSurfelShaderContracts(raygen))
+	{
+		return false;
+	}
 	const std::string brightSurfelSelector =
-	    extractFunctionBody(raygen, "bool selectWeightedGlobalBrightReceiverSurfelRecord");
+	    extractFunctionBody(raygen, "bool selectWeightedIndexedBrightReceiverSurfelRecord");
 	if (brightSurfelSelector.empty())
 	{
-		std::cerr << "missing bright surfel selector function body\n";
+		std::cerr << "missing indexed bright surfel selector function body\n";
 		return false;
 	}
 	const char *requiredBrightSurfelSelectorSymbols[] = {
+	    "loadReservoirGiBrightSurfelHistoryHeader(surfelCapacity, surfelHistoryFrameId)",
+	    "reservoirGiBrightSurfelIndexedQueryIndex(hitPos, cellOffset, slot)",
+	    "precheckReservoirGiBrightSurfelHistoryRecord(surfelIndex, surfelCapacity, surfelHistoryFrameId",
+	    "loadPrecheckedReservoirGiBrightSurfelHistoryRecord(surfelIndex, precheck, surfel)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelIndexedQueryOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelIndexedEmptyOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelIndexedProbeOffset, 1u)",
 	    "estimateBrightSurfelTargetForReceiver(hitPos, N, V, primaryPayload",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectDistanceOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectReceiverHemisphereOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectSurfelHemisphereOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectInvalidVectorOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectGeometryOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorViableOffset, 1u)",
@@ -1893,6 +2212,13 @@ bool testPathTracerDebugAovContract()
 	    "brightSurfelTrainingStore",
 	    "brightSurfelTrainingRejectGeometry",
 	    "brightSurfelTrainingRejectTarget",
+	    "brightSurfelIndexedQuery",
+	    "brightSurfelIndexedEmpty",
+	    "brightSurfelIndexedProbe",
+	    "brightSurfelSelectorRejectDistance",
+	    "brightSurfelSelectorRejectReceiverHemisphere",
+	    "brightSurfelSelectorRejectSurfelHemisphere",
+	    "brightSurfelSelectorRejectInvalidVector",
 	    "MixedCosineSunReceiverCacheGuided",
 	    "Mixed Cosine + Sun Receiver + Cache Guide",
 	    "MixedCosineSunReceiverCacheReconnect",
@@ -1906,6 +2232,13 @@ bool testPathTracerDebugAovContract()
 	    "Reservoir GI Bright Surfel Training Stores",
 	    "Reservoir GI Bright Surfel Training Reject Geometry",
 	    "Reservoir GI Bright Surfel Training Reject Target",
+	    "Reservoir GI Bright Surfel Indexed Query",
+	    "Reservoir GI Bright Surfel Indexed Empty",
+	    "Reservoir GI Bright Surfel Indexed Probe",
+	    "Reservoir GI Bright Surfel Selector Reject Distance",
+	    "Reservoir GI Bright Surfel Selector Reject Receiver Hemisphere",
+	    "Reservoir GI Bright Surfel Selector Reject Surfel Hemisphere",
+	    "Reservoir GI Bright Surfel Selector Reject Invalid Vector",
 	    "PathTracerExperimentRow",
 	    "runSponzaGiPerfSweep",
 	    "startPathTracerSponzaGiPerfSweep",

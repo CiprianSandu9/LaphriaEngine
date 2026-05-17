@@ -213,6 +213,13 @@ class EngineCore
 		double brightSurfelSelectorRejectGeometry = 0.0;
 		double brightSurfelSelectorRejectTarget = 0.0;
 		double brightSurfelSelectorViable = 0.0;
+		double brightSurfelIndexedQuery = 0.0;
+		double brightSurfelIndexedEmpty = 0.0;
+		double brightSurfelIndexedProbe = 0.0;
+		double brightSurfelSelectorRejectDistance = 0.0;
+		double brightSurfelSelectorRejectReceiverHemisphere = 0.0;
+		double brightSurfelSelectorRejectSurfelHemisphere = 0.0;
+		double brightSurfelSelectorRejectInvalidVector = 0.0;
 		double rayTraceMs = 0.0;
 		double totalFrameMs = 0.0;
 	};

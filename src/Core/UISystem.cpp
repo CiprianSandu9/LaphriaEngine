@@ -1288,6 +1288,20 @@ void UISystem::drawPathTracerDebugLab() {
                     pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectTarget);
         ImGui::Text("Reservoir GI Bright Surfel Selector Viable: %u",
                     pathTracerPerfStats.reservoirGiBrightSurfelSelectorViable);
+        ImGui::Text("Reservoir GI Bright Surfel Indexed Query: %u",
+                    pathTracerPerfStats.reservoirGiBrightSurfelIndexedQuery);
+        ImGui::Text("Reservoir GI Bright Surfel Indexed Empty: %u",
+                    pathTracerPerfStats.reservoirGiBrightSurfelIndexedEmpty);
+        ImGui::Text("Reservoir GI Bright Surfel Indexed Probe: %u",
+                    pathTracerPerfStats.reservoirGiBrightSurfelIndexedProbe);
+        ImGui::Text("Reservoir GI Bright Surfel Selector Reject Distance: %u",
+                    pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectDistance);
+        ImGui::Text("Reservoir GI Bright Surfel Selector Reject Receiver Hemisphere: %u",
+                    pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectReceiverHemisphere);
+        ImGui::Text("Reservoir GI Bright Surfel Selector Reject Surfel Hemisphere: %u",
+                    pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectSurfelHemisphere);
+        ImGui::Text("Reservoir GI Bright Surfel Selector Reject Invalid Vector: %u",
+                    pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectInvalidVector);
         ImGui::Text("Reservoir GI Temporal: accepted %u | rejected %u",
                     pathTracerPerfStats.reservoirGiTemporalAccepted,
                     pathTracerPerfStats.reservoirGiTemporalRejected);

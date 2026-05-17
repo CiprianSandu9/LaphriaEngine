@@ -515,3 +515,13 @@ Outcome:
 - The old post-selector precheck rejection is now gone as intended (`brightSurfelPrecheckRejectTarget=0.0` in bright rows); rejection has moved into selector geometry/target diagnostics.
 
 Decision: Move to producer/index quality.
+
+## Follow-Up: Diagnostic Indexed Lookup
+
+The target-aware bright surfel selector proved that the reservoir combine path can accept surfels on the Sunlit Wall, but Dark Courtyard and Mid-Depth produced zero viable surfels while spending heavily on global selector probes. The next experiment is diagnostic indexed lookup: reuse the current bright surfel buffer, store records into spatial cells, query the receiver neighborhood, and split selector rejects into empty-cell, distance, receiver hemisphere, surfel hemisphere, invalid-vector, geometry, and target categories.
+
+Success criteria for the next sweep:
+- Mid-Depth bright surfel rows report nonzero `brightSurfelSelectorViable`.
+- Sunlit Wall still reports nonzero `brightSurfelAccepted` and `reservoirGiSelectedBrightSurfel`.
+- Bright surfel rows avoid the current multi-million geometry reject pattern.
+- Total time moves toward the Sun Receiver baseline enough to justify deeper cache work.

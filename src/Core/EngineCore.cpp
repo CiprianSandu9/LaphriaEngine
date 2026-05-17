@@ -2003,6 +2003,20 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    counters->reservoirGiBrightSurfelSelectorRejectTarget;
 	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorViable =
 	    counters->reservoirGiBrightSurfelSelectorViable;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelIndexedQuery =
+	    counters->reservoirGiBrightSurfelIndexedQuery;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelIndexedEmpty =
+	    counters->reservoirGiBrightSurfelIndexedEmpty;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelIndexedProbe =
+	    counters->reservoirGiBrightSurfelIndexedProbe;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectDistance =
+	    counters->reservoirGiBrightSurfelSelectorRejectDistance;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectReceiverHemisphere =
+	    counters->reservoirGiBrightSurfelSelectorRejectReceiverHemisphere;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectSurfelHemisphere =
+	    counters->reservoirGiBrightSurfelSelectorRejectSurfelHemisphere;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectInvalidVector =
+	    counters->reservoirGiBrightSurfelSelectorRejectInvalidVector;
 	ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum =
 	    static_cast<float>(counters->reservoirGiLumaScaledSum) / 64.0f;
 	ui.pathTracerPerfStats.reservoirGiAcceptedAvgLuma =
@@ -2519,6 +2533,11 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "brightSurfelTrainingRejectTarget=%.1f, "
 	     "brightSurfelSelectorRejectGeometry=%.1f, brightSurfelSelectorRejectTarget=%.1f, "
 	     "brightSurfelSelectorViable=%.1f, "
+	     "brightSurfelIndexedQuery=%.1f, brightSurfelIndexedEmpty=%.1f, "
+	     "brightSurfelIndexedProbe=%.1f, brightSurfelSelectorRejectDistance=%.1f, "
+	     "brightSurfelSelectorRejectReceiverHemisphere=%.1f, "
+	     "brightSurfelSelectorRejectSurfelHemisphere=%.1f, "
+	     "brightSurfelSelectorRejectInvalidVector=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
 	     row.name.c_str(),
 	     accum.sampleCount,
@@ -2605,6 +2624,13 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.brightSurfelSelectorRejectGeometry * invSamples,
 	     accum.brightSurfelSelectorRejectTarget * invSamples,
 	     accum.brightSurfelSelectorViable * invSamples,
+	     accum.brightSurfelIndexedQuery * invSamples,
+	     accum.brightSurfelIndexedEmpty * invSamples,
+	     accum.brightSurfelIndexedProbe * invSamples,
+	     accum.brightSurfelSelectorRejectDistance * invSamples,
+	     accum.brightSurfelSelectorRejectReceiverHemisphere * invSamples,
+	     accum.brightSurfelSelectorRejectSurfelHemisphere * invSamples,
+	     accum.brightSurfelSelectorRejectInvalidVector * invSamples,
 	     accum.rayTraceMs * invSamples,
 	     accum.totalFrameMs * invSamples);
 }
@@ -2794,6 +2820,20 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectTarget);
 	ptExperimentAccum.brightSurfelSelectorViable +=
 	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorViable);
+	ptExperimentAccum.brightSurfelIndexedQuery +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelIndexedQuery);
+	ptExperimentAccum.brightSurfelIndexedEmpty +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelIndexedEmpty);
+	ptExperimentAccum.brightSurfelIndexedProbe +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelIndexedProbe);
+	ptExperimentAccum.brightSurfelSelectorRejectDistance +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectDistance);
+	ptExperimentAccum.brightSurfelSelectorRejectReceiverHemisphere +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectReceiverHemisphere);
+	ptExperimentAccum.brightSurfelSelectorRejectSurfelHemisphere +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectSurfelHemisphere);
+	ptExperimentAccum.brightSurfelSelectorRejectInvalidVector +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectInvalidVector);
 	ptExperimentAccum.rayTraceMs += stats.rayTraceMs;
 	ptExperimentAccum.totalFrameMs += stats.totalFrameMs;
 	++ptExperimentAccum.sampleCount;
