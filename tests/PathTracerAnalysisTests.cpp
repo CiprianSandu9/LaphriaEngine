@@ -161,6 +161,78 @@ bool requirePersistentSurfelCounterLayout(const std::string &engineAuxiliaryHead
 	       containsText(cmakeLists, "ShaderCommon.slang");
 }
 
+bool requirePersistentSurfelFrameResources(const std::string &frameContextHeader,
+                                           const std::string &frameContextSource)
+{
+	const char *headerSymbols[] = {
+	    "kSurfelGiMaxSurfels",
+	    "kSurfelGiGridDim",
+	    "kSurfelGiCellSlotCount",
+	    "surfelGiRecordBuffers",
+	    "surfelGiCellBuffers",
+	    "surfelGiCellSlotBuffers",
+	    "surfelGiCounterBuffers",
+	    "surfelGiDebugImages",
+	    "surfelGiDebugImageViews",
+	    "createSurfelGiBuffers"};
+
+	for (const char *symbol : headerSymbols)
+	{
+		if (!containsText(frameContextHeader, symbol))
+			return false;
+	}
+
+	const char *sourceSymbols[] = {
+	    "void FrameContext::createSurfelGiBuffers",
+	    "vk::MemoryPropertyFlagBits::eDeviceLocal",
+	    "vk::BufferUsageFlagBits::eStorageBuffer",
+	    "vk::ImageUsageFlagBits::eStorage",
+	    "surfelGiRecordBuffers.clear()",
+	    "surfelGiCellSlotBuffers.clear()",
+	    "surfelGiDebugImages.clear()"};
+
+	for (const char *symbol : sourceSymbols)
+	{
+		if (!containsText(frameContextSource, symbol))
+			return false;
+	}
+
+	const std::string cleanupSwapchain =
+	    extractFunctionBody(frameContextSource, "void FrameContext::cleanupSwapChainDependents(");
+	if (cleanupSwapchain.empty())
+		return false;
+
+	const std::size_t debugViewClearPos = cleanupSwapchain.find("surfelGiDebugImageViews.clear()");
+	const std::size_t debugImageDestroyPos =
+	    cleanupSwapchain.find("destroyImagesAndReleaseAllocations(surfelGiDebugImages)");
+	if (debugViewClearPos == std::string::npos || debugImageDestroyPos == std::string::npos ||
+	    debugViewClearPos > debugImageDestroyPos)
+		return false;
+
+	const char *resizePersistentBufferDestroys[] = {
+	    "destroyBuffersAndReleaseAllocations(surfelGiRecordBuffers)",
+	    "destroyBuffersAndReleaseAllocations(surfelGiCellBuffers)",
+	    "destroyBuffersAndReleaseAllocations(surfelGiCellSlotBuffers)",
+	    "destroyBuffersAndReleaseAllocations(surfelGiCounterBuffers)"};
+
+	for (const char *destroyCall : resizePersistentBufferDestroys)
+	{
+		if (containsText(cleanupSwapchain, destroyCall))
+			return false;
+	}
+
+	const std::string createSurfelBuffers =
+	    extractFunctionBody(frameContextSource, "void FrameContext::createSurfelGiBuffers(");
+	if (createSurfelBuffers.empty())
+		return false;
+
+	if (!containsText(createSurfelBuffers, "const bool createFixedBuffers") ||
+	    !containsText(createSurfelBuffers, "if (createFixedBuffers)"))
+		return false;
+
+	return true;
+}
+
 bool requireIndexedBrightSurfelShaderContracts(const std::string &raygen)
 {
 	const std::string brightSurfelStore =
@@ -564,6 +636,12 @@ bool testPathTracerReservoirGiMeasurementContract()
 	if (!requirePersistentSurfelCounterLayout(engineAuxiliaryHeader, surfelCommon, cmakeLists))
 	{
 		std::cerr << "persistent surfel GI counter layout contract is incomplete\n";
+		return false;
+	}
+
+	if (!requirePersistentSurfelFrameResources(frameContextHeader, frameContextSource))
+	{
+		std::cerr << "persistent surfel GI frame resource contract is incomplete\n";
 		return false;
 	}
 
