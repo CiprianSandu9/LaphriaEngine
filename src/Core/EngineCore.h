@@ -205,6 +205,11 @@ class EngineCore
 		double reservoirGiBrightSurfelRejectTarget = 0.0;
 		double reservoirGiBrightSurfelAccepted = 0.0;
 		double reservoirGiSelectedBrightSurfel = 0.0;
+		double brightSurfelPrecheckRejectTarget = 0.0;
+		double brightSurfelTrainingAttempt = 0.0;
+		double brightSurfelTrainingStore = 0.0;
+		double brightSurfelTrainingRejectGeometry = 0.0;
+		double brightSurfelTrainingRejectTarget = 0.0;
 		double rayTraceMs = 0.0;
 		double totalFrameMs = 0.0;
 	};

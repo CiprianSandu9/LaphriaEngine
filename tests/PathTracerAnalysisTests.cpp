@@ -347,9 +347,13 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "storeReservoirGiBrightSurfelRecord",
 	    "loadReservoirGiBrightSurfelHistoryRecord",
 	    "shouldAttemptBrightReceiverSurfel",
+	    "shouldTrainBrightReceiverSurfel",
 	    "reservoirGiBrightSurfelGlobalIndex",
 	    "reservoirGiBrightSurfelGlobalStoreIndex",
-	    "selectGlobalBrightReceiverSurfelRecord",
+	    "tryStoreBrightSurfelTrainingCandidate",
+	    "estimateBrightSurfelTargetBeforeVisibility",
+	    "selectWeightedGlobalBrightReceiverSurfelRecord",
+	    "surfelSelectionPdf",
 	    "evaluateBrightReceiverSurfelReservoirGiCandidate",
 	    "reservoirGiBrightSurfelStoreOffset",
 	    "reservoirGiBrightSurfelAttemptOffset",
@@ -360,6 +364,11 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "reservoirGiBrightSurfelRejectTargetOffset",
 	    "reservoirGiBrightSurfelAcceptedOffset",
 	    "reservoirGiSelectedBrightSurfelOffset",
+	    "reservoirGiBrightSurfelPrecheckRejectTargetOffset",
+	    "reservoirGiBrightSurfelTrainingAttemptOffset",
+	    "reservoirGiBrightSurfelTrainingStoreOffset",
+	    "reservoirGiBrightSurfelTrainingRejectGeometryOffset",
+	    "reservoirGiBrightSurfelTrainingRejectTargetOffset",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalSurfaceHitsOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalValidSamplesOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalMissCandidatesOffset, 1u)",
@@ -907,7 +916,17 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    {"reservoirGiBrightSurfelAccepted",
 	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelAccepted), 336u},
 	    {"reservoirGiSelectedBrightSurfel",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiSelectedBrightSurfel), 340u}};
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiSelectedBrightSurfel), 340u},
+	    {"reservoirGiBrightSurfelPrecheckRejectTarget",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelPrecheckRejectTarget), 344u},
+	    {"reservoirGiBrightSurfelTrainingAttempt",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelTrainingAttempt), 348u},
+	    {"reservoirGiBrightSurfelTrainingStore",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelTrainingStore), 352u},
+	    {"reservoirGiBrightSurfelTrainingRejectGeometry",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelTrainingRejectGeometry), 356u},
+	    {"reservoirGiBrightSurfelTrainingRejectTarget",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelTrainingRejectTarget), 360u}};
 	for (const auto &counterOffset : counterOffsets)
 	{
 		if (counterOffset.offset != counterOffset.expectedOffset)
@@ -946,7 +965,6 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "historyGuideNeighborMisses=%.1f",
 	    "reservoirGiConfidenceMAvg=%.5f",
 	    "reservoirGiConfidenceMAvg",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N",
 	    "reservoirMixedTemporalSpatialBudget2Row.reservoirGiMode = UISystem::PathTracerReservoirGiMode::TemporalSpatial",
 	    "reservoirMixedTemporalSpatialBudget2Row.reservoirGiSpatialNeighborCount = 2",
 	    "PT Experiment Row Summary:",
@@ -959,6 +977,143 @@ bool testPathTracerReservoirGiMeasurementContract()
 			std::cerr << "missing reservoir GI measurement engine contract: " << symbol << "\n";
 			return false;
 		}
+	}
+
+	const char *requiredBrightSurfelRowSummaryFields[] = {
+	    "brightSurfelPrecheckRejectTarget",
+	    "brightSurfelTrainingAttempt",
+	    "brightSurfelTrainingStore",
+	    "brightSurfelTrainingRejectGeometry",
+	    "brightSurfelTrainingRejectTarget"};
+	for (const char *fieldName : requiredBrightSurfelRowSummaryFields)
+	{
+		if (!containsText(engineCore, fieldName))
+		{
+			std::cerr << "missing reservoir GI bright surfel row-summary log field: "
+			          << fieldName << "\n";
+			return false;
+		}
+	}
+
+	const char *requiredSponzaAuditRows[] = {
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
+	    "Reservoir 1C Shadowed Sun First Mixed Single Frame Sun Receiver",
+	    "Reservoir 1C Shadowed Sun First Mixed Single Frame Sun Receiver Bright Surfel",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Bright Surfel",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two",
+	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two Cache Continuation"};
+	const std::size_t sponzaSweepStartPos =
+	    engineCore.find("void EngineCore::startPathTracerSponzaGiPerfSweep()");
+	const std::size_t sponzaSweepEndPos =
+	    sponzaSweepStartPos == std::string::npos
+	        ? std::string::npos
+	        : engineCore.find("\nvoid EngineCore::", sponzaSweepStartPos + 1u);
+	if (sponzaSweepStartPos == std::string::npos)
+	{
+		std::cerr << "focused Sponza PT/GI audit sweep function is missing\n";
+		return false;
+	}
+	const std::string sponzaSweepSource =
+	    engineCore.substr(sponzaSweepStartPos, sponzaSweepEndPos - sponzaSweepStartPos);
+	for (const char *rowName : requiredSponzaAuditRows)
+	{
+		const std::string quotedRowName = std::string("\"") + rowName + "\"";
+		if (sponzaSweepSource.find(quotedRowName) == std::string::npos)
+		{
+			std::cerr << "focused Sponza PT/GI audit sweep is missing exact quoted row literal: "
+			          << rowName << "\n";
+			return false;
+		}
+	}
+	const char *requiredSponzaAuditRowSchedule[] = {
+	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);",
+	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);",
+	    "ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);",
+	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow);",
+	    "ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverBrightSurfelRow);",
+	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow);",
+	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);"};
+	const std::size_t expectedSponzaAuditRowScheduleCount =
+	    sizeof(requiredSponzaAuditRowSchedule) / sizeof(requiredSponzaAuditRowSchedule[0]);
+	const char *sponzaAuditPushBackNeedle = "ptExperimentRows.push_back(";
+	std::size_t sponzaAuditPushBackCount = 0;
+	std::size_t sponzaAuditPushBackSearchPos = 0;
+	while ((sponzaAuditPushBackSearchPos =
+	            sponzaSweepSource.find(sponzaAuditPushBackNeedle, sponzaAuditPushBackSearchPos)) !=
+	       std::string::npos)
+	{
+		++sponzaAuditPushBackCount;
+		sponzaAuditPushBackSearchPos += std::string(sponzaAuditPushBackNeedle).size();
+	}
+	if (sponzaAuditPushBackCount != expectedSponzaAuditRowScheduleCount)
+	{
+		std::cerr << "focused Sponza PT/GI audit sweep should schedule exactly the expected audit rows: expected "
+		          << expectedSponzaAuditRowScheduleCount << " got " << sponzaAuditPushBackCount << "\n";
+		return false;
+	}
+	std::size_t sponzaAuditRowScheduleSearchPos = 0;
+	for (const char *scheduledRow : requiredSponzaAuditRowSchedule)
+	{
+		const std::size_t scheduledRowPos =
+		    sponzaSweepSource.find(scheduledRow, sponzaAuditRowScheduleSearchPos);
+		if (scheduledRowPos == std::string::npos)
+		{
+			std::cerr << "focused Sponza PT/GI audit sweep is missing scheduled row in order: "
+			          << scheduledRow << "\n";
+			return false;
+		}
+		sponzaAuditRowScheduleSearchPos = scheduledRowPos + std::string(scheduledRow).size();
+	}
+	const std::size_t experimentSweepUpdatePos =
+	    engineCore.find("void EngineCore::updatePathTracerExperimentSweep()");
+	const std::size_t postExperimentSweepUpdatePos =
+	    engineCore.find("void EngineCore::ensurePathTracerSanityScene()", experimentSweepUpdatePos);
+	const std::size_t rowTransitionWaitIdlePos =
+	    engineCore.find("vulkan.logicalDevice.waitIdle();", experimentSweepUpdatePos);
+	const std::size_t rowTransitionClearStatePos =
+	    engineCore.find("clearPathTracerExperimentState();", rowTransitionWaitIdlePos);
+	const std::size_t rowTransitionApplyRowPos =
+	    engineCore.find("applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);", rowTransitionClearStatePos);
+	if (experimentSweepUpdatePos == std::string::npos ||
+	    postExperimentSweepUpdatePos == std::string::npos ||
+	    rowTransitionWaitIdlePos == std::string::npos ||
+	    rowTransitionClearStatePos == std::string::npos ||
+	    rowTransitionApplyRowPos == std::string::npos ||
+	    rowTransitionApplyRowPos >= postExperimentSweepUpdatePos)
+	{
+		std::cerr << "focused Sponza PT/GI audit sweep should clear experiment state before advancing rows\n";
+		return false;
+	}
+	if (containsText(engineCore, "Sponza / Reservoir GI Temporal") ||
+	    containsText(engineCore, "Sponza / Reservoir GI Temporal Spatial") ||
+	    containsText(engineCore, "Sponza / Reservoir GI Single Frame 2 Candidates No RIS") ||
+	    containsText(engineCore, "Sponza / Reservoir GI Single Frame 2 Candidates RIS") ||
+	    containsText(engineCore, "Base 3 Sun First") ||
+	    containsText(engineCore, "Base 5 Sun First") ||
+	    containsText(engineCore, "Base 8 Sun First") ||
+	    containsText(engineCore, "Base 8 Sun All") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First Mixed\",") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N\"") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First Mixed Temporal\")") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Env First Two") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Receiver Reconnect") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 1N Budget") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 3") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Dual Sun") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First Mixed History Guide") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun All") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First\", 1") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First Sun Guided") ||
+	    containsText(engineCore, "Reservoir 2C Shadowed Sun First Mixed") ||
+	    containsText(engineCore, "Reservoir 2C Shadowed Sun First Mixed RIS") ||
+	    containsText(engineCore, "Reservoir 1C Shadowed Sun First Light Region") ||
+	    containsText(engineCore, "Cache Chosen Radius 14 Budget 1") ||
+	    containsText(engineCore, "makeCacheChosenRow"))
+	{
+		std::cerr << "focused Sponza PT/GI audit sweep should only run base audit and current ReSTIR variants\n";
+		return false;
 	}
 
 	const char *requiredCounterAndUiSymbols[] = {
@@ -1014,7 +1169,12 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "Reservoir GI History Guide Neighbor Hits",
 	    "Reservoir GI History Guide Neighbor Misses",
 	    "Reservoir GI Selected Bright Surfel",
-	    "Reservoir GI Bright Surfel Accepted"};
+	    "Reservoir GI Bright Surfel Accepted",
+	    "Reservoir GI Bright Surfel Precheck Reject Target",
+	    "Reservoir GI Bright Surfel Training Attempts",
+	    "Reservoir GI Bright Surfel Training Stores",
+	    "Reservoir GI Bright Surfel Training Reject Geometry",
+	    "Reservoir GI Bright Surfel Training Reject Target"};
 	for (const char *symbol : requiredCounterAndUiSymbols)
 	{
 		if (!containsText(engineAuxiliaryHeader, symbol) &&
@@ -1329,9 +1489,13 @@ bool testPathTracerDebugAovContract()
 	    "storeReservoirGiBrightSurfelRecord",
 	    "loadReservoirGiBrightSurfelHistoryRecord",
 	    "shouldAttemptBrightReceiverSurfel",
+	    "shouldTrainBrightReceiverSurfel",
 	    "reservoirGiBrightSurfelGlobalIndex",
 	    "reservoirGiBrightSurfelGlobalStoreIndex",
-	    "selectGlobalBrightReceiverSurfelRecord",
+	    "tryStoreBrightSurfelTrainingCandidate",
+	    "estimateBrightSurfelTargetBeforeVisibility",
+	    "selectWeightedGlobalBrightReceiverSurfelRecord",
+	    "surfelSelectionPdf",
 	    "evaluateBrightReceiverSurfelReservoirGiCandidate",
 	    "reservoirGiBrightSurfelStoreOffset",
 	    "reservoirGiBrightSurfelAttemptOffset",
@@ -1342,6 +1506,11 @@ bool testPathTracerDebugAovContract()
 	    "reservoirGiBrightSurfelRejectTargetOffset",
 	    "reservoirGiBrightSurfelAcceptedOffset",
 	    "reservoirGiSelectedBrightSurfelOffset",
+	    "reservoirGiBrightSurfelPrecheckRejectTargetOffset",
+	    "reservoirGiBrightSurfelTrainingAttemptOffset",
+	    "reservoirGiBrightSurfelTrainingStoreOffset",
+	    "reservoirGiBrightSurfelTrainingRejectGeometryOffset",
+	    "reservoirGiBrightSurfelTrainingRejectTargetOffset",
 	    "RESERVOIR_GI_CANDIDATE_SHADOWED_SUN_CACHE_CONTINUATION",
 	    "tryEvaluateReservoirGiReceiverCacheContinuation",
 	    "RESERVOIR_GI_CACHE_CONTINUATION_FLAG",
@@ -1559,6 +1728,11 @@ bool testPathTracerDebugAovContract()
 	    "reservoirGiBrightSurfelRejectTarget",
 	    "reservoirGiBrightSurfelAccepted",
 	    "reservoirGiSelectedBrightSurfel",
+	    "brightSurfelPrecheckRejectTarget",
+	    "brightSurfelTrainingAttempt",
+	    "brightSurfelTrainingStore",
+	    "brightSurfelTrainingRejectGeometry",
+	    "brightSurfelTrainingRejectTarget",
 	    "MixedCosineSunReceiverCacheGuided",
 	    "Mixed Cosine + Sun Receiver + Cache Guide",
 	    "MixedCosineSunReceiverCacheReconnect",
@@ -1567,6 +1741,11 @@ bool testPathTracerDebugAovContract()
 	    "Reservoir GI Selected Cache Reconnect",
 	    "Reservoir GI Selected Bright Surfel",
 	    "Reservoir GI Bright Surfel Accepted",
+	    "Reservoir GI Bright Surfel Precheck Reject Target",
+	    "Reservoir GI Bright Surfel Training Attempts",
+	    "Reservoir GI Bright Surfel Training Stores",
+	    "Reservoir GI Bright Surfel Training Reject Geometry",
+	    "Reservoir GI Bright Surfel Training Reject Target",
 	    "PathTracerExperimentRow",
 	    "runSponzaGiPerfSweep",
 	    "startPathTracerSponzaGiPerfSweep",
@@ -1586,11 +1765,6 @@ bool testPathTracerDebugAovContract()
 	    "Mid-Depth Interior",
 	    "glm::vec3(0.0f, 12.0f, -1.5f)",
 	    "glm::vec3(-1.0f, 6.5f, 3.0f)",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Bright Surfel",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two Cache Continuation",
 	    "Shadowed Sun + Cache Continuation",
 	    "environmentNeeMode=%d",
 	    "reservoirTemporalBudget=%d",
@@ -1669,50 +1843,6 @@ bool testPathTracerDebugAovContract()
 			std::cerr << "missing path tracer indirect bounce scene symbol: " << symbol << "\n";
 			return false;
 		}
-	}
-	const char *requiredSponzaTemporalSpatialRows[] = {
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Bright Surfel",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two Cache Continuation"};
-	for (const char *rowName : requiredSponzaTemporalSpatialRows)
-	{
-		if (!containsText(engineSource, rowName))
-		{
-			std::cerr << "focused Sponza PT/GI audit sweep is missing row: " << rowName << "\n";
-			return false;
-		}
-	}
-	if (containsText(engineSource, "Sponza / Reservoir GI Temporal") ||
-	    containsText(engineSource, "Sponza / Reservoir GI Temporal Spatial") ||
-	    containsText(engineSource, "Sponza / Reservoir GI Single Frame 2 Candidates No RIS") ||
-	    containsText(engineSource, "Sponza / Reservoir GI Single Frame 2 Candidates RIS") ||
-	    containsText(engineSource, "Base 3 Sun First") ||
-	    containsText(engineSource, "Base 5 Sun First") ||
-	    containsText(engineSource, "Base 8 Sun First") ||
-	    containsText(engineSource, "Base 8 Sun All") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed\",") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Budget 2") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N\"") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal\")") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Env First Two") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Receiver Reconnect") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 1N Budget") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 3") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Dual Sun") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Mixed History Guide") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun All") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First\", 1") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Sun Guided") ||
-	    containsText(engineSource, "Reservoir 2C Shadowed Sun First Mixed") ||
-	    containsText(engineSource, "Reservoir 2C Shadowed Sun First Mixed RIS") ||
-	    containsText(engineSource, "Reservoir 1C Shadowed Sun First Light Region") ||
-	    containsText(engineSource, "Cache Chosen Radius 14 Budget 1") ||
-	    containsText(engineSource, "makeCacheChosenRow"))
-	{
-		std::cerr << "focused Sponza PT/GI audit sweep should only run base audit and current ReSTIR variants\n";
-		return false;
 	}
 
 	const std::string activeCacheCleanupSources = uiHeader + uiSource + engineHeader + engineSource +

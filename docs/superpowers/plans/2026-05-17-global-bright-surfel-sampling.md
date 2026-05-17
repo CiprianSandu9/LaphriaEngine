@@ -450,3 +450,38 @@ remove surfel row
 ```
 
 The reason must explicitly mention `brightSurfelAccepted`, `reservoirGiSelectedBrightSurfel`, `totalMs`, and visible artifacts if any were observed.
+
+## Follow-Up: Sparse Training Result
+
+Local run date: 2026-05-17.
+Build identity: local Debug build after sparse bright surfel training, target precheck, weighted global surfel selection, and single-frame control rows.
+
+Key row outcomes from the in-app Sponza PT/GI audit sweep:
+
+| Scenario | Row | Luma | selected bright | accepted bright | hit / miss | precheck reject | training store | total ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Dark Courtyard | Temporal Spatial Budget 2 | 0.02832 | 0.0 | 0.0 | 0.0 / 0.0 | 0.0 | 0.0 | 60.146 |
+| Dark Courtyard | Sun Receiver | 0.01663 | 0.0 | 0.0 | 0.0 / 0.0 | 0.0 | 0.0 | 57.110 |
+| Dark Courtyard | Single Frame Sun Receiver | 0.01131 | 0.0 | 0.0 | 0.0 / 0.0 | 0.0 | 0.0 | 51.477 |
+| Dark Courtyard | Bright Surfel | 0.01707 | 0.0 | 0.0 | 6.6 / 518357.4 | 6.6 | 69.0 | 71.958 |
+| Dark Courtyard | Single Frame Bright Surfel | 0.01129 | 0.0 | 0.0 | 7.8 / 518462.6 | 7.8 | 67.5 | 65.890 |
+| Sunlit Courtyard Wall | Temporal Spatial Budget 2 | 0.02414 | 0.0 | 0.0 | 0.0 / 0.0 | 0.0 | 0.0 | 173.464 |
+| Sunlit Courtyard Wall | Sun Receiver | 0.04104 | 0.0 | 0.0 | 0.0 / 0.0 | 0.0 | 0.0 | 162.614 |
+| Sunlit Courtyard Wall | Single Frame Sun Receiver | 0.04228 | 0.0 | 0.0 | 0.0 / 0.0 | 0.0 | 0.0 | 90.228 |
+| Sunlit Courtyard Wall | Bright Surfel | 0.04122 | 603.4 | 650.4 | 298432.0 / 219984.3 | 297776.3 | 7604.6 | 197.030 |
+| Sunlit Courtyard Wall | Single Frame Bright Surfel | 0.04217 | 596.5 | 640.1 | 300114.6 / 218259.5 | 299468.6 | 7592.2 | 126.672 |
+| Mid-Depth Interior | Temporal Spatial Budget 2 | 0.02318 | 0.0 | 0.0 | 0.0 / 0.0 | 0.0 | 0.0 | 161.948 |
+| Mid-Depth Interior | Sun Receiver | 0.03588 | 0.0 | 0.0 | 0.0 / 0.0 | 0.0 | 0.0 | 162.252 |
+| Mid-Depth Interior | Single Frame Sun Receiver | 0.02466 | 0.0 | 0.0 | 0.0 / 0.0 | 0.0 | 0.0 | 75.867 |
+| Mid-Depth Interior | Bright Surfel | 0.03577 | 0.0 | 0.0 | 96224.6 / 422132.5 | 96224.6 | 3979.2 | 189.882 |
+| Mid-Depth Interior | Single Frame Bright Surfel | 0.02466 | 0.0 | 0.0 | 96324.5 / 422016.8 | 96324.5 | 3943.1 | 109.342 |
+
+Outcome:
+
+- State isolation looks correct: non-bright rows report zero bright surfel counters, and scenario transitions do not appear to carry stale surfel state.
+- The sparse path reduced global attempts to roughly `518k`, down from the earlier `2,073,600` attempt shape.
+- The precheck is doing real work: Mid-depth rejects about `96k` hit surfels before visibility, avoiding wasted visibility rays.
+- The current surfel producer/selector is not useful in Dark Courtyard or Mid-depth: `reservoirGiSelectedBrightSurfel` remains zero there even when Mid-depth has high surfel hit counts.
+- Sunlit Courtyard Wall is the only scenario with useful selected bright surfels, but the temporal-spatial bright row costs `197.030 ms` versus `162.614 ms` for Sun Receiver, and luma is essentially unchanged relative to Sun Receiver.
+
+Decision: Continue with surfel producer quality tuning.

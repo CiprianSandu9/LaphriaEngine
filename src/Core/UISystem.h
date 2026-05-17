@@ -247,6 +247,11 @@ public:
         uint32_t reservoirGiBrightSurfelRejectTarget = 0;
         uint32_t reservoirGiBrightSurfelAccepted = 0;
         uint32_t reservoirGiSelectedBrightSurfel = 0;
+        uint32_t reservoirGiBrightSurfelPrecheckRejectTarget = 0;
+        uint32_t reservoirGiBrightSurfelTrainingAttempt = 0;
+        uint32_t reservoirGiBrightSurfelTrainingStore = 0;
+        uint32_t reservoirGiBrightSurfelTrainingRejectGeometry = 0;
+        uint32_t reservoirGiBrightSurfelTrainingRejectTarget = 0;
         float reservoirGiAcceptedAvgLuma = 0.0f;
         float reservoirGiAcceptedLumaSum = 0.0f;
         float reservoirGiCandidateSurfaceHitRatio = 0.0f;

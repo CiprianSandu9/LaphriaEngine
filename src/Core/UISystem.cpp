@@ -1272,6 +1272,16 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::Text("Reservoir GI Bright Surfel Reject Geometry: %u", pathTracerPerfStats.reservoirGiBrightSurfelRejectGeometry);
         ImGui::Text("Reservoir GI Bright Surfel Reject Target: %u", pathTracerPerfStats.reservoirGiBrightSurfelRejectTarget);
         ImGui::Text("Reservoir GI Bright Surfel Accepted: %u", pathTracerPerfStats.reservoirGiBrightSurfelAccepted);
+        ImGui::Text("Reservoir GI Bright Surfel Precheck Reject Target: %u",
+                    pathTracerPerfStats.reservoirGiBrightSurfelPrecheckRejectTarget);
+        ImGui::Text("Reservoir GI Bright Surfel Training Attempts: %u",
+                    pathTracerPerfStats.reservoirGiBrightSurfelTrainingAttempt);
+        ImGui::Text("Reservoir GI Bright Surfel Training Stores: %u",
+                    pathTracerPerfStats.reservoirGiBrightSurfelTrainingStore);
+        ImGui::Text("Reservoir GI Bright Surfel Training Reject Geometry: %u",
+                    pathTracerPerfStats.reservoirGiBrightSurfelTrainingRejectGeometry);
+        ImGui::Text("Reservoir GI Bright Surfel Training Reject Target: %u",
+                    pathTracerPerfStats.reservoirGiBrightSurfelTrainingRejectTarget);
         ImGui::Text("Reservoir GI Temporal: accepted %u | rejected %u",
                     pathTracerPerfStats.reservoirGiTemporalAccepted,
                     pathTracerPerfStats.reservoirGiTemporalRejected);

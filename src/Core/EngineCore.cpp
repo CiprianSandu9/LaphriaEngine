@@ -1987,6 +1987,16 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    counters->reservoirGiBrightSurfelAccepted;
 	ui.pathTracerPerfStats.reservoirGiSelectedBrightSurfel =
 	    counters->reservoirGiSelectedBrightSurfel;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelPrecheckRejectTarget =
+	    counters->reservoirGiBrightSurfelPrecheckRejectTarget;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelTrainingAttempt =
+	    counters->reservoirGiBrightSurfelTrainingAttempt;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelTrainingStore =
+	    counters->reservoirGiBrightSurfelTrainingStore;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelTrainingRejectGeometry =
+	    counters->reservoirGiBrightSurfelTrainingRejectGeometry;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelTrainingRejectTarget =
+	    counters->reservoirGiBrightSurfelTrainingRejectTarget;
 	ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum =
 	    static_cast<float>(counters->reservoirGiLumaScaledSum) / 64.0f;
 	ui.pathTracerPerfStats.reservoirGiAcceptedAvgLuma =
@@ -2318,6 +2328,18 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver");
 		reservoirMixedTemporalSpatialBudget2SunReceiverRow.reservoirGiProposalMode =
 		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
+		auto reservoirMixedSingleFrameSunReceiverRow =
+		    reservoirMixedTemporalSpatialBudget2SunReceiverRow;
+		reservoirMixedSingleFrameSunReceiverRow.name =
+		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Single Frame Sun Receiver");
+		reservoirMixedSingleFrameSunReceiverRow.reservoirGiMode =
+		    UISystem::PathTracerReservoirGiMode::SingleFrame;
+		reservoirMixedSingleFrameSunReceiverRow.reservoirGiCandidateCount = 1;
+		reservoirMixedSingleFrameSunReceiverRow.reservoirGiProposalMode =
+		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
+		reservoirMixedSingleFrameSunReceiverRow.reservoirGiTemporalBudgetDivisor = 1;
+		reservoirMixedSingleFrameSunReceiverRow.reservoirGiSpatialBudgetDivisor = 1;
+		reservoirMixedSingleFrameSunReceiverRow.reservoirGiCandidateEvaluationMode = 2;
 		auto reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow =
 		    reservoirMixedTemporalSpatialBudget2SunReceiverRow;
 		reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow.name =
@@ -2330,6 +2352,19 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow.reservoirGiTemporalBudgetDivisor = 2;
 		reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow.reservoirGiSpatialBudgetDivisor = 2;
 		reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow.reservoirGiCandidateEvaluationMode = 2;
+		auto reservoirMixedSingleFrameSunReceiverBrightSurfelRow =
+		    reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow;
+		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.name =
+		    makeScenarioRowName(scenario,
+		                        "Reservoir 1C Shadowed Sun First Mixed Single Frame Sun Receiver Bright Surfel");
+		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.reservoirGiMode =
+		    UISystem::PathTracerReservoirGiMode::SingleFrame;
+		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.reservoirGiCandidateCount = 1;
+		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.reservoirGiProposalMode =
+		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverBrightSurfel;
+		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.reservoirGiTemporalBudgetDivisor = 1;
+		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.reservoirGiSpatialBudgetDivisor = 1;
+		reservoirMixedSingleFrameSunReceiverBrightSurfelRow.reservoirGiCandidateEvaluationMode = 2;
 		auto reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow =
 		    reservoirMixedTemporalSpatialBudget2SunReceiverRow;
 		reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow.name =
@@ -2342,7 +2377,9 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow.reservoirGiCandidateEvaluationMode = 3;
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);
+		ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow);
+		ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverBrightSurfelRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);
 	}
@@ -2471,6 +2508,9 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "brightSurfelMiss=%.1f, brightSurfelRejectVisibility=%.1f, "
 	     "brightSurfelRejectGeometry=%.1f, brightSurfelRejectTarget=%.1f, "
 	     "brightSurfelAccepted=%.1f, reservoirGiSelectedBrightSurfel=%.1f, "
+	     "brightSurfelPrecheckRejectTarget=%.1f, brightSurfelTrainingAttempt=%.1f, "
+	     "brightSurfelTrainingStore=%.1f, brightSurfelTrainingRejectGeometry=%.1f, "
+	     "brightSurfelTrainingRejectTarget=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
 	     row.name.c_str(),
 	     accum.sampleCount,
@@ -2549,6 +2589,11 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.reservoirGiBrightSurfelRejectTarget * invSamples,
 	     accum.reservoirGiBrightSurfelAccepted * invSamples,
 	     accum.reservoirGiSelectedBrightSurfel * invSamples,
+	     accum.brightSurfelPrecheckRejectTarget * invSamples,
+	     accum.brightSurfelTrainingAttempt * invSamples,
+	     accum.brightSurfelTrainingStore * invSamples,
+	     accum.brightSurfelTrainingRejectGeometry * invSamples,
+	     accum.brightSurfelTrainingRejectTarget * invSamples,
 	     accum.rayTraceMs * invSamples,
 	     accum.totalFrameMs * invSamples);
 }
@@ -2722,6 +2767,16 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiBrightSurfelAccepted);
 	ptExperimentAccum.reservoirGiSelectedBrightSurfel +=
 	    static_cast<double>(stats.reservoirGiSelectedBrightSurfel);
+	ptExperimentAccum.brightSurfelPrecheckRejectTarget +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelPrecheckRejectTarget);
+	ptExperimentAccum.brightSurfelTrainingAttempt +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelTrainingAttempt);
+	ptExperimentAccum.brightSurfelTrainingStore +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelTrainingStore);
+	ptExperimentAccum.brightSurfelTrainingRejectGeometry +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelTrainingRejectGeometry);
+	ptExperimentAccum.brightSurfelTrainingRejectTarget +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelTrainingRejectTarget);
 	ptExperimentAccum.rayTraceMs += stats.rayTraceMs;
 	ptExperimentAccum.totalFrameMs += stats.totalFrameMs;
 	++ptExperimentAccum.sampleCount;
@@ -2748,6 +2803,7 @@ void EngineCore::updatePathTracerExperimentSweep()
 	ptExperimentSampleRemaining = std::max(1, ptExperimentSampleFrames);
 	ptExperimentAccum           = {};
 	vulkan.logicalDevice.waitIdle();
+	clearPathTracerExperimentState();
 	applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
 }
 
