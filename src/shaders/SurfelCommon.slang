@@ -6,8 +6,8 @@
 static const uint SURFEL_GI_MAX_SURFELS = 32768u;
 static const uint SURFEL_GI_GRID_DIM = 32u;
 static const uint SURFEL_GI_CELL_COUNT = SURFEL_GI_GRID_DIM * SURFEL_GI_GRID_DIM * SURFEL_GI_GRID_DIM;
-static const uint SURFEL_GI_CELL_SLOT_COUNT = 4u;
-static const uint SURFEL_GI_MAX_EVAL_CANDIDATES = 8u;
+static const uint SURFEL_GI_CELL_SLOT_COUNT = 16u;
+static const uint SURFEL_GI_MAX_EVAL_CANDIDATES = 16u;
 static const float SURFEL_GI_CELL_SIZE = 1.5f;
 static const float SURFEL_GI_MIN_RADIUS = 0.25f;
 static const float SURFEL_GI_MAX_RADIUS = 2.5f;

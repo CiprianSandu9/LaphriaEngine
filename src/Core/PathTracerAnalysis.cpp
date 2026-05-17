@@ -131,6 +131,17 @@ PathTracerHistoryClampResult computePathTracerHistoryClamp(const PathTracerHisto
 	    .halfRange = halfRange};
 }
 
+SurfelGiDiagnosticRatios computeSurfelGiDiagnosticRatios(const SurfelGiDiagnosticCounters &counters)
+{
+	const float generated = static_cast<float>(std::max(counters.generated, 1u));
+	const float evalCandidates = static_cast<float>(std::max(counters.evalCandidates, 1u));
+	return SurfelGiDiagnosticRatios{
+	    .cellInsertRatio = static_cast<float>(counters.cellInserted) / generated,
+	    .cellOverflowRatio = static_cast<float>(counters.cellOverflow) / generated,
+	    .evalAcceptedRatio = static_cast<float>(counters.evalAccepted) / evalCandidates,
+	    .evalCellEmptyRatio = static_cast<float>(counters.evalCellEmpty) / evalCandidates};
+}
+
 float computePowerHeuristic(float sampleCountA, float pdfA, float sampleCountB, float pdfB)
 {
 	const float a = std::max(sampleCountA, 0.0f) * std::max(pdfA, 0.0f);

@@ -149,7 +149,7 @@ struct SurfelGiPushConstants
 {
 	uint32_t renderWidth = 1;
 	uint32_t renderHeight = 1;
-	uint32_t _pad0 = 0;
+	uint32_t maxEvalCandidates = 0;
 	uint32_t _pad1 = 0;
 };
 

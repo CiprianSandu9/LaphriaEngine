@@ -99,7 +99,7 @@ class FrameContext
 	static constexpr uint32_t       kSurfelGiMaxSurfels = 32768;
 	static constexpr uint32_t       kSurfelGiGridDim = 32;
 	static constexpr uint32_t       kSurfelGiCellCount = kSurfelGiGridDim * kSurfelGiGridDim * kSurfelGiGridDim;
-	static constexpr uint32_t       kSurfelGiCellSlotCount = 4;
+	static constexpr uint32_t       kSurfelGiCellSlotCount = 16;
 	static constexpr vk::DeviceSize kSurfelGiRecordSize = 64;
 	static constexpr vk::DeviceSize kSurfelGiCellSize = 16;
 	static constexpr vk::DeviceSize kSurfelGiCellSlotSize = 4;

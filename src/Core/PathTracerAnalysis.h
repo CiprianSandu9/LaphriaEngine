@@ -1,6 +1,7 @@
 #ifndef LAPHRIAENGINE_PATHTRACERANALYSIS_H
 #define LAPHRIAENGINE_PATHTRACERANALYSIS_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -57,6 +58,24 @@ struct PathTracerHistoryClampResult
     float halfRange = 0.0f;
 };
 
+struct SurfelGiDiagnosticCounters
+{
+    uint32_t generated = 0;
+    uint32_t cellInserted = 0;
+    uint32_t cellOverflow = 0;
+    uint32_t evalCandidates = 0;
+    uint32_t evalAccepted = 0;
+    uint32_t evalCellEmpty = 0;
+};
+
+struct SurfelGiDiagnosticRatios
+{
+    float cellInsertRatio = 0.0f;
+    float cellOverflowRatio = 0.0f;
+    float evalAcceptedRatio = 0.0f;
+    float evalCellEmptyRatio = 0.0f;
+};
+
 enum class PathTracerBacklogPriority
 {
     High = 0,
@@ -78,6 +97,7 @@ std::vector<PathTracerSweepConfig> buildPathTracerBaselineSweepMatrix();
 PercentileTriplet                  computePercentiles(const std::vector<float> &samples);
 PathTracerRunScore                 scorePathTracerRun(const PathTracerScoreInput &input);
 PathTracerHistoryClampResult       computePathTracerHistoryClamp(const PathTracerHistoryClampInput &input);
+SurfelGiDiagnosticRatios           computeSurfelGiDiagnosticRatios(const SurfelGiDiagnosticCounters &counters);
 float                              computePowerHeuristic(float sampleCountA, float pdfA,
                                                          float sampleCountB, float pdfB);
 std::vector<PathTracerBacklogItem> buildDefaultFidelityBacklog(float rayTraceP95Ms,

@@ -51,7 +51,9 @@ public:
         PathReservoirGiCandidatePositiveWeight = 21,
         PathReservoirGiSelectedWeight = 22,
         PathReservoirGiLocalNoLight = 23,
-        PathReservoirGiSelectedSource = 24
+        PathReservoirGiSelectedSource = 24,
+        SurfelGiOccupancy = 25,
+        SurfelGiGather = 26
     };
 
     enum class PathTracerQualityMode
@@ -134,6 +136,9 @@ public:
         bool                  reservoirGiDetailedDiagnostics = true;
         int                   reservoirGiTemporalBudgetDivisor = 1;
         int                   reservoirGiSpatialBudgetDivisor = 1;
+        bool enableSurfelGi = false;
+        bool surfelGiDebug = false;
+        int surfelGiMaxEvalCandidates = 8;
         int                   pathTracerMaxBounces = 8;
         // 0 = all bounces, 1 = first bounce only, 2 = first 2 bounces.
         int                   directSunBounceMode = 0;
@@ -262,6 +267,12 @@ public:
         uint32_t reservoirGiBrightSurfelSelectorRejectReceiverHemisphere = 0;
         uint32_t reservoirGiBrightSurfelSelectorRejectSurfelHemisphere = 0;
         uint32_t reservoirGiBrightSurfelSelectorRejectInvalidVector = 0;
+        uint32_t surfelGiGenerated = 0;
+        uint32_t surfelGiCellInserted = 0;
+        uint32_t surfelGiCellOverflow = 0;
+        uint32_t surfelGiEvalCandidates = 0;
+        uint32_t surfelGiEvalAccepted = 0;
+        uint32_t surfelGiEvalCellEmpty = 0;
         float reservoirGiAcceptedAvgLuma = 0.0f;
         float reservoirGiAcceptedLumaSum = 0.0f;
         float reservoirGiCandidateSurfaceHitRatio = 0.0f;

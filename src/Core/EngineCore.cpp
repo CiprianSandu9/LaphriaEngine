@@ -1669,7 +1669,8 @@ void EngineCore::recordSurfelGiEvaluatePass(const vk::raii::CommandBuffer &comma
 	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
 	SurfelGiPushConstants pushConstants{
 	    .renderWidth  = rtWidth,
-	    .renderHeight = rtHeight};
+	    .renderHeight = rtHeight,
+	    .maxEvalCandidates = static_cast<uint32_t>(std::max(ui.pathTracerSettings.surfelGiMaxEvalCandidates, 0))};
 	commandBuffer.pushConstants<SurfelGiPushConstants>(*pipelines.surfelGiPipelineLayout,
 	                                                   vk::ShaderStageFlagBits::eCompute, 0,
 	                                                   pushConstants);
@@ -1723,6 +1724,10 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	const uint32_t gx                   = (rtWidth + 15) / 16;
 	const uint32_t gy                   = (rtHeight + 15) / 16;
 	const bool     analysisEnabled      = ui.pathTracerAnalysisSettings.enableAnalysisMode;
+	const bool     surfelGiDebugAovSelected =
+	    analysisEnabled &&
+	    (ui.pathTracerAnalysisSettings.debugAov == UISystem::PathTracerDebugAov::SurfelGiOccupancy ||
+	     ui.pathTracerAnalysisSettings.debugAov == UISystem::PathTracerDebugAov::SurfelGiGather);
 	const int      debugAov             = analysisEnabled ? static_cast<int>(ui.pathTracerAnalysisSettings.debugAov) : 0;
 	const int      debugAtrousIteration = analysisEnabled ? std::clamp(ui.pathTracerAnalysisSettings.debugAtrousIteration, 0, 4) : 0;
 	if (fi < frames.ptAnalysisCounterMapped.size() && frames.ptAnalysisCounterMapped[fi])
@@ -1799,10 +1804,15 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	barrierRTtoCompute(*frames.rtGBufferDepth[fi]);
 	barrierRTtoCompute(*frames.rtMotionVectors[fi]);
 
-	recordSurfelGiClearPass(commandBuffer, fi);
-	recordSurfelGiGeneratePass(commandBuffer, fi);
-	recordSurfelGiBuildCellsPass(commandBuffer, fi);
-	recordSurfelGiEvaluatePass(commandBuffer, fi);
+	if (ui.pathTracerSettings.enableSurfelGi ||
+	    ui.pathTracerSettings.surfelGiDebug ||
+	    surfelGiDebugAovSelected)
+	{
+		recordSurfelGiClearPass(commandBuffer, fi);
+		recordSurfelGiGeneratePass(commandBuffer, fi);
+		recordSurfelGiBuildCellsPass(commandBuffer, fi);
+		recordSurfelGiEvaluatePass(commandBuffer, fi);
+	}
 
 	// 4. Reprojection pass.
 	if (ui.pathTracerSettings.enableReprojection)
@@ -2319,6 +2329,18 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    counters->reservoirGiBrightSurfelSelectorRejectSurfelHemisphere;
 	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectInvalidVector =
 	    counters->reservoirGiBrightSurfelSelectorRejectInvalidVector;
+	ui.pathTracerPerfStats.surfelGiGenerated =
+	    counters->surfelGiGenerated;
+	ui.pathTracerPerfStats.surfelGiCellInserted =
+	    counters->surfelGiCellInserted;
+	ui.pathTracerPerfStats.surfelGiCellOverflow =
+	    counters->surfelGiCellOverflow;
+	ui.pathTracerPerfStats.surfelGiEvalCandidates =
+	    counters->surfelGiEvalCandidates;
+	ui.pathTracerPerfStats.surfelGiEvalAccepted =
+	    counters->surfelGiEvalAccepted;
+	ui.pathTracerPerfStats.surfelGiEvalCellEmpty =
+	    counters->surfelGiEvalCellEmpty;
 	ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum =
 	    static_cast<float>(counters->reservoirGiLumaScaledSum) / 64.0f;
 	ui.pathTracerPerfStats.reservoirGiAcceptedAvgLuma =
@@ -2813,6 +2835,8 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "brightSurfelSelectorRejectReceiverHemisphere=%.1f, "
 	     "brightSurfelSelectorRejectSurfelHemisphere=%.1f, "
 	     "brightSurfelSelectorRejectInvalidVector=%.1f, "
+	     "surfelGiGenerated=%.1f, surfelGiCellInserted=%.1f, surfelGiCellOverflow=%.1f, "
+	     "surfelGiEvalCandidates=%.1f, surfelGiEvalAccepted=%.1f, surfelGiEvalCellEmpty=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
 	     row.name.c_str(),
 	     accum.sampleCount,
@@ -2906,6 +2930,12 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.brightSurfelSelectorRejectReceiverHemisphere * invSamples,
 	     accum.brightSurfelSelectorRejectSurfelHemisphere * invSamples,
 	     accum.brightSurfelSelectorRejectInvalidVector * invSamples,
+	     accum.surfelGiGenerated * invSamples,
+	     accum.surfelGiCellInserted * invSamples,
+	     accum.surfelGiCellOverflow * invSamples,
+	     accum.surfelGiEvalCandidates * invSamples,
+	     accum.surfelGiEvalAccepted * invSamples,
+	     accum.surfelGiEvalCellEmpty * invSamples,
 	     accum.rayTraceMs * invSamples,
 	     accum.totalFrameMs * invSamples);
 }
@@ -3109,6 +3139,18 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectSurfelHemisphere);
 	ptExperimentAccum.brightSurfelSelectorRejectInvalidVector +=
 	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectInvalidVector);
+	ptExperimentAccum.surfelGiGenerated +=
+	    static_cast<double>(stats.surfelGiGenerated);
+	ptExperimentAccum.surfelGiCellInserted +=
+	    static_cast<double>(stats.surfelGiCellInserted);
+	ptExperimentAccum.surfelGiCellOverflow +=
+	    static_cast<double>(stats.surfelGiCellOverflow);
+	ptExperimentAccum.surfelGiEvalCandidates +=
+	    static_cast<double>(stats.surfelGiEvalCandidates);
+	ptExperimentAccum.surfelGiEvalAccepted +=
+	    static_cast<double>(stats.surfelGiEvalAccepted);
+	ptExperimentAccum.surfelGiEvalCellEmpty +=
+	    static_cast<double>(stats.surfelGiEvalCellEmpty);
 	ptExperimentAccum.rayTraceMs += stats.rayTraceMs;
 	ptExperimentAccum.totalFrameMs += stats.totalFrameMs;
 	++ptExperimentAccum.sampleCount;

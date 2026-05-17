@@ -9,6 +9,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
+#include <regex>
 #include <string>
 #include <unordered_set>
 
@@ -27,6 +29,32 @@ std::string readTextFile(const std::filesystem::path &path)
 bool containsText(const std::string &haystack, const char *needle)
 {
 	return haystack.find(needle) != std::string::npos;
+}
+
+std::optional<unsigned> extractUnsignedAssignment(const std::string &source,
+                                                  const char *name)
+{
+	const std::regex assignmentRegex(
+	    std::string(R"(\b)") + name + R"(\s*=\s*([0-9]+)\s*u?\s*;)");
+	std::smatch match;
+	if (!std::regex_search(source, match, assignmentRegex))
+	{
+		return std::nullopt;
+	}
+	return static_cast<unsigned>(std::stoul(match[1].str()));
+}
+
+std::optional<std::pair<int, int>> extractSurfelEvalCandidateSliderRange(
+    const std::string &source)
+{
+	const std::regex sliderRegex(
+	    R"(SliderInt\(\s*"Surfel Eval Candidates"\s*,\s*&pathTracerSettings\.surfelGiMaxEvalCandidates\s*,\s*([0-9]+)\s*,\s*([0-9]+)\s*\))");
+	std::smatch match;
+	if (!std::regex_search(source, match, sliderRegex))
+	{
+		return std::nullopt;
+	}
+	return std::pair<int, int>{std::stoi(match[1].str()), std::stoi(match[2].str())};
 }
 
 std::string extractFunctionBody(const std::string &source, const char *signature)
@@ -424,13 +452,130 @@ bool requireSurfelEvaluatePassContracts(const std::string &cmakeLists,
 	       containsText(surfelEvaluate, "SurfelGiPushConstants") &&
 	       containsText(surfelEvaluate, "push.renderWidth") &&
 	       containsText(surfelEvaluate, "push.renderHeight") &&
+	       containsText(surfelEvaluate, "push.maxEvalCandidates") &&
+	       containsText(surfelEvaluate, "clamp(push.maxEvalCandidates, 1u, SURFEL_GI_MAX_EVAL_CANDIDATES)") &&
 	       containsText(engineCore, "recordSurfelGiEvaluatePass") &&
 	       containsText(engineCore, "commandBuffer.pushConstants<SurfelGiPushConstants>") &&
+	       containsText(engineCore, "ui.pathTracerSettings.surfelGiMaxEvalCandidates") &&
 	       containsText(denoiser, "surfelGiDebugView") &&
-	       containsText(denoiser, "DEBUG_AOV_SURFEL_GI_DIAGNOSTICS") &&
+	       containsText(denoiser, "DEBUG_AOV_SURFEL_GI_OCCUPANCY") &&
+	       containsText(denoiser, "DEBUG_AOV_SURFEL_GI_GATHER") &&
 	       containsText(pipelineSource, "binding = 15") &&
 	       containsText(engineCore, "dstBinding      = 15") &&
 	       containsText(engineCore, "frames.surfelGiDebugImageViews[i]");
+}
+
+std::string extractDebugAovBranch(const std::string &denoiser,
+                                  const char *debugAovSymbol)
+{
+	const std::string selector =
+	    extractFunctionBody(denoiser, "float3 selectPathTracerDebugAovOutput(");
+	if (selector.empty())
+	{
+		return {};
+	}
+
+	const std::size_t symbolPos = selector.find(debugAovSymbol);
+	if (symbolPos == std::string::npos)
+	{
+		return {};
+	}
+
+	const std::size_t branchStart = selector.rfind("} else if", symbolPos);
+	if (branchStart == std::string::npos)
+	{
+		return {};
+	}
+	const std::size_t branchBodyStart = selector.find('{', branchStart);
+	if (branchBodyStart == std::string::npos)
+	{
+		return {};
+	}
+	const std::size_t nextBranch = selector.find("} else if", branchBodyStart + 1u);
+	if (nextBranch == std::string::npos)
+	{
+		const std::size_t selectorReturn = selector.find("return outColor", branchBodyStart);
+		return selectorReturn == std::string::npos
+		           ? selector.substr(branchStart)
+		           : selector.substr(branchStart, selectorReturn - branchStart);
+	}
+	return selector.substr(branchStart, nextBranch - branchStart);
+}
+
+bool requireSurfelGiDebugAovChannelSplit(const std::string &denoiser)
+{
+	const std::string occupancyBranch =
+	    stripComments(extractDebugAovBranch(denoiser, "DEBUG_AOV_SURFEL_GI_OCCUPANCY"));
+	const std::string gatherBranch =
+	    stripComments(extractDebugAovBranch(denoiser, "DEBUG_AOV_SURFEL_GI_GATHER"));
+	if (occupancyBranch.empty() || gatherBranch.empty())
+	{
+		std::cerr << "missing surfel GI debug AOV denoiser branches\n";
+		return false;
+	}
+
+	const bool occupancyUsesBlue =
+	    containsText(occupancyBranch, "surfelGiDebugView[pixel].b") ||
+	    containsText(occupancyBranch, "surfelGiDebugView[pixel].z") ||
+	    containsText(occupancyBranch, ".b") ||
+	    containsText(occupancyBranch, ".z");
+	const bool gatherUsesRed =
+	    containsText(gatherBranch, "surfelGiDebugView[pixel].r") ||
+	    containsText(gatherBranch, "surfelGiDebugView[pixel].x") ||
+	    containsText(gatherBranch, ".r") ||
+	    containsText(gatherBranch, ".x");
+	const bool occupancyLooksScalar =
+	    containsText(occupancyBranch, "float3(") &&
+	    !containsText(occupancyBranch, "surfelGiDebugView[pixel].rgb") &&
+	    !containsText(occupancyBranch, "surfelGiDebugView[pixel].xyz");
+	const bool gatherLooksScalar =
+	    containsText(gatherBranch, "float3(") &&
+	    !containsText(gatherBranch, "surfelGiDebugView[pixel].rgb") &&
+	    !containsText(gatherBranch, "surfelGiDebugView[pixel].xyz");
+
+	if (!occupancyUsesBlue || !gatherUsesRed || !occupancyLooksScalar || !gatherLooksScalar)
+	{
+		std::cerr << "surfel GI occupancy and gather AOVs must present distinct scalar channels\n";
+		return false;
+	}
+	return true;
+}
+
+bool requireSurfelGiSlotCapacityAlignment(const std::string &frameContextHeader,
+                                          const std::string &uiSource,
+                                          const std::string &surfelCommon,
+                                          const std::string &surfelEvaluate)
+{
+	const auto shaderSlotCount = extractUnsignedAssignment(surfelCommon, "SURFEL_GI_CELL_SLOT_COUNT");
+	const auto shaderMaxCandidates =
+	    extractUnsignedAssignment(surfelCommon, "SURFEL_GI_MAX_EVAL_CANDIDATES");
+	const auto frameSlotCount = extractUnsignedAssignment(frameContextHeader, "kSurfelGiCellSlotCount");
+	const auto sliderRange = extractSurfelEvalCandidateSliderRange(uiSource);
+	if (!shaderSlotCount || !shaderMaxCandidates || !frameSlotCount || !sliderRange)
+	{
+		std::cerr << "missing surfel GI slot/candidate capacity declarations\n";
+		return false;
+	}
+
+	if (*shaderSlotCount != 16u || *shaderMaxCandidates != 16u ||
+	    *frameSlotCount != *shaderSlotCount || sliderRange->first != 1 ||
+	    sliderRange->second != static_cast<int>(*shaderMaxCandidates))
+	{
+		std::cerr << "surfel GI slot storage, shader candidate max, and UI range must align at 1..16\n";
+		return false;
+	}
+
+	const std::string evaluateMain =
+	    stripComments(extractFunctionBody(surfelEvaluate, "void surfelEvaluateMain("));
+	if (evaluateMain.empty())
+	{
+		std::cerr << "missing surfel GI evaluate main body\n";
+		return false;
+	}
+	return containsText(evaluateMain, "clamp(push.maxEvalCandidates, 1u, SURFEL_GI_MAX_EVAL_CANDIDATES)") &&
+	       containsText(evaluateMain, "min(count, configuredCandidateCount)") &&
+	       containsText(evaluateMain, "slot < boundedCandidateCount") &&
+	       containsText(evaluateMain, "cellIndex * SURFEL_GI_CELL_SLOT_COUNT + slot");
 }
 
 bool requireIndexedBrightSurfelShaderContracts(const std::string &raygen)
@@ -778,6 +923,8 @@ bool testPathTracerHistoryClampPreservesDimIndirectHistory()
 	return true;
 }
 
+bool testSurfelGiDiagnosticRatios();
+
 bool testPathTracerPowerHeuristic()
 {
 	const float equal = Laphria::computePowerHeuristic(1.0f, 0.5f, 1.0f, 0.5f);
@@ -798,6 +945,41 @@ bool testPathTracerPowerHeuristic()
 	if (std::abs(zeroOther - 1.0f) > 0.0001f)
 	{
 		std::cerr << "zero competing PDF should produce full weight, got " << zeroOther << "\n";
+		return false;
+	}
+
+	return testSurfelGiDiagnosticRatios();
+}
+
+bool testSurfelGiDiagnosticRatios()
+{
+	Laphria::SurfelGiDiagnosticCounters counters{};
+	counters.generated = 80;
+	counters.cellInserted = 60;
+	counters.cellOverflow = 20;
+	counters.evalCandidates = 40;
+	counters.evalAccepted = 10;
+	counters.evalCellEmpty = 5;
+
+	const auto ratios = Laphria::computeSurfelGiDiagnosticRatios(counters);
+	if (std::abs(ratios.cellInsertRatio - 0.75f) > 0.0001f)
+	{
+		std::cerr << "surfel GI cell insert ratio mismatch\n";
+		return false;
+	}
+	if (std::abs(ratios.cellOverflowRatio - 0.25f) > 0.0001f)
+	{
+		std::cerr << "surfel GI cell overflow ratio mismatch\n";
+		return false;
+	}
+	if (std::abs(ratios.evalAcceptedRatio - 0.25f) > 0.0001f)
+	{
+		std::cerr << "surfel GI eval accepted ratio mismatch\n";
+		return false;
+	}
+	if (std::abs(ratios.evalCellEmptyRatio - 0.125f) > 0.0001f)
+	{
+		std::cerr << "surfel GI eval empty ratio mismatch\n";
 		return false;
 	}
 
@@ -880,11 +1062,122 @@ bool testPathTracerReservoirGiMeasurementContract()
 		std::cerr << "persistent surfel GI evaluate pass contract is incomplete\n";
 		return false;
 	}
+	if (!requireSurfelGiDebugAovChannelSplit(denoiser))
+	{
+		return false;
+	}
+	if (!requireSurfelGiSlotCapacityAlignment(frameContextHeader, uiSource, surfelCommon, surfelEvaluate))
+	{
+		return false;
+	}
 
 	if (!requireBrightSurfelProposalDisabledForSweeps(raygen, engineCore))
 	{
 		std::cerr << "Bright surfel reservoir proposal must be disabled for sweeps before persistent surfel cache work\n";
 		return false;
+	}
+
+	const std::string recordRayTracingSource =
+	    extractFunctionBody(engineCore, "void EngineCore::recordRayTracingCommandBuffer(");
+	if (!containsText(recordRayTracingSource, "const bool     surfelGiDebugAovSelected") ||
+	    !containsText(recordRayTracingSource, "PathTracerDebugAov::SurfelGiOccupancy") ||
+	    !containsText(recordRayTracingSource, "PathTracerDebugAov::SurfelGiGather"))
+	{
+		std::cerr << "surfel GI debug AOV selection must include occupancy and gather\n";
+		return false;
+	}
+	const char *requiredSurfelPassOrder[] = {
+	    "recordSurfelGiClearPass(commandBuffer, fi);",
+	    "recordSurfelGiGeneratePass(commandBuffer, fi);",
+	    "recordSurfelGiBuildCellsPass(commandBuffer, fi);",
+	    "recordSurfelGiEvaluatePass(commandBuffer, fi);"};
+	std::size_t surfelPassSearchPos = recordRayTracingSource.find(requiredSurfelPassOrder[0]);
+	if (surfelPassSearchPos == std::string::npos)
+	{
+		std::cerr << "surfel GI pass gate missing first ordered call\n";
+		return false;
+	}
+	const std::size_t gateWindowStart = surfelPassSearchPos > 500 ? surfelPassSearchPos - 500 : 0;
+	const std::string gateWindow = recordRayTracingSource.substr(gateWindowStart, surfelPassSearchPos - gateWindowStart);
+	if (!containsText(gateWindow, "ui.pathTracerSettings.enableSurfelGi") ||
+	    !containsText(gateWindow, "ui.pathTracerSettings.surfelGiDebug") ||
+	    !containsText(gateWindow, "surfelGiDebugAovSelected"))
+	{
+		std::cerr << "surfel GI passes must run for cache, debug toggle, or surfel debug AOV selection\n";
+		return false;
+	}
+	for (const char *passCall : requiredSurfelPassOrder)
+	{
+		const std::size_t passPos = recordRayTracingSource.find(passCall, surfelPassSearchPos);
+		if (passPos == std::string::npos)
+		{
+			std::cerr << "surfel GI pass gate missing ordered call: " << passCall << "\n";
+			return false;
+		}
+		surfelPassSearchPos = passPos + std::string(passCall).size();
+	}
+
+	const char *requiredTask8Symbols[] = {
+	    "enableSurfelGi",
+	    "surfelGiDebug",
+	    "Surfel GI Occupancy",
+	    "Surfel GI Gather",
+	    "surfelGiGenerated",
+	    "surfelGiCellOverflow",
+	    "surfelGiEvalAccepted"};
+	for (const char *symbol : requiredTask8Symbols)
+	{
+		if (!containsText(uiHeader, symbol) &&
+		    !containsText(uiSource, symbol) &&
+		    !containsText(engineCore, symbol) &&
+		    !containsText(engineHeader, symbol) &&
+		    !containsText(engineAuxiliaryHeader, symbol) &&
+		    !containsText(surfelCommon, symbol) &&
+		    !containsText(surfelGenerate, symbol) &&
+		    !containsText(surfelBuildCells, symbol) &&
+		    !containsText(surfelEvaluate, symbol))
+		{
+			std::cerr << "missing Task 8 surfel GI UI/diagnostic symbol: " << symbol << "\n";
+			return false;
+		}
+	}
+
+	const char *requiredSurfelUiAndSweepSymbols[] = {
+	    "bool enableSurfelGi = false",
+	    "bool surfelGiDebug = false",
+	    "int surfelGiMaxEvalCandidates = 8",
+	    "ImGui::Checkbox(\"Surfel GI Cache\", &pathTracerSettings.enableSurfelGi)",
+	    "ImGui::Checkbox(\"Surfel GI Debug\", &pathTracerSettings.surfelGiDebug)",
+	    "ImGui::SliderInt(\"Surfel Eval Candidates\", &pathTracerSettings.surfelGiMaxEvalCandidates, 1, 16)",
+	    "Surfel GI Generated",
+	    "Surfel GI Cell Overflow",
+	    "Surfel GI Eval Accepted",
+	    "SurfelGiOccupancy = 25",
+	    "SurfelGiGather = 26",
+	    "PathTracerDebugAov::SurfelGiOccupancy",
+	    "PathTracerDebugAov::SurfelGiGather",
+	    "surfelGiGenerated=%.1f",
+	    "surfelGiCellInserted=%.1f",
+	    "surfelGiCellOverflow=%.1f",
+	    "surfelGiEvalCandidates=%.1f",
+	    "surfelGiEvalAccepted=%.1f",
+	    "surfelGiEvalCellEmpty=%.1f",
+	    "stats.surfelGiGenerated",
+	    "stats.surfelGiCellInserted",
+	    "stats.surfelGiCellOverflow",
+	    "stats.surfelGiEvalCandidates",
+	    "stats.surfelGiEvalAccepted",
+	    "stats.surfelGiEvalCellEmpty"};
+	for (const char *symbol : requiredSurfelUiAndSweepSymbols)
+	{
+		if (!containsText(uiHeader, symbol) &&
+		    !containsText(uiSource, symbol) &&
+		    !containsText(engineCore, symbol) &&
+		    !containsText(engineHeader, symbol))
+		{
+			std::cerr << "missing Task 8 surfel GI UI/sweep contract: " << symbol << "\n";
+			return false;
+		}
 	}
 
 	const char *requiredRaygenSymbols[] = {

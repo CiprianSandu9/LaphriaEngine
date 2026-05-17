@@ -14,7 +14,7 @@ struct SurfelGiPushConstants
 {
     uint renderWidth;
     uint renderHeight;
-    uint pad0;
+    uint maxEvalCandidates;
     uint pad1;
 };
 [[vk::push_constant]] SurfelGiPushConstants push;
@@ -76,7 +76,8 @@ void surfelEvaluateMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         return;
     }
 
-    uint boundedCandidateCount = min(count, SURFEL_GI_MAX_EVAL_CANDIDATES);
+    uint configuredCandidateCount = clamp(push.maxEvalCandidates, 1u, SURFEL_GI_MAX_EVAL_CANDIDATES);
+    uint boundedCandidateCount = min(count, configuredCandidateCount);
     uint accepted = 0u;
     for (uint slot = 0u; slot < boundedCandidateCount; ++slot)
     {

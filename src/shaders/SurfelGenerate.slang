@@ -14,7 +14,7 @@ struct SurfelGiPushConstants
 {
     uint renderWidth;
     uint renderHeight;
-    uint pad0;
+    uint maxEvalCandidates;
     uint pad1;
 };
 [[vk::push_constant]] SurfelGiPushConstants push;
