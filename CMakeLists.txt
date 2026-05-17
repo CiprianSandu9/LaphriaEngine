@@ -33,6 +33,7 @@ set(SHADER_SOURCES
         "Raygen.slang|main"
         "Reprojection.slang|reprojectionMain"
         "Denoiser.slang|atrousMain"
+        "SurfelClear.slang|surfelClearMain"
 )
 
 if (CMAKE_CONFIGURATION_TYPES)

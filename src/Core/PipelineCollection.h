@@ -25,6 +25,7 @@ class PipelineCollection
 	void createRayTracingPipeline(const VulkanDevice &dev);
 	void createShaderBindingTable(const VulkanDevice &dev);
 	void createDenoiserPipelines(const VulkanDevice &dev);
+	void createSurfelGiClearPipeline(const VulkanDevice &dev);
 	void createClassicRTPipeline(const VulkanDevice &dev);
 	void createClassicRTShaderBindingTable(const VulkanDevice &dev);
 
@@ -36,6 +37,7 @@ class PipelineCollection
 	vk::raii::DescriptorSetLayout physicsDescriptorSetLayout{nullptr};
 	vk::raii::DescriptorSetLayout rayTracingDescriptorSetLayout{nullptr};
 	vk::raii::DescriptorSetLayout denoiserDescriptorSetLayout{nullptr};
+	vk::raii::DescriptorSetLayout surfelGiDescriptorSetLayout{nullptr};
 
 	// ── Pipelines ─────────────────────────────────────────────────────────
 	vk::raii::Pipeline graphicsPipeline{nullptr};
@@ -50,6 +52,7 @@ class PipelineCollection
 	// Denoiser: two compute pipelines (temporal reprojection + spatial A-Trous).
 	vk::raii::Pipeline reprojectionPipeline{nullptr};
 	vk::raii::Pipeline atrousPipeline{nullptr};
+	vk::raii::Pipeline surfelGiClearPipeline{nullptr};
 
 	// ── Pipeline Layouts ──────────────────────────────────────────────────
 	vk::raii::PipelineLayout graphicsPipelineLayout{nullptr};
@@ -60,6 +63,7 @@ class PipelineCollection
 
 	vk::raii::PipelineLayout rayTracingPipelineLayout{nullptr};
 	vk::raii::PipelineLayout denoiserPipelineLayout{nullptr};
+	vk::raii::PipelineLayout surfelGiPipelineLayout{nullptr};
 
 	// ── Shader Binding Table (SBT) — Path Tracer ─────────────────────────
 	Laphria::VulkanUtils::VmaBuffer   raygenSBTBuffer{};
@@ -89,7 +93,9 @@ class PipelineCollection
 	void createPhysicsDescriptorSetLayout(const VulkanDevice &dev);
 	void createRayTracingDescriptorSetLayout(const VulkanDevice &dev);
 	void createDenoiserDescriptorSetLayout(const VulkanDevice &dev);
+	void createSurfelGiDescriptorSetLayout(const VulkanDevice &dev);
 	void createDenoiserPipelineLayout(const VulkanDevice &dev);
+	void createSurfelGiPipelineLayout(const VulkanDevice &dev);
 	void createGraphicsPipelineLayout(const VulkanDevice &dev);
 	void createShadowPipelineLayout(const VulkanDevice &dev);
 	void createComputePipelineLayout(const VulkanDevice &dev);

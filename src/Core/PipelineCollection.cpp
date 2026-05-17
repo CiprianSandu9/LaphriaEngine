@@ -52,6 +52,7 @@ void PipelineCollection::createDescriptorSetLayouts(const VulkanDevice &dev)
 	createRayTracingDescriptorSetLayout(dev);
 	createPhysicsDescriptorSetLayout(dev);
 	createDenoiserDescriptorSetLayout(dev);
+	createSurfelGiDescriptorSetLayout(dev);
 }
 
 // ── Descriptor Set Layout Implementations ──────────────────────────────────
@@ -69,7 +70,7 @@ void PipelineCollection::createGlobalDescriptorSetLayout(const VulkanDevice &dev
 	        .descriptorCount = 1,
 	        .stageFlags      = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment |
 	                      vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR |
-	                      vk::ShaderStageFlagBits::eMissKHR},
+	                      vk::ShaderStageFlagBits::eMissKHR | vk::ShaderStageFlagBits::eCompute},
 	    vk::DescriptorSetLayoutBinding{
 	        .binding         = 1,
 	        .descriptorType  = vk::DescriptorType::eSampledImage,
@@ -332,6 +333,23 @@ void PipelineCollection::createDenoiserDescriptorSetLayout(const VulkanDevice &d
 
 // ── Pipeline Layout Implementations ────────────────────────────────────────
 
+void PipelineCollection::createSurfelGiDescriptorSetLayout(const VulkanDevice &dev)
+{
+	constexpr vk::ShaderStageFlags surfelBufferStages =
+	    vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eRaygenKHR;
+	std::array<vk::DescriptorSetLayoutBinding, 6> bindings = {
+	    vk::DescriptorSetLayoutBinding{.binding = 0, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = surfelBufferStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = surfelBufferStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 2, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = surfelBufferStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 3, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = surfelBufferStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 4, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = surfelBufferStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 5, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute}};
+	vk::DescriptorSetLayoutCreateInfo layoutInfo{
+	    .bindingCount = static_cast<uint32_t>(bindings.size()),
+	    .pBindings    = bindings.data()};
+	surfelGiDescriptorSetLayout = vk::raii::DescriptorSetLayout(dev.logicalDevice, layoutInfo);
+}
+
 void PipelineCollection::createShadowPipelineLayout(const VulkanDevice &dev)
 {
 	// The shadow pass only needs the global UBO (set 0) for cascade view-proj matrices.
@@ -425,6 +443,15 @@ void PipelineCollection::createRayTracingPipelineLayout(const VulkanDevice &dev)
 }
 
 // ── Pipeline Implementations ───────────────────────────────────────────────
+
+void PipelineCollection::createSurfelGiPipelineLayout(const VulkanDevice &dev)
+{
+	std::array layouts = {*surfelGiDescriptorSetLayout, *descriptorSetLayoutGlobal};
+	vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
+	    .setLayoutCount = static_cast<uint32_t>(layouts.size()),
+	    .pSetLayouts    = layouts.data()};
+	surfelGiPipelineLayout = vk::raii::PipelineLayout(dev.logicalDevice, pipelineLayoutInfo);
+}
 
 void PipelineCollection::createGraphicsPipeline(VulkanDevice &dev, vk::Format colorFormat, vk::Format depthFormat)
 {
@@ -892,6 +919,21 @@ void PipelineCollection::createDenoiserPipelines(const VulkanDevice &dev)
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+void PipelineCollection::createSurfelGiClearPipeline(const VulkanDevice &dev)
+{
+	createSurfelGiPipelineLayout(dev);
+
+	vk::raii::ShaderModule shaderModule = createShaderModule(dev, readFile("Shaders/SurfelClear.slang.spv"));
+	vk::PipelineShaderStageCreateInfo computeShaderStageInfo{
+	    .stage  = vk::ShaderStageFlagBits::eCompute,
+	    .module = *shaderModule,
+	    .pName  = "surfelClearMain"};
+	vk::ComputePipelineCreateInfo pipelineInfo{
+	    .stage  = computeShaderStageInfo,
+	    .layout = *surfelGiPipelineLayout};
+	surfelGiClearPipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
+}
 
 vk::raii::ShaderModule PipelineCollection::createShaderModule(const VulkanDevice            &dev,
                                                               const std::vector<char> &code) const

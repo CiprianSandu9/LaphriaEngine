@@ -233,6 +233,39 @@ bool requirePersistentSurfelFrameResources(const std::string &frameContextHeader
 	return true;
 }
 
+bool requireSurfelClearPassContracts(const std::string &pipelineHeader,
+                                     const std::string &pipelineSource,
+                                     const std::string &engineHeader,
+                                     const std::string &engineCore,
+                                     const std::string &surfelClear)
+{
+	const char *pipelineSymbols[] = {
+	    "surfelGiDescriptorSetLayout",
+	    "surfelGiPipelineLayout",
+	    "surfelGiClearPipeline",
+	    "createSurfelGiDescriptorSetLayout",
+	    "createSurfelGiClearPipeline"};
+
+	for (const char *symbol : pipelineSymbols)
+	{
+		if (!containsText(pipelineHeader, symbol) && !containsText(pipelineSource, symbol))
+			return false;
+	}
+
+	const char *engineSymbols[] = {
+	    "createSurfelGiDescriptorSets",
+	    "recordSurfelGiClearPass"};
+
+	for (const char *symbol : engineSymbols)
+	{
+		if (!containsText(engineHeader, symbol) && !containsText(engineCore, symbol))
+			return false;
+	}
+
+	return containsText(surfelClear, "void surfelClearMain") &&
+	       containsText(surfelClear, "surfelGiClearDispatchesOffset");
+}
+
 bool requireIndexedBrightSurfelShaderContracts(const std::string &raygen)
 {
 	const std::string brightSurfelStore =
@@ -622,12 +655,17 @@ bool testPathTracerReservoirGiMeasurementContract()
 	const std::string uiSource = readTextFile(sourceRoot / "src" / "Core" / "UISystem.cpp");
 	const std::string frameContextHeader = readTextFile(sourceRoot / "src" / "Core" / "FrameContext.h");
 	const std::string frameContextSource = readTextFile(sourceRoot / "src" / "Core" / "FrameContext.cpp");
+	const std::string pipelineHeader = readTextFile(sourceRoot / "src" / "Core" / "PipelineCollection.h");
+	const std::string pipelineSource = readTextFile(sourceRoot / "src" / "Core" / "PipelineCollection.cpp");
+	const std::string engineHeader = readTextFile(sourceRoot / "src" / "Core" / "EngineCore.h");
+	const std::string surfelClear = readTextFile(sourceRoot / "src" / "shaders" / "SurfelClear.slang");
 	const std::string resourceManager = readTextFile(sourceRoot / "src" / "Core" / "ResourceManager.cpp");
 	const std::string gltfImporter    = readTextFile(sourceRoot / "src" / "Core" / "GltfImporter.cpp");
 
 	if (raygen.empty() || engineCore.empty() || engineAuxiliaryHeader.empty() ||
 	    uiHeader.empty() || uiSource.empty() || frameContextHeader.empty() ||
-	    frameContextSource.empty() || resourceManager.empty() || gltfImporter.empty())
+	    frameContextSource.empty() || pipelineHeader.empty() || pipelineSource.empty() ||
+	    engineHeader.empty() || resourceManager.empty() || gltfImporter.empty())
 	{
 		std::cerr << "failed to read reservoir GI measurement contract sources\n";
 		return false;
@@ -642,6 +680,12 @@ bool testPathTracerReservoirGiMeasurementContract()
 	if (!requirePersistentSurfelFrameResources(frameContextHeader, frameContextSource))
 	{
 		std::cerr << "persistent surfel GI frame resource contract is incomplete\n";
+		return false;
+	}
+
+	if (!requireSurfelClearPassContracts(pipelineHeader, pipelineSource, engineHeader, engineCore, surfelClear))
+	{
+		std::cerr << "persistent surfel GI clear pass contract is incomplete\n";
 		return false;
 	}
 

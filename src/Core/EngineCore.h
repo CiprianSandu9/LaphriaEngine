@@ -59,6 +59,10 @@ class EngineCore
 	// Denoiser Resources (one set per frame in flight)
 	vk::raii::DescriptorPool             denoiserDescriptorPool{nullptr};
 	std::vector<vk::raii::DescriptorSet> denoiserDescriptorSets;
+
+	// Surfel GI Resources (one set per frame in flight)
+	vk::raii::DescriptorPool             surfelGiDescriptorPool{nullptr};
+	std::vector<vk::raii::DescriptorSet> surfelGiDescriptorSets;
 	vk::raii::QueryPool                  ptTimestampQueryPool{nullptr};
 	float                                timestampPeriodNs = 1.0f;
 	std::array<bool, MAX_FRAMES_IN_FLIGHT>       ptTimestampsValid{};
@@ -281,11 +285,13 @@ class EngineCore
 
 	void createRayTracingDescriptorSets();
 	void createDenoiserDescriptorSets();
+	void createSurfelGiDescriptorSets();
 
 	void recordComputeCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordSkinningPass(const vk::raii::CommandBuffer &commandBuffer) const;
 	void recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
+	void recordSurfelGiClearPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
 
 	void createDescriptorPool();
 
