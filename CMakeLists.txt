@@ -35,6 +35,7 @@ set(SHADER_SOURCES
         "Denoiser.slang|atrousMain"
         "SurfelClear.slang|surfelClearMain"
         "SurfelGenerate.slang|surfelGenerateMain"
+        "SurfelIntegrate.slang|surfelIntegrateMain"
         "SurfelBuildCells.slang|surfelBuildCellsMain"
         "SurfelEvaluate.slang|surfelEvaluateMain"
 )

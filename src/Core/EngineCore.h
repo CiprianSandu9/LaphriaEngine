@@ -303,6 +303,7 @@ class EngineCore
 	void recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordSurfelGiClearPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
 	void recordSurfelGiGeneratePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
+	void recordSurfelGiIntegratePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
 	void recordSurfelGiBuildCellsPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
 	void recordSurfelGiEvaluatePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
 

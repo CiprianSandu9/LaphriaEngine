@@ -417,6 +417,70 @@ bool requireSurfelBuildCellsPassContracts(const std::string &cmakeLists,
 	       containsText(buildCellsMain, "InterlockedAdd(cell.count");
 }
 
+bool requireSurfelIntegratePassContracts(const std::string &cmakeLists,
+                                         const std::string &pipelineHeader,
+                                         const std::string &pipelineSource,
+                                         const std::string &engineHeader,
+                                         const std::string &engineCore,
+                                         const std::string &frameContextSource,
+                                         const std::string &surfelClear,
+                                         const std::string &surfelGenerate,
+                                         const std::string &surfelIntegrate)
+{
+	const char *requiredSymbols[] = {
+	    "surfelGiIntegratePipeline",
+	    "createSurfelGiIntegratePipeline",
+	    "recordSurfelGiIntegratePass",
+	    "void surfelIntegrateMain",
+	    "radianceAge",
+	    "normalConfidence"};
+
+	for (const char *symbol : requiredSymbols)
+	{
+		if (!containsText(cmakeLists, symbol) &&
+		    !containsText(pipelineHeader, symbol) &&
+		    !containsText(pipelineSource, symbol) &&
+		    !containsText(engineHeader, symbol) &&
+		    !containsText(engineCore, symbol) &&
+		    !containsText(surfelIntegrate, symbol))
+			return false;
+	}
+
+	const std::string integrateMain =
+	    stripComments(extractFunctionBody(surfelIntegrate, "void surfelIntegrateMain("));
+	const std::string generateMain =
+	    stripComments(extractFunctionBody(surfelGenerate, "void surfelGenerateMain("));
+	const std::string clearMain =
+	    stripComments(extractFunctionBody(surfelClear, "void surfelClearMain("));
+	if (integrateMain.empty())
+		return false;
+
+	return containsText(cmakeLists, "SurfelIntegrate.slang|surfelIntegrateMain") &&
+	       containsText(surfelIntegrate, "#include \"SurfelCommon.slang\"") &&
+	       containsText(surfelIntegrate, "[shader(\"compute\")]") &&
+	       containsText(surfelIntegrate, "[numthreads(128, 1, 1)]") &&
+	       containsText(surfelIntegrate, "[[vk::binding(0, 0)]] RWStructuredBuffer<SurfelGiRecord>") &&
+	       containsText(surfelIntegrate, "[[vk::binding(3, 0)]] RWByteAddressBuffer surfelGiCounters") &&
+	       containsText(surfelIntegrate, "[[vk::binding(4, 0)]] RWByteAddressBuffer ptAnalysisCounters") &&
+	       containsText(surfelIntegrate, "[[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo") &&
+	       containsText(integrateMain, "(record.flags & 1u) == 0u") &&
+	       containsText(integrateMain, "record.radianceAge.w") &&
+	       containsText(integrateMain, "record.normalConfidence.w") &&
+	       !containsText(integrateMain, "lastSeenFrame = ubo.frameCount") &&
+	       containsText(integrateMain, "surfelGiRecords[surfelIndex] = record") &&
+	       !containsText(clearMain, "surfelGiRecords[index] = record") &&
+	       containsText(frameContextSource, "eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst") &&
+	       containsText(frameContextSource, "cmd.fillBuffer(*buffer, 0, recordBufferSize, 0u)") &&
+	       containsText(frameContextSource, "vk::PipelineStageFlagBits2::eTransfer") &&
+	       containsText(frameContextSource, "vk::AccessFlagBits2::eTransferWrite") &&
+	       containsText(generateMain, "previous.radianceAge") &&
+	       containsText(generateMain, "previous.normalConfidence.w") &&
+	       containsText(generateMain, "record.lastSeenFrame = ubo.frameCount") &&
+	       containsText(pipelineSource, "Shaders/SurfelIntegrate.slang.spv") &&
+	       containsText(pipelineSource, "surfelIntegrateMain") &&
+	       containsText(engineCore, "recordSurfelGiIntegratePass(commandBuffer, fi);");
+}
+
 bool requireSurfelEvaluatePassContracts(const std::string &cmakeLists,
                                         const std::string &pipelineHeader,
                                         const std::string &pipelineSource,
@@ -1009,6 +1073,7 @@ bool testPathTracerReservoirGiMeasurementContract()
 	const std::string engineHeader = readTextFile(sourceRoot / "src" / "Core" / "EngineCore.h");
 	const std::string surfelClear = readTextFile(sourceRoot / "src" / "shaders" / "SurfelClear.slang");
 	const std::string surfelGenerate = readTextFile(sourceRoot / "src" / "shaders" / "SurfelGenerate.slang");
+	const std::string surfelIntegrate = readTextFile(sourceRoot / "src" / "shaders" / "SurfelIntegrate.slang");
 	const std::string surfelBuildCells = readTextFile(sourceRoot / "src" / "shaders" / "SurfelBuildCells.slang");
 	const std::string surfelEvaluate = readTextFile(sourceRoot / "src" / "shaders" / "SurfelEvaluate.slang");
 	const std::string denoiser = readTextFile(sourceRoot / "src" / "shaders" / "Denoiser.slang");
@@ -1046,6 +1111,14 @@ bool testPathTracerReservoirGiMeasurementContract()
 	                                        engineHeader, engineCore, surfelGenerate))
 	{
 		std::cerr << "persistent surfel GI generate pass contract is incomplete\n";
+		return false;
+	}
+
+	if (!requireSurfelIntegratePassContracts(cmakeLists, pipelineHeader, pipelineSource,
+	                                         engineHeader, engineCore, frameContextSource, surfelClear,
+	                                         surfelGenerate, surfelIntegrate))
+	{
+		std::cerr << "persistent surfel GI integrate pass contract is incomplete\n";
 		return false;
 	}
 
@@ -1089,6 +1162,7 @@ bool testPathTracerReservoirGiMeasurementContract()
 	const char *requiredSurfelPassOrder[] = {
 	    "recordSurfelGiClearPass(commandBuffer, fi);",
 	    "recordSurfelGiGeneratePass(commandBuffer, fi);",
+	    "recordSurfelGiIntegratePass(commandBuffer, fi);",
 	    "recordSurfelGiBuildCellsPass(commandBuffer, fi);",
 	    "recordSurfelGiEvaluatePass(commandBuffer, fi);"};
 	std::size_t surfelPassSearchPos = recordRayTracingSource.find(requiredSurfelPassOrder[0]);

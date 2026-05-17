@@ -489,6 +489,7 @@ void EngineCore::initVulkan()
 	pipelines.createDenoiserPipelines(vulkan);
 	pipelines.createSurfelGiClearPipeline(vulkan);
 	pipelines.createSurfelGiGeneratePipeline(vulkan);
+	pipelines.createSurfelGiIntegratePipeline(vulkan);
 	pipelines.createSurfelGiBuildCellsPipeline(vulkan);
 	pipelines.createSurfelGiEvaluatePipeline(vulkan);
 	pipelines.createClassicRTPipeline(vulkan);
@@ -1606,6 +1607,31 @@ void EngineCore::recordSurfelGiGeneratePass(const vk::raii::CommandBuffer &comma
 	commandBuffer.pipelineBarrier2(dependency);
 }
 
+void EngineCore::recordSurfelGiIntegratePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
+{
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiIntegratePipeline);
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+	                                 *pipelines.surfelGiPipelineLayout, 0,
+	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
+
+	constexpr uint32_t groups = (FrameContext::kSurfelGiMaxSurfels + 127u) / 128u;
+	commandBuffer.dispatch(groups, 1, 1);
+
+	std::array<vk::BufferMemoryBarrier2, 1> barriers = {
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.surfelGiRecordBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = FrameContext::kSurfelGiMaxSurfels * FrameContext::kSurfelGiRecordSize}};
+	vk::DependencyInfo dependency{
+	    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
+	    .pBufferMemoryBarriers    = barriers.data()};
+	commandBuffer.pipelineBarrier2(dependency);
+}
+
 void EngineCore::recordSurfelGiBuildCellsPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
 {
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiBuildCellsPipeline);
@@ -1810,6 +1836,7 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	{
 		recordSurfelGiClearPass(commandBuffer, fi);
 		recordSurfelGiGeneratePass(commandBuffer, fi);
+		recordSurfelGiIntegratePass(commandBuffer, fi);
 		recordSurfelGiBuildCellsPass(commandBuffer, fi);
 		recordSurfelGiEvaluatePass(commandBuffer, fi);
 	}

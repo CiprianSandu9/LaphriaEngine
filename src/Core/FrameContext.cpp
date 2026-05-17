@@ -752,7 +752,7 @@ void FrameContext::createSurfelGiBuffers(const VulkanDevice &dev, const Swapchai
         if (createFixedBuffers) {
             VulkanUtils::VmaBuffer recordBuffer{};
             VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, recordBufferSize,
-                                      vk::BufferUsageFlagBits::eStorageBuffer,
+                                      vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
                                       vk::MemoryPropertyFlagBits::eDeviceLocal,
                                       recordBuffer);
             surfelGiRecordBuffers.push_back(std::move(recordBuffer));
@@ -795,6 +795,25 @@ void FrameContext::createSurfelGiBuffers(const VulkanDevice &dev, const Swapchai
 
     {
         auto cmd = VulkanUtils::beginSingleTimeCommands(dev.logicalDevice, commandPool);
+        if (createFixedBuffers) {
+            std::vector<vk::BufferMemoryBarrier2> recordInitBarriers;
+            recordInitBarriers.reserve(surfelGiRecordBuffers.size());
+            for (auto &buffer : surfelGiRecordBuffers) {
+                cmd.fillBuffer(*buffer, 0, recordBufferSize, 0u);
+                recordInitBarriers.push_back(vk::BufferMemoryBarrier2{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+                    .buffer = *buffer,
+                    .offset = 0,
+                    .size = recordBufferSize});
+            }
+            vk::DependencyInfo dependency{
+                .bufferMemoryBarrierCount = static_cast<uint32_t>(recordInitBarriers.size()),
+                .pBufferMemoryBarriers = recordInitBarriers.data()};
+            cmd.pipelineBarrier2(dependency);
+        }
         for (auto &img : surfelGiDebugImages) {
             VulkanUtils::recordImageLayoutTransition(cmd, *img,
                                                      vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);

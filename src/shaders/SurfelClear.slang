@@ -22,19 +22,6 @@ void surfelClearMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         ptAnalysisCounters.InterlockedAdd(surfelGiClearDispatchesOffset, 1u);
     }
 
-    if (index < SURFEL_GI_MAX_SURFELS)
-    {
-        SurfelGiRecord record;
-        record.positionRadius = float4(0.0f, 0.0f, 0.0f, 0.0f);
-        record.normalConfidence = float4(0.0f, 0.0f, 0.0f, 0.0f);
-        record.radianceAge = float4(0.0f, 0.0f, 0.0f, 0.0f);
-        record.flags = 0u;
-        record.lastSeenFrame = 0u;
-        record.cellIndex = 0xffffffffu;
-        record.pad0 = 0u;
-        surfelGiRecords[index] = record;
-    }
-
     if (index < SURFEL_GI_CELL_COUNT)
     {
         SurfelGiCell cell;
