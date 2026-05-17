@@ -389,6 +389,50 @@ bool requireSurfelBuildCellsPassContracts(const std::string &cmakeLists,
 	       containsText(buildCellsMain, "InterlockedAdd(cell.count");
 }
 
+bool requireSurfelEvaluatePassContracts(const std::string &cmakeLists,
+                                        const std::string &pipelineHeader,
+                                        const std::string &pipelineSource,
+                                        const std::string &engineHeader,
+                                        const std::string &engineCore,
+                                        const std::string &denoiser,
+                                        const std::string &surfelEvaluate)
+{
+	const char *requiredSymbols[] = {
+	    "surfelGiEvaluatePipeline",
+	    "createSurfelGiEvaluatePipeline",
+	    "void surfelEvaluateMain",
+	    "SURFEL_GI_MAX_EVAL_CANDIDATES",
+	    "surfelGiEvalAttemptsOffset",
+	    "surfelGiEvalCellEmptyOffset",
+	    "surfelGiEvalCandidatesOffset",
+	    "surfelGiEvalAcceptedOffset"};
+
+	for (const char *symbol : requiredSymbols)
+	{
+		if (!containsText(cmakeLists, symbol) &&
+		    !containsText(pipelineHeader, symbol) &&
+		    !containsText(pipelineSource, symbol) &&
+		    !containsText(engineHeader, symbol) &&
+		    !containsText(engineCore, symbol) &&
+		    !containsText(surfelEvaluate, symbol))
+			return false;
+	}
+
+	return containsText(cmakeLists, "SurfelEvaluate.slang|surfelEvaluateMain") &&
+	       containsText(surfelEvaluate, "[shader(\"compute\")]") &&
+	       containsText(surfelEvaluate, "[numthreads(8, 8, 1)]") &&
+	       containsText(surfelEvaluate, "SurfelGiPushConstants") &&
+	       containsText(surfelEvaluate, "push.renderWidth") &&
+	       containsText(surfelEvaluate, "push.renderHeight") &&
+	       containsText(engineCore, "recordSurfelGiEvaluatePass") &&
+	       containsText(engineCore, "commandBuffer.pushConstants<SurfelGiPushConstants>") &&
+	       containsText(denoiser, "surfelGiDebugView") &&
+	       containsText(denoiser, "DEBUG_AOV_SURFEL_GI_DIAGNOSTICS") &&
+	       containsText(pipelineSource, "binding = 15") &&
+	       containsText(engineCore, "dstBinding      = 15") &&
+	       containsText(engineCore, "frames.surfelGiDebugImageViews[i]");
+}
+
 bool requireIndexedBrightSurfelShaderContracts(const std::string &raygen)
 {
 	const std::string brightSurfelStore =
@@ -784,13 +828,15 @@ bool testPathTracerReservoirGiMeasurementContract()
 	const std::string surfelClear = readTextFile(sourceRoot / "src" / "shaders" / "SurfelClear.slang");
 	const std::string surfelGenerate = readTextFile(sourceRoot / "src" / "shaders" / "SurfelGenerate.slang");
 	const std::string surfelBuildCells = readTextFile(sourceRoot / "src" / "shaders" / "SurfelBuildCells.slang");
+	const std::string surfelEvaluate = readTextFile(sourceRoot / "src" / "shaders" / "SurfelEvaluate.slang");
+	const std::string denoiser = readTextFile(sourceRoot / "src" / "shaders" / "Denoiser.slang");
 	const std::string resourceManager = readTextFile(sourceRoot / "src" / "Core" / "ResourceManager.cpp");
 	const std::string gltfImporter    = readTextFile(sourceRoot / "src" / "Core" / "GltfImporter.cpp");
 
 	if (raygen.empty() || engineCore.empty() || engineAuxiliaryHeader.empty() ||
 	    uiHeader.empty() || uiSource.empty() || frameContextHeader.empty() ||
 	    frameContextSource.empty() || pipelineHeader.empty() || pipelineSource.empty() ||
-	    engineHeader.empty() || resourceManager.empty() || gltfImporter.empty())
+	    engineHeader.empty() || denoiser.empty() || resourceManager.empty() || gltfImporter.empty())
 	{
 		std::cerr << "failed to read reservoir GI measurement contract sources\n";
 		return false;
@@ -825,6 +871,13 @@ bool testPathTracerReservoirGiMeasurementContract()
 	                                          engineHeader, engineCore, surfelBuildCells))
 	{
 		std::cerr << "persistent surfel GI build-cells pass contract is incomplete\n";
+		return false;
+	}
+
+	if (!requireSurfelEvaluatePassContracts(cmakeLists, pipelineHeader, pipelineSource,
+	                                        engineHeader, engineCore, denoiser, surfelEvaluate))
+	{
+		std::cerr << "persistent surfel GI evaluate pass contract is incomplete\n";
 		return false;
 	}
 

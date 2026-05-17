@@ -306,10 +306,10 @@ void PipelineCollection::createRayTracingDescriptorSetLayout(const VulkanDevice 
 
 void PipelineCollection::createDenoiserDescriptorSetLayout(const VulkanDevice &dev)
 {
-	// 14 image/buffer bindings covering all denoiser pass inputs and outputs.
+	// Image/buffer bindings covering all denoiser pass inputs and outputs.
 	// Both reprojection and A-Trous shaders share this single layout, selecting
 	// the relevant bindings via the shader source.
-	std::array<vk::DescriptorSetLayoutBinding, 15> bindings = {
+	std::array<vk::DescriptorSetLayoutBinding, 16> bindings = {
 	    vk::DescriptorSetLayoutBinding{.binding = 0,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // noisy colour (reprojection input)
 	    vk::DescriptorSetLayoutBinding{.binding = 1,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // G-Buffer normals (current frame)
 	    vk::DescriptorSetLayoutBinding{.binding = 2,  .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // G-Buffer depth (current frame)
@@ -324,7 +324,8 @@ void PipelineCollection::createDenoiserDescriptorSetLayout(const VulkanDevice &d
 	    vk::DescriptorSetLayoutBinding{.binding = 11, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // previous-frame G-Buffer normals [(i+1)%2]
 	    vk::DescriptorSetLayoutBinding{.binding = 12, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // previous-frame G-Buffer depth   [(i+1)%2]
 	    vk::DescriptorSetLayoutBinding{.binding = 13, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},   // reprojection debug channels
-	    vk::DescriptorSetLayoutBinding{.binding = 14, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute}}; // PT analysis counters
+	    vk::DescriptorSetLayoutBinding{.binding = 14, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},  // PT analysis counters
+	    vk::DescriptorSetLayoutBinding{.binding = 15, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute}};  // surfel GI debug view
 	vk::DescriptorSetLayoutCreateInfo layoutInfo{
 	    .bindingCount = static_cast<uint32_t>(bindings.size()),
 	    .pBindings    = bindings.data()};
@@ -967,6 +968,19 @@ void PipelineCollection::createSurfelGiBuildCellsPipeline(const VulkanDevice &de
 	    .stage  = computeShaderStageInfo,
 	    .layout = *surfelGiPipelineLayout};
 	surfelGiBuildCellsPipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
+}
+
+void PipelineCollection::createSurfelGiEvaluatePipeline(const VulkanDevice &dev)
+{
+	vk::raii::ShaderModule shaderModule = createShaderModule(dev, readFile("Shaders/SurfelEvaluate.slang.spv"));
+	vk::PipelineShaderStageCreateInfo computeShaderStageInfo{
+	    .stage  = vk::ShaderStageFlagBits::eCompute,
+	    .module = *shaderModule,
+	    .pName  = "surfelEvaluateMain"};
+	vk::ComputePipelineCreateInfo pipelineInfo{
+	    .stage  = computeShaderStageInfo,
+	    .layout = *surfelGiPipelineLayout};
+	surfelGiEvaluatePipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
 }
 
 vk::raii::ShaderModule PipelineCollection::createShaderModule(const VulkanDevice            &dev,

@@ -36,6 +36,7 @@ set(SHADER_SOURCES
         "SurfelClear.slang|surfelClearMain"
         "SurfelGenerate.slang|surfelGenerateMain"
         "SurfelBuildCells.slang|surfelBuildCellsMain"
+        "SurfelEvaluate.slang|surfelEvaluateMain"
 )
 
 if (CMAKE_CONFIGURATION_TYPES)

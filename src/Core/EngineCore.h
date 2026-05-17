@@ -294,6 +294,7 @@ class EngineCore
 	void recordSurfelGiClearPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
 	void recordSurfelGiGeneratePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
 	void recordSurfelGiBuildCellsPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
+	void recordSurfelGiEvaluatePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
 
 	void createDescriptorPool();
 

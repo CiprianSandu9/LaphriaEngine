@@ -28,6 +28,7 @@ class PipelineCollection
 	void createSurfelGiClearPipeline(const VulkanDevice &dev);
 	void createSurfelGiGeneratePipeline(const VulkanDevice &dev);
 	void createSurfelGiBuildCellsPipeline(const VulkanDevice &dev);
+	void createSurfelGiEvaluatePipeline(const VulkanDevice &dev);
 	void createClassicRTPipeline(const VulkanDevice &dev);
 	void createClassicRTShaderBindingTable(const VulkanDevice &dev);
 
@@ -57,6 +58,7 @@ class PipelineCollection
 	vk::raii::Pipeline surfelGiClearPipeline{nullptr};
 	vk::raii::Pipeline surfelGiGeneratePipeline{nullptr};
 	vk::raii::Pipeline surfelGiBuildCellsPipeline{nullptr};
+	vk::raii::Pipeline surfelGiEvaluatePipeline{nullptr};
 
 	// ── Pipeline Layouts ──────────────────────────────────────────────────
 	vk::raii::PipelineLayout graphicsPipelineLayout{nullptr};
