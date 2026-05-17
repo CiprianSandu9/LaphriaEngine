@@ -267,6 +267,9 @@ static const uint reservoirGiBrightSurfelTrainingAttemptOffset = 348u;
 static const uint reservoirGiBrightSurfelTrainingStoreOffset = 352u;
 static const uint reservoirGiBrightSurfelTrainingRejectGeometryOffset = 356u;
 static const uint reservoirGiBrightSurfelTrainingRejectTargetOffset = 360u;
+static const uint reservoirGiBrightSurfelSelectorRejectGeometryOffset = 364u;
+static const uint reservoirGiBrightSurfelSelectorRejectTargetOffset = 368u;
+static const uint reservoirGiBrightSurfelSelectorViableOffset = 372u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_NONE = 0u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_GEOMETRY = 1u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_NO_LIGHT = 2u;
@@ -352,6 +355,15 @@ struct ReservoirGiBrightSurfelRecord {
     uint frameId;
     uint flags;
     uint sourcePixel;
+};
+
+static const uint BRIGHT_SURFEL_TARGET_REJECT_NONE = 0u;
+static const uint BRIGHT_SURFEL_TARGET_REJECT_GEOMETRY = 1u;
+static const uint BRIGHT_SURFEL_TARGET_REJECT_TARGET = 2u;
+
+struct BrightSurfelTargetEstimateResult {
+    ReservoirGiTargetEvaluation targetEvaluation;
+    uint rejectReason;
 };
 
 RayPayload makeVisibilityPayload()
@@ -2419,10 +2431,13 @@ bool shouldTrainBrightReceiverSurfel(uint2 launchID, uint2 launchSize)
 
 bool selectWeightedGlobalBrightReceiverSurfelRecord(float3 hitPos,
                                                     float3 N,
+                                                    float3 V,
+                                                    RayPayload primaryPayload,
                                                     uint2 launchID,
                                                     uint2 launchSize,
                                                     inout uint rngState,
                                                     out ReservoirGiBrightSurfelRecord selectedSurfel,
+                                                    out ReservoirGiTargetEvaluation selectedTargetEvaluation,
                                                     out float surfelSelectionPdf)
 {
     selectedSurfel.position = float3(0.0, 0.0, 0.0);
@@ -2434,6 +2449,12 @@ bool selectWeightedGlobalBrightReceiverSurfelRecord(float3 hitPos,
     selectedSurfel.frameId = 0u;
     selectedSurfel.flags = 0u;
     selectedSurfel.sourcePixel = 0u;
+    selectedTargetEvaluation.contribution = float3(0.0, 0.0, 0.0);
+    selectedTargetEvaluation.suffixRadiance = float3(0.0, 0.0, 0.0);
+    selectedTargetEvaluation.targetWeight = 0.0;
+    selectedTargetEvaluation.sourcePdf = 0.0;
+    selectedTargetEvaluation.validGeometry = false;
+    selectedTargetEvaluation.validLight = false;
     surfelSelectionPdf = 0.0;
 
     ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelAttemptOffset, 1u);
@@ -2450,33 +2471,29 @@ bool selectWeightedGlobalBrightReceiverSurfelRecord(float3 hitPos,
             continue;
         }
 
-        float3 toSurfel = surfel.position - hitPos;
-        float dist2 = dot(toSurfel, toSurfel);
-        if (dist2 <= 0.0001 || !isFinitePositive(dist2)) {
+        BrightSurfelTargetEstimateResult estimate;
+        if (!estimateBrightSurfelTargetForReceiver(hitPos, N, V, primaryPayload,
+                                                   surfel, estimate)) {
+            if (estimate.rejectReason == BRIGHT_SURFEL_TARGET_REJECT_GEOMETRY) {
+                ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectGeometryOffset, 1u);
+            } else {
+                ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u);
+            }
             continue;
         }
 
-        float3 wi = toSurfel * rsqrt(dist2);
-        float receiverCos = dot(N, wi);
-        float surfelCos = dot(surfel.normal, -wi);
-        if (receiverCos <= 0.0 ||
-            surfelCos <= RESERVOIR_GI_BRIGHT_SURFEL_COS_THETA_MAX ||
-            !isSaneReservoirGiVector(wi, 1.1)) {
-            continue;
-        }
-
-        float score = pathTracerLuminance(max(surfel.radiance, float3(0.0, 0.0, 0.0))) *
-                      max(receiverCos, 0.0) *
-                      max(surfelCos, 0.0) /
-                      max(dist2, 0.0001);
+        float score = estimate.targetEvaluation.targetWeight;
         if (!isFinitePositive(score)) {
+            ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u);
             continue;
         }
+        ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorViableOffset, 1u);
 
         scoreSum += score;
         if (randomFloat(rngState) < score / max(scoreSum, 0.000001)) {
             selectedScore = score;
             selectedSurfel = surfel;
+            selectedTargetEvaluation = estimate.targetEvaluation;
             found = true;
         }
     }
@@ -2491,17 +2508,20 @@ bool selectWeightedGlobalBrightReceiverSurfelRecord(float3 hitPos,
     return true;
 }
 
-bool estimateBrightSurfelTargetBeforeVisibility(float3 hitPos,
-                                                float3 N,
-                                                float3 V,
-                                                RayPayload primaryPayload,
-                                                ReservoirGiBrightSurfelRecord surfel,
-                                                out ReservoirGiTargetEvaluation targetEvaluation)
+bool estimateBrightSurfelTargetForReceiver(float3 hitPos,
+                                           float3 N,
+                                           float3 V,
+                                           RayPayload primaryPayload,
+                                           ReservoirGiBrightSurfelRecord surfel,
+                                           out BrightSurfelTargetEstimateResult estimate)
 {
-    targetEvaluation = evaluateReservoirGiTargetAtPrimary(
-        hitPos, N, V, primaryPayload,
-        hitPos, float3(0.0, 1.0, 0.0),
-        float3(0.0, 0.0, 0.0), 1.0);
+    estimate.targetEvaluation.contribution = float3(0.0, 0.0, 0.0);
+    estimate.targetEvaluation.suffixRadiance = float3(0.0, 0.0, 0.0);
+    estimate.targetEvaluation.targetWeight = 0.0;
+    estimate.targetEvaluation.sourcePdf = 0.0;
+    estimate.targetEvaluation.validGeometry = false;
+    estimate.targetEvaluation.validLight = false;
+    estimate.rejectReason = BRIGHT_SURFEL_TARGET_REJECT_GEOMETRY;
 
     float3 toSurfel = surfel.position - hitPos;
     float dist2 = dot(toSurfel, toSurfel);
@@ -2525,15 +2545,21 @@ bool estimateBrightSurfelTargetBeforeVisibility(float3 hitPos,
     // The scan-space selection PDF is diagnostic only; it is not an absolute PDF over the surfel pool.
     float sourcePdf = 1.0;
 
-    targetEvaluation = evaluateReservoirGiTargetAtPrimary(hitPos, N, V, primaryPayload,
-                                                          surfel.position, surfel.normal,
-                                                          suffixRadiance, sourcePdf);
-    if (!targetEvaluation.validGeometry ||
-        !targetEvaluation.validLight ||
-        targetEvaluation.targetWeight <= RESERVOIR_GI_BRIGHT_SURFEL_CANDIDATE_MIN_TARGET_WEIGHT) {
+    estimate.targetEvaluation = evaluateReservoirGiTargetAtPrimary(hitPos, N, V, primaryPayload,
+                                                                   surfel.position, surfel.normal,
+                                                                   suffixRadiance, sourcePdf);
+    if (!estimate.targetEvaluation.validGeometry) {
+        estimate.rejectReason = BRIGHT_SURFEL_TARGET_REJECT_GEOMETRY;
         return false;
     }
 
+    estimate.rejectReason = BRIGHT_SURFEL_TARGET_REJECT_TARGET;
+    if (!estimate.targetEvaluation.validLight ||
+        estimate.targetEvaluation.targetWeight <= RESERVOIR_GI_BRIGHT_SURFEL_CANDIDATE_MIN_TARGET_WEIGHT) {
+        return false;
+    }
+
+    estimate.rejectReason = BRIGHT_SURFEL_TARGET_REJECT_NONE;
     return true;
 }
 
@@ -2567,9 +2593,13 @@ bool evaluateBrightReceiverSurfelReservoirGiCandidate(float3 hitPos,
     }
 
     ReservoirGiBrightSurfelRecord surfel;
+    ReservoirGiTargetEvaluation selectedTargetEvaluation;
     float surfelSelectionPdf;
-    if (!selectWeightedGlobalBrightReceiverSurfelRecord(hitPos, N, launchID, launchSize,
-                                                       rngState, surfel, surfelSelectionPdf)) {
+    // Scan-local selector diagnostic only; do not feed it into target sourcePdf or reservoir weight.
+    if (!selectWeightedGlobalBrightReceiverSurfelRecord(hitPos, N, V, primaryPayload,
+                                                       launchID, launchSize,
+                                                       rngState, surfel, selectedTargetEvaluation,
+                                                       surfelSelectionPdf)) {
         return false;
     }
 
@@ -2591,12 +2621,7 @@ bool evaluateBrightReceiverSurfelReservoirGiCandidate(float3 hitPos,
         return false;
     }
 
-    ReservoirGiTargetEvaluation targetEvaluation;
-    if (!estimateBrightSurfelTargetBeforeVisibility(hitPos, N, V, primaryPayload,
-                                                    surfel, targetEvaluation)) {
-        ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelPrecheckRejectTargetOffset, 1u);
-        return false;
-    }
+    ReservoirGiTargetEvaluation targetEvaluation = selectedTargetEvaluation;
 
     RayPayload visibilityPayload = makeVisibilityPayload();
     RayDesc visibilityRay;

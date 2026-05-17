@@ -29,6 +29,63 @@ bool containsText(const std::string &haystack, const char *needle)
 	return haystack.find(needle) != std::string::npos;
 }
 
+std::string extractFunctionBody(const std::string &source, const char *signature)
+{
+	const size_t signaturePos = source.find(signature);
+	if (signaturePos == std::string::npos)
+	{
+		return {};
+	}
+	const size_t bodyStart = source.find('{', signaturePos);
+	if (bodyStart == std::string::npos)
+	{
+		return {};
+	}
+
+	int depth = 0;
+	for (size_t i = bodyStart; i < source.size(); ++i)
+	{
+		if (source[i] == '{')
+		{
+			++depth;
+		}
+		else if (source[i] == '}')
+		{
+			--depth;
+			if (depth == 0)
+			{
+				return source.substr(bodyStart, i - bodyStart + 1u);
+			}
+		}
+	}
+	return {};
+}
+
+bool brightSurfelCombineUsesTargetWeight(const std::string &raygen)
+{
+	const std::string reservoirSampling =
+	    extractFunctionBody(raygen, "FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(");
+	if (reservoirSampling.empty())
+	{
+		return false;
+	}
+	const std::size_t sourcePos =
+	    reservoirSampling.find("RESERVOIR_GI_SOURCE_BRIGHT_SURFEL");
+	if (sourcePos == std::string::npos)
+	{
+		return false;
+	}
+	const std::size_t combinePos =
+	    reservoirSampling.rfind("combineReservoirGiCandidate(surfelRecord,", sourcePos);
+	if (combinePos == std::string::npos)
+	{
+		return false;
+	}
+	const std::string combineSnippet =
+	    reservoirSampling.substr(combinePos, sourcePos - combinePos + sizeof("RESERVOIR_GI_SOURCE_BRIGHT_SURFEL"));
+	return containsText(combineSnippet, "surfelRecord.targetWeight");
+}
+
 uint64_t packConfigKey(const Laphria::PathTracerSweepConfig &cfg)
 {
 	const int scaled = static_cast<int>(std::lround(cfg.resolutionScale * 100.0f));
@@ -351,9 +408,14 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "reservoirGiBrightSurfelGlobalIndex",
 	    "reservoirGiBrightSurfelGlobalStoreIndex",
 	    "tryStoreBrightSurfelTrainingCandidate",
-	    "estimateBrightSurfelTargetBeforeVisibility",
 	    "selectWeightedGlobalBrightReceiverSurfelRecord",
 	    "surfelSelectionPdf",
+	    "BrightSurfelTargetEstimateResult",
+	    "BRIGHT_SURFEL_TARGET_REJECT_NONE",
+	    "BRIGHT_SURFEL_TARGET_REJECT_GEOMETRY",
+	    "BRIGHT_SURFEL_TARGET_REJECT_TARGET",
+	    "estimateBrightSurfelTargetForReceiver",
+	    "selectedTargetEvaluation",
 	    "evaluateBrightReceiverSurfelReservoirGiCandidate",
 	    "reservoirGiBrightSurfelStoreOffset",
 	    "reservoirGiBrightSurfelAttemptOffset",
@@ -369,6 +431,12 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "reservoirGiBrightSurfelTrainingStoreOffset",
 	    "reservoirGiBrightSurfelTrainingRejectGeometryOffset",
 	    "reservoirGiBrightSurfelTrainingRejectTargetOffset",
+	    "reservoirGiBrightSurfelSelectorRejectGeometryOffset",
+	    "reservoirGiBrightSurfelSelectorRejectTargetOffset",
+	    "reservoirGiBrightSurfelSelectorViableOffset",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectGeometryOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorViableOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalSurfaceHitsOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalValidSamplesOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiLocalMissCandidatesOffset, 1u)",
@@ -391,6 +459,39 @@ bool testPathTracerReservoirGiMeasurementContract()
 			std::cerr << "missing reservoir GI measurement shader contract: " << symbol << "\n";
 			return false;
 		}
+	}
+	if (containsText(raygen, "estimateBrightSurfelTargetBeforeVisibility"))
+	{
+		std::cerr
+		    << "old bright surfel target estimator must be replaced by estimateBrightSurfelTargetForReceiver\n";
+		return false;
+	}
+	const std::string brightSurfelSelector =
+	    extractFunctionBody(raygen, "bool selectWeightedGlobalBrightReceiverSurfelRecord");
+	if (brightSurfelSelector.empty())
+	{
+		std::cerr << "missing bright surfel selector function body\n";
+		return false;
+	}
+	const char *requiredBrightSurfelSelectorSymbols[] = {
+	    "estimateBrightSurfelTargetForReceiver(hitPos, N, V, primaryPayload",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectGeometryOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorViableOffset, 1u)",
+	    "selectedTargetEvaluation = estimate.targetEvaluation",
+	    "float score = estimate.targetEvaluation.targetWeight"};
+	for (const char *symbol : requiredBrightSurfelSelectorSymbols)
+	{
+		if (!containsText(brightSurfelSelector, symbol))
+		{
+			std::cerr << "missing bright surfel selector-local shader contract: " << symbol << "\n";
+			return false;
+		}
+	}
+	if (!brightSurfelCombineUsesTargetWeight(raygen))
+	{
+		std::cerr << "bright surfel reservoir combine must use surfelRecord.targetWeight\n";
+		return false;
 	}
 	const char *forbiddenRaygenSymbols[] = {
 	    "candidateSecondarySun = targetEvaluation.suffixRadiance",
@@ -926,7 +1027,13 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    {"reservoirGiBrightSurfelTrainingRejectGeometry",
 	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelTrainingRejectGeometry), 356u},
 	    {"reservoirGiBrightSurfelTrainingRejectTarget",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelTrainingRejectTarget), 360u}};
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelTrainingRejectTarget), 360u},
+	    {"reservoirGiBrightSurfelSelectorRejectGeometry",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorRejectGeometry), 364u},
+	    {"reservoirGiBrightSurfelSelectorRejectTarget",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorRejectTarget), 368u},
+	    {"reservoirGiBrightSurfelSelectorViable",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorViable), 372u}};
 	for (const auto &counterOffset : counterOffsets)
 	{
 		if (counterOffset.offset != counterOffset.expectedOffset)
@@ -984,7 +1091,10 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "brightSurfelTrainingAttempt",
 	    "brightSurfelTrainingStore",
 	    "brightSurfelTrainingRejectGeometry",
-	    "brightSurfelTrainingRejectTarget"};
+	    "brightSurfelTrainingRejectTarget",
+	    "brightSurfelSelectorRejectGeometry",
+	    "brightSurfelSelectorRejectTarget",
+	    "brightSurfelSelectorViable"};
 	for (const char *fieldName : requiredBrightSurfelRowSummaryFields)
 	{
 		if (!containsText(engineCore, fieldName))
@@ -1150,6 +1260,9 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "reservoirGiBrightSurfelRejectTarget",
 	    "reservoirGiBrightSurfelAccepted",
 	    "reservoirGiSelectedBrightSurfel",
+	    "reservoirGiBrightSurfelSelectorRejectGeometry",
+	    "reservoirGiBrightSurfelSelectorRejectTarget",
+	    "reservoirGiBrightSurfelSelectorViable",
 	    "float reservoirGiConfidenceMAvg = 0.0f",
 	    "float reservoirGiLocalValidRatio = 0.0f",
 	    "Reservoir GI Confidence M Avg",
@@ -1174,7 +1287,10 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "Reservoir GI Bright Surfel Training Attempts",
 	    "Reservoir GI Bright Surfel Training Stores",
 	    "Reservoir GI Bright Surfel Training Reject Geometry",
-	    "Reservoir GI Bright Surfel Training Reject Target"};
+	    "Reservoir GI Bright Surfel Training Reject Target",
+	    "Reservoir GI Bright Surfel Selector Reject Geometry",
+	    "Reservoir GI Bright Surfel Selector Reject Target",
+	    "Reservoir GI Bright Surfel Selector Viable"};
 	for (const char *symbol : requiredCounterAndUiSymbols)
 	{
 		if (!containsText(engineAuxiliaryHeader, symbol) &&
@@ -1493,9 +1609,14 @@ bool testPathTracerDebugAovContract()
 	    "reservoirGiBrightSurfelGlobalIndex",
 	    "reservoirGiBrightSurfelGlobalStoreIndex",
 	    "tryStoreBrightSurfelTrainingCandidate",
-	    "estimateBrightSurfelTargetBeforeVisibility",
 	    "selectWeightedGlobalBrightReceiverSurfelRecord",
 	    "surfelSelectionPdf",
+	    "BrightSurfelTargetEstimateResult",
+	    "BRIGHT_SURFEL_TARGET_REJECT_NONE",
+	    "BRIGHT_SURFEL_TARGET_REJECT_GEOMETRY",
+	    "BRIGHT_SURFEL_TARGET_REJECT_TARGET",
+	    "estimateBrightSurfelTargetForReceiver",
+	    "selectedTargetEvaluation",
 	    "evaluateBrightReceiverSurfelReservoirGiCandidate",
 	    "reservoirGiBrightSurfelStoreOffset",
 	    "reservoirGiBrightSurfelAttemptOffset",
@@ -1511,6 +1632,12 @@ bool testPathTracerDebugAovContract()
 	    "reservoirGiBrightSurfelTrainingStoreOffset",
 	    "reservoirGiBrightSurfelTrainingRejectGeometryOffset",
 	    "reservoirGiBrightSurfelTrainingRejectTargetOffset",
+	    "reservoirGiBrightSurfelSelectorRejectGeometryOffset",
+	    "reservoirGiBrightSurfelSelectorRejectTargetOffset",
+	    "reservoirGiBrightSurfelSelectorViableOffset",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectGeometryOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorViableOffset, 1u)",
 	    "RESERVOIR_GI_CANDIDATE_SHADOWED_SUN_CACHE_CONTINUATION",
 	    "tryEvaluateReservoirGiReceiverCacheContinuation",
 	    "RESERVOIR_GI_CACHE_CONTINUATION_FLAG",
@@ -1602,6 +1729,39 @@ bool testPathTracerDebugAovContract()
 			std::cerr << "missing path tracer debug AOV shader symbol: " << symbol << "\n";
 			return false;
 		}
+	}
+	if (containsText(raygen, "estimateBrightSurfelTargetBeforeVisibility"))
+	{
+		std::cerr
+		    << "old bright surfel target estimator must be replaced by estimateBrightSurfelTargetForReceiver\n";
+		return false;
+	}
+	const std::string brightSurfelSelector =
+	    extractFunctionBody(raygen, "bool selectWeightedGlobalBrightReceiverSurfelRecord");
+	if (brightSurfelSelector.empty())
+	{
+		std::cerr << "missing bright surfel selector function body\n";
+		return false;
+	}
+	const char *requiredBrightSurfelSelectorSymbols[] = {
+	    "estimateBrightSurfelTargetForReceiver(hitPos, N, V, primaryPayload",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectGeometryOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorRejectTargetOffset, 1u)",
+	    "ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelSelectorViableOffset, 1u)",
+	    "selectedTargetEvaluation = estimate.targetEvaluation",
+	    "float score = estimate.targetEvaluation.targetWeight"};
+	for (const char *symbol : requiredBrightSurfelSelectorSymbols)
+	{
+		if (!containsText(brightSurfelSelector, symbol))
+		{
+			std::cerr << "missing bright surfel selector-local shader contract: " << symbol << "\n";
+			return false;
+		}
+	}
+	if (!brightSurfelCombineUsesTargetWeight(raygen))
+	{
+		std::cerr << "bright surfel reservoir combine must use surfelRecord.targetWeight\n";
+		return false;
 	}
 	for (const char *symbol : requiredDirectSunModeSymbols)
 	{

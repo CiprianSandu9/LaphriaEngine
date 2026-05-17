@@ -485,3 +485,33 @@ Outcome:
 - Sunlit Courtyard Wall is the only scenario with useful selected bright surfels, but the temporal-spatial bright row costs `197.030 ms` versus `162.614 ms` for Sun Receiver, and luma is essentially unchanged relative to Sun Receiver.
 
 Decision: Continue with surfel producer quality tuning.
+
+## Follow-Up: Target-Aware Selection Result
+
+Local run date: 2026-05-17.
+Build identity: local Debug build after target-aware bright surfel selection.
+
+| Scenario | Row | Luma | selector reject geometry | selector reject target | selector viable | accepted bright | selected bright | total ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Dark Courtyard | Sun Receiver | 0.01668 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 55.425 |
+| Dark Courtyard | Bright Surfel | 0.01631 | 373533.5 | 8.8 | 0.0 | 0.0 | 0.0 | 89.953 |
+| Dark Courtyard | Single Frame Sun Receiver | 0.01132 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 49.602 |
+| Dark Courtyard | Single Frame Bright Surfel | 0.01127 | 376522.4 | 8.2 | 0.0 | 0.0 | 0.0 | 84.578 |
+| Sunlit Courtyard Wall | Sun Receiver | 0.04113 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 158.665 |
+| Sunlit Courtyard Wall | Bright Surfel | 0.04141 | 3649069.8 | 486911.0 | 662.9 | 651.8 | 604.2 | 309.831 |
+| Sunlit Courtyard Wall | Single Frame Sun Receiver | 0.04231 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 87.072 |
+| Sunlit Courtyard Wall | Single Frame Bright Surfel | 0.04219 | 3645879.1 | 491057.6 | 659.8 | 648.8 | 603.2 | 248.916 |
+| Mid-Depth Interior | Sun Receiver | 0.03570 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 160.280 |
+| Mid-Depth Interior | Bright Surfel | 0.03571 | 3928970.0 | 107097.6 | 0.0 | 0.0 | 0.0 | 282.856 |
+| Mid-Depth Interior | Single Frame Sun Receiver | 0.02465 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 74.032 |
+| Mid-Depth Interior | Single Frame Bright Surfel | 0.02466 | 3940466.2 | 108774.5 | 0.0 | 0.0 | 0.0 | 213.683 |
+
+Outcome:
+
+- The target-aware selector confirms that Dark Courtyard and Mid-Depth Interior do not have receiver-viable bright surfels in the scanned pool. Both scenarios report `brightSurfelSelectorViable=0.0` in temporal-spatial and single-frame bright rows.
+- Mid-Depth still stores training surfels (`brightSurfelTrainingStore=3944.7` temporal-spatial, `3950.4` single-frame), but the selector rejects the scanned pool before visibility: about `3.93M` geometry rejects and `107k-109k` target rejects, with zero accepted bright surfels.
+- Sunlit Courtyard Wall remains the only useful case: around `660` viable selector candidates, `649-652` accepted bright surfels, and `603-604` selected bright surfels.
+- The cost is not acceptable. Sunlit temporal-spatial bright surfel costs `309.831 ms` versus `158.665 ms` for Sun Receiver, and Mid-Depth temporal-spatial bright surfel costs `282.856 ms` versus `160.280 ms`, without improving luma.
+- The old post-selector precheck rejection is now gone as intended (`brightSurfelPrecheckRejectTarget=0.0` in bright rows); rejection has moved into selector geometry/target diagnostics.
+
+Decision: Move to producer/index quality.

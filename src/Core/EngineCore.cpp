@@ -1997,6 +1997,12 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    counters->reservoirGiBrightSurfelTrainingRejectGeometry;
 	ui.pathTracerPerfStats.reservoirGiBrightSurfelTrainingRejectTarget =
 	    counters->reservoirGiBrightSurfelTrainingRejectTarget;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectGeometry =
+	    counters->reservoirGiBrightSurfelSelectorRejectGeometry;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectTarget =
+	    counters->reservoirGiBrightSurfelSelectorRejectTarget;
+	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorViable =
+	    counters->reservoirGiBrightSurfelSelectorViable;
 	ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum =
 	    static_cast<float>(counters->reservoirGiLumaScaledSum) / 64.0f;
 	ui.pathTracerPerfStats.reservoirGiAcceptedAvgLuma =
@@ -2511,6 +2517,8 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "brightSurfelPrecheckRejectTarget=%.1f, brightSurfelTrainingAttempt=%.1f, "
 	     "brightSurfelTrainingStore=%.1f, brightSurfelTrainingRejectGeometry=%.1f, "
 	     "brightSurfelTrainingRejectTarget=%.1f, "
+	     "brightSurfelSelectorRejectGeometry=%.1f, brightSurfelSelectorRejectTarget=%.1f, "
+	     "brightSurfelSelectorViable=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
 	     row.name.c_str(),
 	     accum.sampleCount,
@@ -2594,6 +2602,9 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.brightSurfelTrainingStore * invSamples,
 	     accum.brightSurfelTrainingRejectGeometry * invSamples,
 	     accum.brightSurfelTrainingRejectTarget * invSamples,
+	     accum.brightSurfelSelectorRejectGeometry * invSamples,
+	     accum.brightSurfelSelectorRejectTarget * invSamples,
+	     accum.brightSurfelSelectorViable * invSamples,
 	     accum.rayTraceMs * invSamples,
 	     accum.totalFrameMs * invSamples);
 }
@@ -2777,6 +2788,12 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiBrightSurfelTrainingRejectGeometry);
 	ptExperimentAccum.brightSurfelTrainingRejectTarget +=
 	    static_cast<double>(stats.reservoirGiBrightSurfelTrainingRejectTarget);
+	ptExperimentAccum.brightSurfelSelectorRejectGeometry +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectGeometry);
+	ptExperimentAccum.brightSurfelSelectorRejectTarget +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectTarget);
+	ptExperimentAccum.brightSurfelSelectorViable +=
+	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorViable);
 	ptExperimentAccum.rayTraceMs += stats.rayTraceMs;
 	ptExperimentAccum.totalFrameMs += stats.totalFrameMs;
 	++ptExperimentAccum.sampleCount;

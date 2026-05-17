@@ -210,6 +210,9 @@ class EngineCore
 		double brightSurfelTrainingStore = 0.0;
 		double brightSurfelTrainingRejectGeometry = 0.0;
 		double brightSurfelTrainingRejectTarget = 0.0;
+		double brightSurfelSelectorRejectGeometry = 0.0;
+		double brightSurfelSelectorRejectTarget = 0.0;
+		double brightSurfelSelectorViable = 0.0;
 		double rayTraceMs = 0.0;
 		double totalFrameMs = 0.0;
 	};
