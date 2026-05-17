@@ -102,6 +102,9 @@ class FrameContext
 	static constexpr vk::DeviceSize kReservoirGiReceiverCacheHeaderSize = 16;
 	static constexpr vk::DeviceSize kReservoirGiReceiverCacheRecordSize = 96;
 	static constexpr uint32_t       kReservoirGiReceiverCacheCapacity = 65536;
+	static constexpr vk::DeviceSize kReservoirGiBrightSurfelHeaderSize = 16;
+	static constexpr vk::DeviceSize kReservoirGiBrightSurfelRecordSize = 128;
+	static constexpr uint32_t       kReservoirGiBrightSurfelCapacity = 65536;
 	vk::DeviceSize reservoirGiCurrentBufferSize = kReservoirGiHeaderSize;
 	uint32_t       reservoirGiCurrentCapacity = 0;
 	std::vector<Laphria::VulkanUtils::VmaBuffer> reservoirGiCurrentBuffers;
@@ -109,6 +112,9 @@ class FrameContext
 	vk::DeviceSize reservoirGiReceiverCacheBufferSize = kReservoirGiReceiverCacheHeaderSize;
 	std::vector<Laphria::VulkanUtils::VmaBuffer> reservoirGiReceiverCacheBuffers;
 	std::vector<void *>                          reservoirGiReceiverCacheMapped;
+	vk::DeviceSize reservoirGiBrightSurfelBufferSize = kReservoirGiBrightSurfelHeaderSize;
+	std::vector<Laphria::VulkanUtils::VmaBuffer> reservoirGiBrightSurfelBuffers;
+	std::vector<void *>                          reservoirGiBrightSurfelMapped;
 
 	// ── Temporal tracking (updated each frame by updateUniformBuffer) ────────
 	glm::mat4 prevViewProj{1.0f};   // VP matrix of the last submitted frame
@@ -144,6 +150,7 @@ class FrameContext
 	void createPathTracerAnalysisBuffers(const VulkanDevice &dev);
 	void createReservoirGiCurrentBuffers(const VulkanDevice &dev, const SwapchainManager &swapchain);
 	void createReservoirGiReceiverCacheBuffers(const VulkanDevice &dev);
+	void createReservoirGiBrightSurfelBuffers(const VulkanDevice &dev);
 
 	void createUniformBuffers(const VulkanDevice &dev);
 	void createTLASResources(VulkanDevice &dev);

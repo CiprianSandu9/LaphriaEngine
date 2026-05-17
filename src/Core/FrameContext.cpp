@@ -47,6 +47,7 @@ FrameContext::~FrameContext()
 	destroyBuffersAndReleaseAllocations(ptAnalysisCounterBuffers);
 	destroyBuffersAndReleaseAllocations(reservoirGiCurrentBuffers);
 	destroyBuffersAndReleaseAllocations(reservoirGiReceiverCacheBuffers);
+	destroyBuffersAndReleaseAllocations(reservoirGiBrightSurfelBuffers);
 	destroyBuffersAndReleaseAllocations(tlasBuffers);
 	destroyBuffersAndReleaseAllocations(tlasScratchBuffers);
 	destroyBuffersAndReleaseAllocations(tlasInstanceBuffers);
@@ -65,6 +66,7 @@ void FrameContext::init(VulkanDevice &dev, SwapchainManager &swapchain) {
     createPathTracerAnalysisResources(dev, swapchain);
     createReservoirGiCurrentBuffers(dev, swapchain);
     createReservoirGiReceiverCacheBuffers(dev);
+    createReservoirGiBrightSurfelBuffers(dev);
     createPathTracerAnalysisBuffers(dev);
     // Shadow resources are extent-independent and live for the engine's full lifetime.
     createShadowResources(dev);
@@ -87,6 +89,7 @@ void FrameContext::cleanupSwapChainDependents() {
     destroyImagesAndReleaseAllocations(ptReprojectionDebug);
     destroyBuffersAndReleaseAllocations(reservoirGiCurrentBuffers);
     destroyBuffersAndReleaseAllocations(reservoirGiReceiverCacheBuffers);
+    destroyBuffersAndReleaseAllocations(reservoirGiBrightSurfelBuffers);
 
     storageImageViews.clear();
     storageImages.clear();
@@ -119,6 +122,9 @@ void FrameContext::cleanupSwapChainDependents() {
     reservoirGiReceiverCacheBuffers.clear();
     reservoirGiReceiverCacheMapped.clear();
     reservoirGiReceiverCacheBufferSize = kReservoirGiReceiverCacheHeaderSize;
+    reservoirGiBrightSurfelBuffers.clear();
+    reservoirGiBrightSurfelMapped.clear();
+    reservoirGiBrightSurfelBufferSize = kReservoirGiBrightSurfelHeaderSize;
 }
 
 void FrameContext::recreate(VulkanDevice &dev, SwapchainManager &swapchain) {
@@ -132,6 +138,7 @@ void FrameContext::recreate(VulkanDevice &dev, SwapchainManager &swapchain) {
     createPathTracerAnalysisResources(dev, swapchain);
     createReservoirGiCurrentBuffers(dev, swapchain);
     createReservoirGiReceiverCacheBuffers(dev);
+    createReservoirGiBrightSurfelBuffers(dev);
 }
 
 void FrameContext::createCommandPool(const VulkanDevice &dev) {
@@ -745,6 +752,33 @@ void FrameContext::createReservoirGiReceiverCacheBuffers(const VulkanDevice &dev
         std::memset(reservoirGiReceiverCacheMapped.back(), 0,
                     static_cast<size_t>(reservoirGiReceiverCacheBufferSize));
         reservoirGiReceiverCacheBuffers.push_back(std::move(buffer));
+    }
+}
+
+void FrameContext::createReservoirGiBrightSurfelBuffers(const VulkanDevice &dev)
+{
+    reservoirGiBrightSurfelBuffers.clear();
+    reservoirGiBrightSurfelMapped.clear();
+    reservoirGiBrightSurfelBuffers.reserve(MAX_FRAMES_IN_FLIGHT);
+    reservoirGiBrightSurfelMapped.reserve(MAX_FRAMES_IN_FLIGHT);
+    reservoirGiBrightSurfelBufferSize =
+        kReservoirGiBrightSurfelHeaderSize +
+        static_cast<vk::DeviceSize>(kReservoirGiBrightSurfelCapacity) *
+            kReservoirGiBrightSurfelRecordSize;
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VulkanUtils::VmaBuffer buffer{};
+        VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice,
+                                  reservoirGiBrightSurfelBufferSize,
+                                  vk::BufferUsageFlagBits::eStorageBuffer,
+                                  vk::MemoryPropertyFlagBits::eHostVisible |
+                                      vk::MemoryPropertyFlagBits::eHostCoherent,
+                                  buffer);
+        reservoirGiBrightSurfelMapped.push_back(
+            buffer.memory.mapMemory(0, reservoirGiBrightSurfelBufferSize));
+        std::memset(reservoirGiBrightSurfelMapped.back(), 0,
+                    static_cast<size_t>(reservoirGiBrightSurfelBufferSize));
+        reservoirGiBrightSurfelBuffers.push_back(std::move(buffer));
     }
 }
 

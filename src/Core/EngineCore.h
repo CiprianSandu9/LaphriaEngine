@@ -196,6 +196,15 @@ class EngineCore
 		double reservoirGiReceiverCacheContinuationHit = 0.0;
 		double reservoirGiReceiverCacheContinuationMiss = 0.0;
 		double reservoirGiReceiverCacheContinuationAccepted = 0.0;
+		double reservoirGiBrightSurfelStore = 0.0;
+		double reservoirGiBrightSurfelAttempt = 0.0;
+		double reservoirGiBrightSurfelHit = 0.0;
+		double reservoirGiBrightSurfelMiss = 0.0;
+		double reservoirGiBrightSurfelRejectVisibility = 0.0;
+		double reservoirGiBrightSurfelRejectGeometry = 0.0;
+		double reservoirGiBrightSurfelRejectTarget = 0.0;
+		double reservoirGiBrightSurfelAccepted = 0.0;
+		double reservoirGiSelectedBrightSurfel = 0.0;
 		double rayTraceMs = 0.0;
 		double totalFrameMs = 0.0;
 	};

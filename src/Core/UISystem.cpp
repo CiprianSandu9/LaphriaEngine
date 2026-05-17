@@ -1153,7 +1153,8 @@ void UISystem::drawPathTracerDebugLab() {
             "Mixed Cosine + Sun Receiver Guide",
             "Mixed Cosine + Dual Sun Guide",
             "Mixed Cosine + Sun Receiver + Cache Guide",
-            "Mixed Cosine + Sun Receiver + Cache Reconnect"};
+            "Mixed Cosine + Sun Receiver + Cache Reconnect",
+            "Mixed Cosine + Sun Receiver + Bright Surfel"};
         int reservoirGiProposalMode = static_cast<int>(pathTracerSettings.reservoirGiProposalMode);
         if (ImGui::Combo("Reservoir GI Proposal", &reservoirGiProposalMode,
                          reservoirGiProposalModes, IM_ARRAYSIZE(reservoirGiProposalModes))) {
@@ -1262,6 +1263,15 @@ void UISystem::drawPathTracerDebugLab() {
                     pathTracerPerfStats.reservoirGiReceiverCacheContinuationMiss);
         ImGui::Text("Reservoir GI Receiver Cache Continuation Accepted: %u",
                     pathTracerPerfStats.reservoirGiReceiverCacheContinuationAccepted);
+        ImGui::Text("Reservoir GI Selected Bright Surfel: %u", pathTracerPerfStats.reservoirGiSelectedBrightSurfel);
+        ImGui::Text("Reservoir GI Bright Surfel Store: %u", pathTracerPerfStats.reservoirGiBrightSurfelStore);
+        ImGui::Text("Reservoir GI Bright Surfel Attempts: %u", pathTracerPerfStats.reservoirGiBrightSurfelAttempt);
+        ImGui::Text("Reservoir GI Bright Surfel Hits: %u", pathTracerPerfStats.reservoirGiBrightSurfelHit);
+        ImGui::Text("Reservoir GI Bright Surfel Misses: %u", pathTracerPerfStats.reservoirGiBrightSurfelMiss);
+        ImGui::Text("Reservoir GI Bright Surfel Reject Visibility: %u", pathTracerPerfStats.reservoirGiBrightSurfelRejectVisibility);
+        ImGui::Text("Reservoir GI Bright Surfel Reject Geometry: %u", pathTracerPerfStats.reservoirGiBrightSurfelRejectGeometry);
+        ImGui::Text("Reservoir GI Bright Surfel Reject Target: %u", pathTracerPerfStats.reservoirGiBrightSurfelRejectTarget);
+        ImGui::Text("Reservoir GI Bright Surfel Accepted: %u", pathTracerPerfStats.reservoirGiBrightSurfelAccepted);
         ImGui::Text("Reservoir GI Temporal: accepted %u | rejected %u",
                     pathTracerPerfStats.reservoirGiTemporalAccepted,
                     pathTracerPerfStats.reservoirGiTemporalRejected);
