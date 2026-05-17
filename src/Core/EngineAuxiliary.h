@@ -248,6 +248,18 @@ struct PathTracerAnalysisCounters
 	uint32_t reservoirGiBrightSurfelSelectorRejectReceiverHemisphere = 0;
 	uint32_t reservoirGiBrightSurfelSelectorRejectSurfelHemisphere = 0;
 	uint32_t reservoirGiBrightSurfelSelectorRejectInvalidVector = 0;
+	uint32_t surfelGiClearDispatches = 0;
+	uint32_t surfelGiGenerateAttempts = 0;
+	uint32_t surfelGiGenerated = 0;
+	uint32_t surfelGiGenerateRejectInvalid = 0;
+	uint32_t surfelGiGenerateRejectCoverage = 0;
+	uint32_t surfelGiCellInsertAttempts = 0;
+	uint32_t surfelGiCellInserted = 0;
+	uint32_t surfelGiCellOverflow = 0;
+	uint32_t surfelGiEvalAttempts = 0;
+	uint32_t surfelGiEvalCellEmpty = 0;
+	uint32_t surfelGiEvalCandidates = 0;
+	uint32_t surfelGiEvalAccepted = 0;
 };
 
 struct SkinningPushConstants

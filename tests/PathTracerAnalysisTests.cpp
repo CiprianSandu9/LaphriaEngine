@@ -112,6 +112,55 @@ bool requireBrightSurfelProposalDisabledForSweeps(const std::string &raygen,
 	return true;
 }
 
+bool requirePersistentSurfelCounterLayout(const std::string &engineAuxiliaryHeader,
+                                          const std::string &surfelCommon,
+                                          const std::string &cmakeLists)
+{
+	const char *requiredCounters[] = {
+	    "surfelGiClearDispatches",
+	    "surfelGiGenerateAttempts",
+	    "surfelGiGenerated",
+	    "surfelGiGenerateRejectInvalid",
+	    "surfelGiGenerateRejectCoverage",
+	    "surfelGiCellInsertAttempts",
+	    "surfelGiCellInserted",
+	    "surfelGiCellOverflow",
+	    "surfelGiEvalAttempts",
+	    "surfelGiEvalCellEmpty",
+	    "surfelGiEvalCandidates",
+	    "surfelGiEvalAccepted"};
+
+	for (const char *counter : requiredCounters)
+	{
+		if (!containsText(engineAuxiliaryHeader, counter))
+			return false;
+	}
+
+	const char *requiredOffsets[] = {
+	    "surfelGiClearDispatchesOffset",
+	    "surfelGiGenerateAttemptsOffset",
+	    "surfelGiGeneratedOffset",
+	    "surfelGiGenerateRejectInvalidOffset",
+	    "surfelGiGenerateRejectCoverageOffset",
+	    "surfelGiCellInsertAttemptsOffset",
+	    "surfelGiCellInsertedOffset",
+	    "surfelGiCellOverflowOffset",
+	    "surfelGiEvalAttemptsOffset",
+	    "surfelGiEvalCellEmptyOffset",
+	    "surfelGiEvalCandidatesOffset",
+	    "surfelGiEvalAcceptedOffset"};
+
+	for (const char *offset : requiredOffsets)
+	{
+		if (!containsText(surfelCommon, offset))
+			return false;
+	}
+
+	return containsText(cmakeLists, "SURFEL_SHADER_INCLUDE_DEPS") &&
+	       containsText(cmakeLists, "SurfelCommon.slang") &&
+	       containsText(cmakeLists, "ShaderCommon.slang");
+}
+
 bool requireIndexedBrightSurfelShaderContracts(const std::string &raygen)
 {
 	const std::string brightSurfelStore =
@@ -495,6 +544,8 @@ bool testPathTracerReservoirGiMeasurementContract()
 	const std::string raygen          = readTextFile(sourceRoot / "src" / "shaders" / "Raygen.slang");
 	const std::string engineCore      = readTextFile(sourceRoot / "src" / "Core" / "EngineCore.cpp");
 	const std::string engineAuxiliaryHeader = readTextFile(sourceRoot / "src" / "Core" / "EngineAuxiliary.h");
+	const std::string surfelCommon = readTextFile(sourceRoot / "src" / "shaders" / "SurfelCommon.slang");
+	const std::string cmakeLists = readTextFile(sourceRoot / "CMakeLists.txt");
 	const std::string uiHeader = readTextFile(sourceRoot / "src" / "Core" / "UISystem.h");
 	const std::string uiSource = readTextFile(sourceRoot / "src" / "Core" / "UISystem.cpp");
 	const std::string frameContextHeader = readTextFile(sourceRoot / "src" / "Core" / "FrameContext.h");
@@ -507,6 +558,12 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    frameContextSource.empty() || resourceManager.empty() || gltfImporter.empty())
 	{
 		std::cerr << "failed to read reservoir GI measurement contract sources\n";
+		return false;
+	}
+
+	if (!requirePersistentSurfelCounterLayout(engineAuxiliaryHeader, surfelCommon, cmakeLists))
+	{
+		std::cerr << "persistent surfel GI counter layout contract is incomplete\n";
 		return false;
 	}
 

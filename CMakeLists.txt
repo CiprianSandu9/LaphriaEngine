@@ -42,6 +42,11 @@ else ()
 endif ()
 set(GENERATED_SPV_FILES "")
 
+set(SURFEL_SHADER_INCLUDE_DEPS
+        "${SHADER_SOURCE_ROOT}/ShaderCommon.slang"
+        "${SHADER_SOURCE_ROOT}/SurfelCommon.slang"
+)
+
 foreach (SHADER_ENTRY ${SHADER_SOURCES})
     string(REPLACE "|" ";" SHADER_PARTS "${SHADER_ENTRY}")
     list(GET SHADER_PARTS 0 SHADER_RELATIVE_PATH)
@@ -64,7 +69,7 @@ foreach (SHADER_ENTRY ${SHADER_SOURCES})
             -emit-spirv-directly ${ENTRY_POINTS}
             -o ${SHADER_OUTPUT} -fvk-use-entrypoint-name
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            DEPENDS ${SHADER_SOURCE}
+            DEPENDS ${SHADER_SOURCE} ${SURFEL_SHADER_INCLUDE_DEPS}
             COMMENT "Compiling Slang shader: ${SHADER_NAME}"
             VERBATIM
     )
