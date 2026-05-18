@@ -251,6 +251,10 @@ void SurfelPathTracerPipelines::createPipelineLayouts(const VulkanDevice &dev,
 void SurfelPathTracerPipelines::createComputePipelines(const VulkanDevice &dev)
 {
 	skyPipeline = createComputePipeline(dev, *skyPipelineLayout, "Shaders/SurfelPathTracerSky.slang.spv", "main");
+	preparePipeline = createComputePipeline(dev, *computePipelineLayout, "Shaders/SurfelPathTracerPrepare.slang.spv", "main");
+	updatePipeline = createComputePipeline(dev, *computePipelineLayout, "Shaders/SurfelPathTracerUpdate.slang.spv", "main");
+	cellInfoPipeline = createComputePipeline(dev, *computePipelineLayout, "Shaders/SurfelPathTracerCellInfo.slang.spv", "main");
+	cellToSurfelPipeline = createComputePipeline(dev, *computePipelineLayout, "Shaders/SurfelPathTracerCellToSurfel.slang.spv", "main");
 }
 
 void SurfelPathTracerPipelines::createGBufferRayTracingPipeline(const VulkanDevice &dev)

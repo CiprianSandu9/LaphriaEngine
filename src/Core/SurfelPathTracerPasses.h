@@ -20,6 +20,37 @@ class SurfelPathTracerPasses
 	                       vk::DescriptorSet globalSet,
 	                       vk::Extent2D extent) const;
 
+	void recordPreparePass(const vk::raii::CommandBuffer &commandBuffer,
+	                       const SurfelPathTracerPipelines &pipelines,
+	                       vk::DescriptorSet imageSet,
+	                       uint32_t maxSurfels,
+	                       bool resetPersistent,
+	                       uint32_t cellCount,
+	                       uint32_t perCellSurfelLimit) const;
+
+	void recordUpdatePass(const vk::raii::CommandBuffer &commandBuffer,
+	                      const SurfelPathTracerPipelines &pipelines,
+	                      vk::DescriptorSet imageSet,
+	                      uint32_t maxSurfels,
+	                      float cellSize,
+	                      uint32_t cellDimension) const;
+
+	void recordCellInfoPass(const vk::raii::CommandBuffer &commandBuffer,
+	                        const SurfelPathTracerPipelines &pipelines,
+	                        vk::DescriptorSet imageSet,
+	                        uint32_t cellCount,
+	                        uint32_t perCellSurfelLimit) const;
+
+	void recordCellToSurfelPass(const vk::raii::CommandBuffer &commandBuffer,
+	                            const SurfelPathTracerPipelines &pipelines,
+	                            vk::DescriptorSet imageSet,
+	                            uint32_t maxSurfels,
+	                            float cellSize,
+	                            uint32_t cellDimension,
+	                            uint32_t perCellSurfelLimit) const;
+
+	void recordStorageBarrierComputeToCompute(const vk::raii::CommandBuffer &commandBuffer) const;
+
 	void recordSkyPass(const vk::raii::CommandBuffer &commandBuffer,
 	                   const SurfelPathTracerPipelines &pipelines,
 	                   const SurfelPathTracerResources &resources,

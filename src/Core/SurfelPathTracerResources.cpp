@@ -24,6 +24,17 @@ void destroyBuffers(std::initializer_list<VulkanUtils::VmaBuffer *> buffers)
 	}
 }
 
+UISystem::SurfelPathTracerSettings persistentCapacitySettings(
+    const UISystem::SurfelPathTracerSettings &settings)
+{
+	UISystem::SurfelPathTracerSettings capacity = settings;
+	capacity.maxSurfels = std::max(capacity.maxSurfels, 1u);
+	capacity.maxRaysPerFrame = std::max(capacity.maxRaysPerFrame, 1u);
+	capacity.cellDimension = std::clamp(capacity.cellDimension, 8u, 128u);
+	capacity.perCellSurfelLimit = std::clamp(capacity.perCellSurfelLimit, 1u, 256u);
+	return capacity;
+}
+
 void destroyImages(std::vector<VulkanUtils::VmaImage> &images)
 {
 	for (auto &image : images)
@@ -138,6 +149,16 @@ UISystem::SurfelPathTracerStats SurfelPathTracerResources::readStats() const
 	return stats;
 }
 
+bool SurfelPathTracerResources::needsPersistentResourceRecreate(
+    const UISystem::SurfelPathTracerSettings &settings) const
+{
+	const UISystem::SurfelPathTracerSettings capacity = persistentCapacitySettings(settings);
+	return capacity.maxSurfels != settings_.maxSurfels ||
+	       capacity.maxRaysPerFrame != settings_.maxRaysPerFrame ||
+	       capacity.cellDimension != settings_.cellDimension ||
+	       capacity.perCellSurfelLimit != settings_.perCellSurfelLimit;
+}
+
 SurfelPathTracerCellAddress SurfelPathTracerResources::cellAddressForPosition(
     const glm::vec3 &position,
     float cellSize,
@@ -164,12 +185,11 @@ void SurfelPathTracerResources::createPersistentBuffers(
     const VulkanDevice &dev,
     const UISystem::SurfelPathTracerSettings &settings)
 {
-	const uint32_t maxSurfels = std::max(settings.maxSurfels, 1u);
-	const uint32_t maxRays = std::max(settings.maxRaysPerFrame, 1u);
-	const uint32_t cellDimension = std::clamp(settings.cellDimension, kMinCellDimension, kMaxCellDimension);
-	const uint32_t perCellSurfelLimit = std::clamp(settings.perCellSurfelLimit,
-	                                               kMinPerCellSurfelLimit,
-	                                               kMaxPerCellSurfelLimit);
+	settings_ = persistentCapacitySettings(settings);
+	const uint32_t maxSurfels = settings_.maxSurfels;
+	const uint32_t maxRays = settings_.maxRaysPerFrame;
+	const uint32_t cellDimension = settings_.cellDimension;
+	const uint32_t perCellSurfelLimit = settings_.perCellSurfelLimit;
 	settings_.cellDimension = cellDimension;
 	settings_.perCellSurfelLimit = perCellSurfelLimit;
 
@@ -177,6 +197,7 @@ void SurfelPathTracerResources::createPersistentBuffers(
 	const uint64_t cellCount = cellDimension64 * cellDimension64 * cellDimension64;
 	cellCount_ = static_cast<uint32_t>(cellCount);
 	const uint64_t cellToSurfelCount = cellCount * perCellSurfelLimit;
+	const uint64_t cellCounterCount = 1u + cellCount * 2u;
 
 	auto createBuffer = [&](vk::DeviceSize size,
 	                        VulkanUtils::VmaBuffer &buffer,
@@ -208,7 +229,7 @@ void SurfelPathTracerResources::createPersistentBuffers(
 	             vk::MemoryPropertyFlagBits::eDeviceLocal);
 	createBuffer(byteSize(cellCount, sizeof(SurfelPathTracerCellInfo)), cellInfoBuffer,
 	             vk::MemoryPropertyFlagBits::eDeviceLocal);
-	createBuffer(byteSize(4u, sizeof(uint32_t)), cellCounterBuffer,
+	createBuffer(byteSize(cellCounterCount, sizeof(uint32_t)), cellCounterBuffer,
 	             vk::MemoryPropertyFlagBits::eDeviceLocal);
 	createBuffer(byteSize(cellToSurfelCount, sizeof(uint32_t)), cellToSurfelBuffer,
 	             vk::MemoryPropertyFlagBits::eDeviceLocal);

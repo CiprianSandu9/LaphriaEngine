@@ -2009,6 +2009,10 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	{
 		throw std::runtime_error("Surfel path tracer resources are not initialized");
 	}
+	auto &mutableUi = const_cast<UISystem &>(ui);
+	auto &mutableSurfelPathTracerResources =
+	    const_cast<Laphria::SurfelPathTracerResources &>(surfelPathTracerResources);
+
 	if (fi >= surfelPathTracerResources.outputImages.size() ||
 	    fi >= surfelPathTracerResources.gBufferNormalImages.size() ||
 	    fi >= surfelPathTracerResources.gBufferDepthImages.size() ||
@@ -2055,6 +2059,42 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                         *surfelPathTracerStorageDescriptorSets[fi],
 	                                         *descriptorSets[fi],
 	                                         swapchain.extent);
+
+	const auto &surfelSettings = mutableUi.surfelPathTracerSettings;
+	const bool resetPersistent = surfelSettings.resetSurfels ||
+	                             surfelPathTracerResources.needsPersistentReset();
+	surfelPathTracerPasses.recordPreparePass(commandBuffer,
+	                                         pipelines.surfelPathTracerPipelines,
+	                                         *surfelPathTracerStorageDescriptorSets[fi],
+	                                         surfelPathTracerResources.maxSurfelsCapacity(),
+	                                         resetPersistent,
+	                                         surfelPathTracerResources.cellCount(),
+	                                         surfelPathTracerResources.perCellSurfelLimitCapacity());
+	mutableSurfelPathTracerResources.markPersistentResetConsumed();
+	mutableUi.surfelPathTracerSettings.resetSurfels = false;
+
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	surfelPathTracerPasses.recordUpdatePass(commandBuffer,
+	                                        pipelines.surfelPathTracerPipelines,
+	                                        *surfelPathTracerStorageDescriptorSets[fi],
+	                                        surfelPathTracerResources.maxSurfelsCapacity(),
+	                                        surfelSettings.cellSize,
+	                                        surfelPathTracerResources.cellDimensionCapacity());
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	surfelPathTracerPasses.recordCellInfoPass(commandBuffer,
+	                                          pipelines.surfelPathTracerPipelines,
+	                                          *surfelPathTracerStorageDescriptorSets[fi],
+	                                          surfelPathTracerResources.cellCount(),
+	                                          surfelPathTracerResources.perCellSurfelLimitCapacity());
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	surfelPathTracerPasses.recordCellToSurfelPass(commandBuffer,
+	                                              pipelines.surfelPathTracerPipelines,
+	                                              *surfelPathTracerStorageDescriptorSets[fi],
+	                                              surfelPathTracerResources.maxSurfelsCapacity(),
+	                                              surfelSettings.cellSize,
+	                                              surfelPathTracerResources.cellDimensionCapacity(),
+	                                              surfelPathTracerResources.perCellSurfelLimitCapacity());
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 
 	// TODO: Route surfel debug views to output once the later lighting/TAA stages exist.
 	transition_image_layout(*surfelPathTracerResources.outputImages[fi],
@@ -4470,6 +4510,43 @@ void EngineCore::drawFrame()
 	if (fenceResult != vk::Result::eSuccess)
 	{
 		throw std::runtime_error("failed to wait for fence!");
+	}
+
+	auto waitForSurfelPathTracerIdle = [&](const char *waitLabel) {
+		for (const auto &fence : frames.inFlightFences)
+		{
+			const auto surfelFenceResult = waitForFenceOrThrow(
+			    vulkan.logicalDevice, *fence, waitLabel);
+			if (surfelFenceResult != vk::Result::eSuccess)
+			{
+				throw std::runtime_error("failed to wait for surfel path tracer in-flight work");
+			}
+		}
+	};
+	auto refreshSurfelPathTracerPersistentResources = [&]() {
+		if (!surfelPathTracerResources.initialized())
+		{
+			return;
+		}
+
+		const bool needsResourceRecreate =
+		    surfelPathTracerResources.needsPersistentResourceRecreate(ui.surfelPathTracerSettings);
+		waitForSurfelPathTracerIdle(needsResourceRecreate
+		                                ? "surfel path tracer persistent resource fence"
+		                                : "surfel path tracer stats fence");
+
+		if (needsResourceRecreate)
+		{
+			surfelPathTracerResources.resetPersistentResources(vulkan, ui.surfelPathTracerSettings);
+			createSurfelPathTracerStorageDescriptorSets();
+			createSurfelPathTracerRtDescriptorSets();
+		}
+
+		ui.surfelPathTracerStats = surfelPathTracerResources.readStats();
+	};
+	if (ui.renderMode == RenderMode::SurfelPathTracer)
+	{
+		refreshSurfelPathTracerPersistentResources();
 	}
 
 	// Runtime skinned BLAS refit currently reuses per-model AS buffers across frames.

@@ -73,6 +73,12 @@ class SurfelPathTracerResources
 
 	[[nodiscard]] bool initialized() const { return initialized_; }
 	[[nodiscard]] uint32_t cellCount() const { return cellCount_; }
+	[[nodiscard]] uint32_t maxSurfelsCapacity() const { return settings_.maxSurfels; }
+	[[nodiscard]] uint32_t maxRaysPerFrameCapacity() const { return settings_.maxRaysPerFrame; }
+	[[nodiscard]] uint32_t cellDimensionCapacity() const { return settings_.cellDimension; }
+	[[nodiscard]] uint32_t perCellSurfelLimitCapacity() const { return settings_.perCellSurfelLimit; }
+	[[nodiscard]] bool needsPersistentResourceRecreate(
+	    const UISystem::SurfelPathTracerSettings &settings) const;
 	[[nodiscard]] bool needsPersistentReset() const { return needsPersistentReset_; }
 	void markPersistentResetConsumed() { needsPersistentReset_ = false; }
 	[[nodiscard]] UISystem::SurfelPathTracerStats readStats() const;

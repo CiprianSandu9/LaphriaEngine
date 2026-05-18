@@ -43,7 +43,7 @@ bool containsNeedle(const std::string &haystack, std::string_view needle)
 bool testSurfelPathTracerPipelineContracts()
 {
 	const std::filesystem::path root = sourceRoot();
-	const std::array<std::filesystem::path, 15> contractFiles = {
+	const std::array<std::filesystem::path, 19> contractFiles = {
 	    root / "CMakeLists.txt",
 	    root / "src" / "Core" / "EngineAuxiliary.h",
 	    root / "src" / "Core" / "UISystem.h",
@@ -59,6 +59,10 @@ bool testSurfelPathTracerPipelineContracts()
 	    root / "src" / "shaders" / "SurfelPathTracerGBufferMiss.slang",
 	    root / "src" / "shaders" / "SurfelPathTracerGBufferClosestHit.slang",
 	    root / "src" / "shaders" / "SurfelPathTracerGBufferAnyHit.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerPrepare.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerUpdate.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerCellInfo.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerCellToSurfel.slang",
 	};
 
 	std::string combined;
@@ -69,7 +73,7 @@ bool testSurfelPathTracerPipelineContracts()
 		combined += '\n';
 	}
 
-	const std::array<std::string_view, 61> needles = {
+	const std::array<std::string_view, 84> needles = {
 	    "RenderMode::SurfelPathTracer",
 	    "SurfelPathTracerSettings",
 	    "SurfelPathTracerStats",
@@ -112,6 +116,11 @@ bool testSurfelPathTracerPipelineContracts()
 	    "SurfelPathTracerLightIntegrate.slang|main",
 	    "SurfelPathTracerTaa.slang|main",
 	    "recordGBufferPass",
+	    "recordPreparePass",
+	    "recordUpdatePass",
+	    "recordCellInfoPass",
+	    "recordCellToSurfelPass",
+	    "recordStorageBarrierComputeToCompute",
 	    "gBufferRayTracingPipeline",
 	    "rayTracingDescriptorSetLayout",
 	    "surfelPathTracerStorageDescriptorSets",
@@ -131,6 +140,24 @@ bool testSurfelPathTracerPipelineContracts()
 	    "vk::Format::eR32G32B32A32Sfloat, gBufferMotionMaterialImages",
 	    "uint modelId;",
 	    "float4(motion, float(payload.modelId), float(payload.materialIndex))",
+	    "createComputePipeline(dev, *computePipelineLayout, \"Shaders/SurfelPathTracerPrepare.slang.spv\", \"main\")",
+	    "createComputePipeline(dev, *computePipelineLayout, \"Shaders/SurfelPathTracerUpdate.slang.spv\", \"main\")",
+	    "createComputePipeline(dev, *computePipelineLayout, \"Shaders/SurfelPathTracerCellInfo.slang.spv\", \"main\")",
+	    "createComputePipeline(dev, *computePipelineLayout, \"Shaders/SurfelPathTracerCellToSurfel.slang.spv\", \"main\")",
+	    "markPersistentResetConsumed",
+	    "needsPersistentResourceRecreate",
+	    "waitForSurfelPathTracerIdle",
+	    "refreshSurfelPathTracerPersistentResources",
+	    "maxSurfelsCapacity",
+	    "cellDimensionCapacity",
+	    "perCellSurfelLimitCapacity",
+	    "surfel path tracer stats fence",
+	    "surfel path tracer persistent resource fence",
+	    "surfel.flags = 0",
+	    "resetPersistent",
+	    "perCellSurfelLimit",
+	    "rejectedStores",
+	    "InterlockedAdd",
 	};
 
 	bool ok = true;
