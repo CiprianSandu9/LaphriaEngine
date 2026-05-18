@@ -514,6 +514,23 @@ void recordFirstHitProbeStats(bool surfaceHit, bool sunVisible, float3 contribut
     ptAnalysisCounters.InterlockedAdd(44, scaledLuma);
 }
 
+void recordReservoirGiEstimatorAudit(float currentLuma,
+                                     float referenceLuma,
+                                     float reservoirProbeScale)
+{
+    float safeReference = max(referenceLuma, 0.0001);
+    float relativeErrorPct = abs(currentLuma - referenceLuma) / safeReference * 100.0;
+    ptAnalysisCounters.InterlockedAdd(reservoirGiAuditCurrentLumaScaledSumOffset,
+                                      uint(clamp(currentLuma, 0.0, 8.0) * 64.0 + 0.5));
+    ptAnalysisCounters.InterlockedAdd(reservoirGiAuditReferenceLumaScaledSumOffset,
+                                      uint(clamp(referenceLuma, 0.0, 8.0) * 64.0 + 0.5));
+    ptAnalysisCounters.InterlockedAdd(reservoirGiAuditRelativeErrorScaledSumOffset,
+                                      uint(clamp(relativeErrorPct, 0.0, 1024.0) * 64.0 + 0.5));
+    ptAnalysisCounters.InterlockedAdd(reservoirGiAuditProbeScaleScaledSumOffset,
+                                      uint(clamp(reservoirProbeScale, 0.0, 8.0) * 64.0 + 0.5));
+    ptAnalysisCounters.InterlockedAdd(reservoirGiAuditSampleCountOffset, 1u);
+}
+
 uint reservoirGiRecordOffset(uint pixelIndex)
 {
     return RESERVOIR_GI_CURRENT_HEADER_SIZE + pixelIndex * RESERVOIR_GI_RECORD_SIZE;
@@ -3852,6 +3869,14 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     }
 
     float reservoirProbeScale = float(candidateCount) / float(candidateCount + 1);
+    float currentEstimatorLuma = pathTracerLuminance(reservoirTotal * reservoirProbeScale);
+    float referenceEstimatorLuma = rawReservoirLuma;
+    if (acceptedReservoir &&
+        reservoirGiEstimatorAuditMode != ReservoirEstimatorAuditOff) {
+        recordReservoirGiEstimatorAudit(currentEstimatorLuma,
+                                        referenceEstimatorLuma,
+                                        reservoirProbeScale);
+    }
     result.reservoirSelectedWeight = selectedWeight;
     result.reservoirSelectedSource = acceptedReservoir ? float(selectedSource) : -1.0;
     result.totalContribution = reservoirTotal * reservoirProbeScale;

@@ -1789,6 +1789,16 @@ bool testPathTracerReservoirGiMeasurementContract()
 		return false;
 	}
 
+	const std::string reservoirMain =
+	    stripComments(extractFunctionBody(raygen, "FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame("));
+	if (!containsText(reservoirMain, "recordReservoirGiEstimatorAudit(") ||
+	    !containsText(reservoirMain, "rawReservoirLuma") ||
+	    !containsText(reservoirMain, "reservoirProbeScale"))
+	{
+		std::cerr << "reservoir estimator audit must record current raw/scaled luma and probe scale\n";
+		return false;
+	}
+
 	const char *requiredRaygenSymbols[] = {
 	    "RESERVOIR_GI_RECORD_SIZE = 160",
 	    "RESERVOIR_GI_RECORD_PRIMARY_POSITION_OFFSET = 0",
