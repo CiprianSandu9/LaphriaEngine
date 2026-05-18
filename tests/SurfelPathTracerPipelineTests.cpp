@@ -43,12 +43,13 @@ bool containsNeedle(const std::string &haystack, std::string_view needle)
 bool testSurfelPathTracerPipelineContracts()
 {
 	const std::filesystem::path root = sourceRoot();
-	const std::array<std::filesystem::path, 7> contractFiles = {
+	const std::array<std::filesystem::path, 8> contractFiles = {
 	    root / "CMakeLists.txt",
 	    root / "src" / "Core" / "EngineAuxiliary.h",
 	    root / "src" / "Core" / "UISystem.h",
 	    root / "src" / "Core" / "SurfelPathTracerPipelines.h",
 	    root / "src" / "Core" / "SurfelPathTracerResources.h",
+	    root / "src" / "Core" / "SurfelPathTracerResources.cpp",
 	    root / "src" / "Core" / "SurfelPathTracerPasses.h",
 	    root / "src" / "shaders" / "SurfelPathTracerCommon.slang",
 	};
@@ -61,7 +62,7 @@ bool testSurfelPathTracerPipelineContracts()
 		combined += '\n';
 	}
 
-	const std::array<std::string_view, 29> needles = {
+	const std::array<std::string_view, 41> needles = {
 	    "RenderMode::SurfelPathTracer",
 	    "SurfelPathTracerSettings",
 	    "SurfelPathTracerStats",
@@ -71,6 +72,18 @@ bool testSurfelPathTracerPipelineContracts()
 	    "struct SurfelPathTracerSurfel",
 	    "struct SurfelPathTracerCellInfo",
 	    "struct SurfelPathTracerCounters",
+	    "cellAddressForPosition",
+	    "needsPersistentReset",
+	    "~SurfelPathTracerResources",
+	    "SurfelPathTracerResources(const SurfelPathTracerResources &) = delete",
+	    "kMinCellDimension",
+	    "kMaxCellDimension",
+	    "const uint32_t dim = std::clamp(cellDimension, kMinCellDimension, kMaxCellDimension)",
+	    "const glm::dvec3 clampedCell",
+	    "static_cast<int>(clampedCell.x)",
+	    "const uint64_t flat",
+	    "irradianceAtlasWidth",
+	    "irradianceAtlasHeight",
 	    "SurfelPathTracerSky.slang|main",
 	    "SurfelPathTracerGBuffer.slang|main",
 	    "SurfelPathTracerGBufferMiss.slang|main",

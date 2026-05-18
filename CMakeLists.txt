@@ -103,6 +103,8 @@ set(LAPHRIA_ENGINE_SOURCES
         src/Core/ResourceManager.cpp
         src/Core/ResourceManager.h
         src/Core/StbImageImpl.cpp
+        src/Core/SurfelPathTracerResources.cpp
+        src/Core/SurfelPathTracerResources.h
         src/Core/SwapchainManager.cpp
         src/Core/SwapchainManager.h
         src/Core/UISystem.cpp
