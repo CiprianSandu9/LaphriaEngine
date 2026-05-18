@@ -85,6 +85,12 @@ float estimateCoverage(float3 position, float3 normal, out uint closestSurfelInd
             }
         }
     }
+    if (closestSurfelIndex != SURFEL_PT_INVALID_INDEX) {
+        SurfelPathTracerSurfel surfel = surfelBuffer[closestSurfelIndex];
+        surfel.lastReferencedFrame = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
+        surfel.lastSeenFrame = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
+        surfelBuffer[closestSurfelIndex] = surfel;
+    }
     return coverage;
 }
 

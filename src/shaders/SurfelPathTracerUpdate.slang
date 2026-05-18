@@ -2,6 +2,7 @@
 
 [[vk::binding(4, 0)]] RWByteAddressBuffer counters;
 [[vk::binding(5, 0)]] RWStructuredBuffer<SurfelPathTracerSurfel> surfelBuffer;
+[[vk::binding(7, 0)]] RWStructuredBuffer<uint> deadBuffer;
 [[vk::binding(10, 0)]] RWStructuredBuffer<uint> rayBuffer;
 [[vk::binding(12, 0)]] RWByteAddressBuffer cellCounterBuffer;
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
@@ -11,9 +12,39 @@ struct UpdatePushConstants {
     float cellSize;
     uint cellDimension;
     uint maxRays;
+    uint lockSurfels;
+    uint pad0;
+    uint pad1;
+    uint pad2;
 };
 
 [[vk::push_constant]] UpdatePushConstants push;
+
+bool pushDeadSurfel(uint surfelIndex, uint maxSurfels)
+{
+    uint deadCount = counters.Load(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET);
+    uint previousDeadCount = deadCount;
+    for (uint attempt = 0u; attempt < 16u; ++attempt)
+    {
+        if (deadCount >= maxSurfels)
+        {
+            return false;
+        }
+
+        uint desiredDeadCount = deadCount + 1u;
+        counters.InterlockedCompareExchange(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET,
+                                            deadCount,
+                                            desiredDeadCount,
+                                            previousDeadCount);
+        if (previousDeadCount == deadCount)
+        {
+            deadBuffer[deadCount] = surfelIndex;
+            return true;
+        }
+        deadCount = previousDeadCount;
+    }
+    return false;
+}
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -24,7 +55,25 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     SurfelPathTracerSurfel surfel = surfelBuffer[surfelIndex];
-    if (surfel.flags == 0u || surfel.radius <= 0.0f || !isFinite3(surfel.position)) {
+    if (surfel.flags == 0u) {
+        return;
+    }
+
+    uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
+    uint deadCount = counters.Load(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET);
+    float aliveRatio = 1.0 - saturate(float(deadCount) / float(max(push.maxSurfels, 1u)));
+    float distanceToCamera = length(surfel.position - ubo.cameraPos.xyz);
+    if (push.lockSurfels == 0u && shouldRecycleSurfel(surfel, frameIndex, distanceToCamera, aliveRatio))
+    {
+        if (pushDeadSurfel(surfelIndex, push.maxSurfels))
+        {
+            surfel.flags = 0u;
+            surfel.radius = 0.0;
+            surfel.rayOffset = 0u;
+            surfel.rayCount = 0u;
+            surfelBuffer[surfelIndex] = surfel;
+            counters.InterlockedAdd(SURFEL_PT_COUNTER_RECYCLED_SURFELS_OFFSET, 1u);
+        }
         return;
     }
 

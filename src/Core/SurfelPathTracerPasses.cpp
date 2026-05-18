@@ -23,6 +23,10 @@ struct SurfelUpdatePushConstants
 	float cellSize = 1.0f;
 	uint32_t cellDimension = 1;
 	uint32_t maxRays = 0;
+	uint32_t lockSurfels = 0;
+	uint32_t pad0 = 0;
+	uint32_t pad1 = 0;
+	uint32_t pad2 = 0;
 };
 
 struct SurfelCellInfoPushConstants
@@ -221,7 +225,8 @@ void SurfelPathTracerPasses::recordUpdatePass(const vk::raii::CommandBuffer &com
                                               uint32_t maxSurfels,
                                               uint32_t maxRays,
                                               float cellSize,
-                                              uint32_t cellDimension) const
+                                              uint32_t cellDimension,
+                                              bool lockSurfels) const
 {
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.updatePipeline);
 	const std::array descriptorSets = {imageSet, globalSet};
@@ -235,7 +240,8 @@ void SurfelPathTracerPasses::recordUpdatePass(const vk::raii::CommandBuffer &com
 	    .maxSurfels = std::max(maxSurfels, 1u),
 	    .cellSize = std::max(cellSize, 0.0001f),
 	    .cellDimension = std::max(cellDimension, 1u),
-	    .maxRays = std::max(maxRays, 1u)};
+	    .maxRays = std::max(maxRays, 1u),
+	    .lockSurfels = lockSurfels ? 1u : 0u};
 	commandBuffer.pushConstants<SurfelUpdatePushConstants>(*pipelines.computePipelineLayout,
 	                                                       vk::ShaderStageFlagBits::eCompute,
 	                                                       0,

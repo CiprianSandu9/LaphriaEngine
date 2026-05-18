@@ -161,6 +161,12 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "coord.x < upperDim",
 	    "for (int z = -1; z <= 1; ++z)",
 	    "isSurfelIntersectCell(surfel",
+	    "shouldRecycleSurfel",
+	    "pushDeadSurfel",
+	    "surfelRadius",
+	    "lockSurfels",
+	    "lastReferencedFrame = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET)",
+	    "lastSeenFrame = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET)",
 	    "needsPersistentReset",
 	    "~SurfelPathTracerResources",
 	    "SurfelPathTracerResources(const SurfelPathTracerResources &) = delete",
@@ -353,6 +359,8 @@ bool testSurfelPathTracerPipelineContractFiles()
 
 	const bool ok = containsAllNeedles(combined, needles);
 	const std::string updateShader = readTextFile(root / "src" / "shaders" / "SurfelPathTracerUpdate.slang", filesOk);
+	const std::string evaluateShader =
+	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerEvaluate.slang", filesOk);
 	const std::string cellToSurfelShader =
 	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerCellToSurfel.slang", filesOk);
 	const std::string passesCpp = readTextFile(root / "src" / "Core" / "SurfelPathTracerPasses.cpp", filesOk);
@@ -369,8 +377,22 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "cellToSurfelBuffer[cellInfo.surfelOffset + cellSlot] = surfelIndex;",
 	                        "counters.InterlockedAdd(SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET, 1u);"}) &&
 	    occursAtLeast(passesCpp, "const std::array descriptorSets = {imageSet, globalSet};", 4);
+	bool task6Ok =
+	    appearsBefore(updateShader, "if (pushDeadSurfel(surfelIndex, push.maxSurfels))", "surfel.flags = 0u;") &&
+	    containsAllNeedles(updateShader,
+	                       {"push.lockSurfels == 0u && shouldRecycleSurfel",
+	                        "counters.InterlockedAdd(SURFEL_PT_COUNTER_RECYCLED_SURFELS_OFFSET, 1u);"}) &&
+	    containsAllNeedles(evaluateShader,
+	                       {"if (closestSurfelIndex != SURFEL_PT_INVALID_INDEX)",
+	                        "surfel.lastReferencedFrame = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET)",
+	                        "surfel.lastSeenFrame = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET)"});
+	if (containsNeedle(updateShader, "SURFEL_PT_COUNTER_ALIVE_SURFELS_OFFSET"))
+	{
+		std::cerr << "SurfelPathTracer lifecycle contract must not decrement aliveSurfels in Update\n";
+		task6Ok = false;
+	}
 
-	return filesOk && ok && task5Ok;
+	return filesOk && ok && task5Ok && task6Ok;
 }
 
 bool testSurfelPathTracerCellAddressBounds()

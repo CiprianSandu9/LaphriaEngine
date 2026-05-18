@@ -155,6 +155,31 @@ bool isSurfelIntersectCell(SurfelPathTracerSurfel surfel, int3 cellCoord, float3
     return length(closest - surfel.position) <= surfel.radius;
 }
 
+bool shouldRecycleSurfel(SurfelPathTracerSurfel surfel, uint frameIndex, float distanceToCamera, float aliveRatio)
+{
+    if (surfel.flags == 0u)
+    {
+        return false;
+    }
+    if (surfel.radius <= 0.0 || !isFinite3(surfel.position))
+    {
+        return true;
+    }
+
+    uint ageSinceSeen = frameIndex >= surfel.lastSeenFrame ? frameIndex - surfel.lastSeenFrame : 0u;
+    uint ageSinceRef = frameIndex >= surfel.lastReferencedFrame ? frameIndex - surfel.lastReferencedFrame : 0u;
+    bool stale = ageSinceSeen > 240u && ageSinceRef > 120u;
+    bool distant = distanceToCamera > 160.0;
+    bool pressure = aliveRatio > 0.85;
+    return stale && (distant || pressure);
+}
+
+float surfelRadius(float distanceToCamera, float targetArea, float minRadius, float maxRadius)
+{
+    float radius = max(distanceToCamera * sqrt(max(targetArea, 1.0)) * 0.0007, minRadius);
+    return min(radius, maxRadius);
+}
+
 float luminance(float3 value) {
     return dot(value, float3(0.2126, 0.7152, 0.0722));
 }

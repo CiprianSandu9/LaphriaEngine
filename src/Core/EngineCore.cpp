@@ -2214,7 +2214,8 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                        surfelPathTracerResources.maxSurfelsCapacity(),
 		                                        surfelPathTracerResources.maxRaysPerFrameCapacity(),
 		                                        surfelSettings.cellSize,
-		                                        surfelPathTracerResources.cellDimensionCapacity());
+		                                        surfelPathTracerResources.cellDimensionCapacity(),
+		                                        surfelSettings.lockSurfels);
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		surfelPathTracerPasses.recordCellInfoPass(commandBuffer,
 		                                          pipelines.surfelPathTracerPipelines,
