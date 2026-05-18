@@ -1506,8 +1506,9 @@ void EngineCore::recordSurfelGiClearPass(const vk::raii::CommandBuffer &commandB
 	                                 *pipelines.surfelGiPipelineLayout, 0,
 	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
 
-	constexpr uint32_t clearItems =
-	    std::max(FrameContext::kSurfelGiCellCount, FrameContext::kSurfelGiMaxSurfels);
+	constexpr uint32_t clearItems = std::max(
+	    FrameContext::kSurfelGiCellToSurfelCapacity,
+	    std::max(FrameContext::kSurfelGiCellCount, FrameContext::kSurfelGiMaxSurfels));
 	constexpr uint32_t groups = (clearItems + 127u) / 128u;
 	commandBuffer.dispatch(groups, 1, 1);
 
@@ -2456,6 +2457,16 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    counters->surfelGiCellInserted;
 	ui.pathTracerPerfStats.surfelGiCellOverflow =
 	    counters->surfelGiCellOverflow;
+	ui.pathTracerPerfStats.surfelGiCellTotalMemberships =
+	    counters->surfelGiCellTotalMemberships;
+	ui.pathTracerPerfStats.surfelGiCellAllocatedMemberships =
+	    counters->surfelGiCellAllocatedMemberships;
+	ui.pathTracerPerfStats.surfelGiCellAllocationOverflow =
+	    counters->surfelGiCellAllocationOverflow;
+	ui.pathTracerPerfStats.surfelGiCellNonEmpty =
+	    counters->surfelGiCellNonEmpty;
+	ui.pathTracerPerfStats.surfelGiCellMaxPopulation =
+	    counters->surfelGiCellMaxPopulation;
 	ui.pathTracerPerfStats.surfelGiEvalAttempts =
 	    counters->surfelGiEvalAttempts;
 	ui.pathTracerPerfStats.surfelGiEvalCandidates =
@@ -3013,6 +3024,9 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "surfelGiGenerateRejectInvalid=%.1f, surfelGiGenerateRejectCoverage=%.1f, "
 	     "surfelGiCellInsertAttempts=%.1f, "
 	     "surfelGiCellInserted=%.1f, surfelGiCellOverflow=%.1f, "
+	     "surfelGiCellTotalMemberships=%.1f, surfelGiCellAllocatedMemberships=%.1f, "
+	     "surfelGiCellAllocationOverflow=%.1f, surfelGiCellNonEmpty=%.1f, "
+	     "surfelGiCellMaxPopulation=%.1f, "
 	     "surfelGiEvalAttempts=%.1f, surfelGiEvalCandidates=%.1f, "
 	     "surfelGiEvalAccepted=%.1f, surfelGiEvalCellEmpty=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
@@ -3115,6 +3129,11 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.surfelGiCellInsertAttempts * invSamples,
 	     accum.surfelGiCellInserted * invSamples,
 	     accum.surfelGiCellOverflow * invSamples,
+	     accum.surfelGiCellTotalMemberships * invSamples,
+	     accum.surfelGiCellAllocatedMemberships * invSamples,
+	     accum.surfelGiCellAllocationOverflow * invSamples,
+	     accum.surfelGiCellNonEmpty * invSamples,
+	     accum.surfelGiCellMaxPopulation * invSamples,
 	     accum.surfelGiEvalAttempts * invSamples,
 	     accum.surfelGiEvalCandidates * invSamples,
 	     accum.surfelGiEvalAccepted * invSamples,
@@ -3336,6 +3355,16 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.surfelGiCellInserted);
 	ptExperimentAccum.surfelGiCellOverflow +=
 	    static_cast<double>(stats.surfelGiCellOverflow);
+	ptExperimentAccum.surfelGiCellTotalMemberships +=
+	    static_cast<double>(stats.surfelGiCellTotalMemberships);
+	ptExperimentAccum.surfelGiCellAllocatedMemberships +=
+	    static_cast<double>(stats.surfelGiCellAllocatedMemberships);
+	ptExperimentAccum.surfelGiCellAllocationOverflow +=
+	    static_cast<double>(stats.surfelGiCellAllocationOverflow);
+	ptExperimentAccum.surfelGiCellNonEmpty +=
+	    static_cast<double>(stats.surfelGiCellNonEmpty);
+	ptExperimentAccum.surfelGiCellMaxPopulation +=
+	    static_cast<double>(stats.surfelGiCellMaxPopulation);
 	ptExperimentAccum.surfelGiEvalAttempts +=
 	    static_cast<double>(stats.surfelGiEvalAttempts);
 	ptExperimentAccum.surfelGiEvalCandidates +=

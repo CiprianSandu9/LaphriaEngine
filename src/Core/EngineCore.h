@@ -233,6 +233,11 @@ class EngineCore
 		double surfelGiCellInsertAttempts = 0.0;
 		double surfelGiCellInserted = 0.0;
 		double surfelGiCellOverflow = 0.0;
+		double surfelGiCellTotalMemberships = 0.0;
+		double surfelGiCellAllocatedMemberships = 0.0;
+		double surfelGiCellAllocationOverflow = 0.0;
+		double surfelGiCellNonEmpty = 0.0;
+		double surfelGiCellMaxPopulation = 0.0;
 		double surfelGiEvalAttempts = 0.0;
 		double surfelGiEvalCandidates = 0.0;
 		double surfelGiEvalAccepted = 0.0;

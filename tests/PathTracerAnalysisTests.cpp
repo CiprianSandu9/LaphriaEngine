@@ -31,6 +31,11 @@ bool containsText(const std::string &haystack, const char *needle)
 	return haystack.find(needle) != std::string::npos;
 }
 
+bool containsRegex(const std::string &haystack, const std::string &pattern)
+{
+	return std::regex_search(haystack, std::regex(pattern));
+}
+
 std::optional<unsigned> extractUnsignedAssignment(const std::string &source,
                                                   const char *name)
 {
@@ -369,8 +374,58 @@ bool requireSurfelClearPassContracts(const std::string &pipelineHeader,
 			return false;
 	}
 
-	return containsText(surfelClear, "void surfelClearMain") &&
-	       containsText(surfelClear, "surfelGiClearDispatchesOffset");
+	const std::string clearMain =
+	    stripComments(extractFunctionBody(surfelClear, "void surfelClearMain("));
+	const std::string clearDispatch =
+	    stripComments(extractFunctionBody(engineCore, "void EngineCore::recordSurfelGiClearPass("));
+	const std::size_t clearItemsPos = clearDispatch.find("constexpr uint32_t clearItems");
+	const std::size_t groupsPos = clearItemsPos == std::string::npos
+	                                  ? std::string::npos
+	                                  : clearDispatch.find("constexpr uint32_t groups", clearItemsPos);
+	const std::string clearItemsExpression =
+	    (clearItemsPos == std::string::npos || groupsPos == std::string::npos)
+	        ? std::string{}
+	        : clearDispatch.substr(clearItemsPos, groupsPos - clearItemsPos);
+
+	if (clearMain.empty() || clearDispatch.empty())
+	{
+		return false;
+	}
+
+	if (!containsText(surfelClear, "void surfelClearMain") ||
+	    !containsText(surfelClear, "surfelGiClearDispatchesOffset"))
+	{
+		return false;
+	}
+
+	if (!containsText(clearMain, "cell.count = 0u") ||
+	    !containsText(clearMain, "cell.offset = 0xffffffffu") ||
+	    !containsText(clearMain, "cell.writeCursor = 0u") ||
+	    !containsText(clearMain, "cell.overflow = 0u") ||
+	    containsText(clearMain, "cell.pad0") ||
+	    containsText(clearMain, "cell.pad1") ||
+	    containsText(clearMain, "SURFEL_GI_CELL_SLOT_COUNT"))
+	{
+		std::cerr << "surfel clear shader must initialize compact cells without legacy slot fields\n";
+		return false;
+	}
+
+	if (!containsText(surfelClear, "RWStructuredBuffer<uint> surfelGiCellToSurfel") ||
+	    !containsText(clearMain, "index < SURFEL_GI_CELL_TO_SURFEL_CAPACITY") ||
+	    !containsText(clearMain, "surfelGiCellToSurfel[index] = 0xffffffffu"))
+	{
+		std::cerr << "surfel clear shader must clear the compact cell-to-surfel index list\n";
+		return false;
+	}
+
+	if (!containsRegex(clearItemsExpression,
+	                   R"(std::max\s*\(\s*FrameContext::kSurfelGiCellToSurfelCapacity\s*,\s*std::max\s*\(\s*FrameContext::kSurfelGiCellCount\s*,\s*FrameContext::kSurfelGiMaxSurfels\s*\)\s*\))"))
+	{
+		std::cerr << "surfel clear dispatch count must take the max of cells, surfels, and compact membership list\n";
+		return false;
+	}
+
+	return true;
 }
 
 bool requireSurfelGeneratePassContracts(const std::string &cmakeLists,
@@ -925,6 +980,139 @@ bool requireIndexedBrightSurfelDiagnosticPlumbing(const std::string &engineAuxil
 	return true;
 }
 
+bool requireCompactSurfelGridDiagnosticPlumbing(const std::string &engineAuxiliaryHeader,
+                                                const std::string &uiHeader,
+                                                const std::string &uiSource,
+                                                const std::string &engineHeader,
+                                                const std::string &engineCore)
+{
+	const char *compactDiagnostics[] = {
+	    "surfelGiCellTotalMemberships",
+	    "surfelGiCellAllocatedMemberships",
+	    "surfelGiCellAllocationOverflow",
+	    "surfelGiCellNonEmpty",
+	    "surfelGiCellMaxPopulation"};
+
+	bool ok = true;
+	const std::string counterCopyBody =
+	    stripComments(extractFunctionBody(engineCore, "void EngineCore::collectPathTracerAnalysisCounters("));
+	const std::string accumulationBody =
+	    stripComments(extractFunctionBody(engineCore, "void EngineCore::updatePathTracerExperimentSweep("));
+	const std::string rowLogBody =
+	    stripComments(extractFunctionBody(engineCore, "void EngineCore::logPathTracerExperimentRow("));
+	if (counterCopyBody.empty() || accumulationBody.empty() || rowLogBody.empty())
+	{
+		std::cerr << "missing function bodies for compact surfel grid diagnostic plumbing checks\n";
+		return false;
+	}
+
+	for (const char *diagnostic : compactDiagnostics)
+	{
+		const std::string counterField =
+		    std::string("uint32_t ") + diagnostic + " = 0";
+		if (!containsText(engineAuxiliaryHeader, counterField.c_str()) ||
+		    !containsText(uiHeader, counterField.c_str()))
+		{
+			std::cerr << "missing compact surfel grid CPU/UI counter field: "
+			          << diagnostic << "\n";
+			ok = false;
+		}
+
+		const std::string uiCopyPattern =
+		    std::string(R"(ui\.pathTracerPerfStats\.)") + diagnostic +
+		    R"(\s*=\s*counters->)" + diagnostic + R"(\s*;)";
+		if (!containsRegex(counterCopyBody, uiCopyPattern))
+		{
+			std::cerr << "missing compact surfel grid UI counter copy path: "
+			          << diagnostic << "\n";
+			ok = false;
+		}
+
+		const std::string accumulatorField =
+		    std::string("double ") + diagnostic + " = 0.0";
+		if (!containsText(engineHeader, accumulatorField.c_str()))
+		{
+			std::cerr << "missing compact surfel grid experiment accumulator field: "
+			          << diagnostic << "\n";
+			ok = false;
+		}
+
+		const std::string accumulationPattern =
+		    std::string(R"(ptExperimentAccum\.)") + diagnostic +
+		    R"(\s*\+=\s*static_cast<double>\(stats\.)" + diagnostic + R"(\)\s*;)";
+		if (!containsRegex(accumulationBody, accumulationPattern))
+		{
+			std::cerr << "missing compact surfel grid accumulation path: "
+			          << diagnostic << "\n";
+			ok = false;
+		}
+
+		const std::string rowFormat =
+		    std::string(diagnostic) + "=%.1f";
+		const std::string rowArgument =
+		    std::string("accum.") + diagnostic + " * invSamples";
+		if (!containsText(rowLogBody, rowFormat.c_str()) ||
+		    !containsText(rowLogBody, rowArgument.c_str()))
+		{
+			std::cerr << "missing compact surfel grid row-summary format/argument: "
+			          << diagnostic << "\n";
+			ok = false;
+		}
+	}
+
+	bool formatsInOrder = true;
+	size_t formatSearchPos = 0;
+	for (const char *diagnostic : compactDiagnostics)
+	{
+		const std::string rowFormat =
+		    std::string(diagnostic) + "=%.1f";
+		const size_t formatPos = rowLogBody.find(rowFormat, formatSearchPos);
+		if (formatPos == std::string::npos)
+		{
+			formatsInOrder = false;
+			break;
+		}
+		formatSearchPos = formatPos + rowFormat.size();
+	}
+
+	bool argumentsInOrder = true;
+	size_t argumentSearchPos = 0;
+	for (const char *diagnostic : compactDiagnostics)
+	{
+		const std::string rowArgument =
+		    std::string("accum.") + diagnostic + " * invSamples";
+		const size_t argumentPos = rowLogBody.find(rowArgument, argumentSearchPos);
+		if (argumentPos == std::string::npos)
+		{
+			argumentsInOrder = false;
+			break;
+		}
+		argumentSearchPos = argumentPos + rowArgument.size();
+	}
+	if (!formatsInOrder || !argumentsInOrder)
+	{
+		std::cerr << "compact surfel grid row-summary fields must stay paired and ordered\n";
+		ok = false;
+	}
+
+	const char *uiLabels[] = {
+	    "Surfel GI cell total memberships",
+	    "Surfel GI cell allocated memberships",
+	    "Surfel GI cell allocation overflow",
+	    "Surfel GI non-empty cells",
+	    "Surfel GI max cell population"};
+	for (const char *label : uiLabels)
+	{
+		if (!containsText(uiSource, label))
+		{
+			std::cerr << "missing compact surfel grid UI label: " << label << "\n";
+			ok = false;
+		}
+	}
+
+	return ok;
+}
+
 uint64_t packConfigKey(const Laphria::PathTracerSweepConfig &cfg)
 {
 	const int scaled = static_cast<int>(std::lround(cfg.resolutionScale * 100.0f));
@@ -1249,6 +1437,11 @@ bool testPathTracerReservoirGiMeasurementContract()
 		return false;
 	}
 	if (!requireSurfelGiSlotCapacityAlignment(frameContextHeader, uiSource, surfelCommon, surfelEvaluate))
+	{
+		return false;
+	}
+	if (!requireCompactSurfelGridDiagnosticPlumbing(
+	        engineAuxiliaryHeader, uiHeader, uiSource, engineHeader, engineCore))
 	{
 		return false;
 	}

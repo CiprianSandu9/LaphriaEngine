@@ -2,7 +2,7 @@
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<SurfelGiRecord> surfelGiRecords;
 [[vk::binding(1, 0)]] RWStructuredBuffer<SurfelGiCell> surfelGiCells;
-[[vk::binding(2, 0)]] RWStructuredBuffer<uint> surfelGiCellSlots;
+[[vk::binding(2, 0)]] RWStructuredBuffer<uint> surfelGiCellToSurfel;
 [[vk::binding(3, 0)]] RWByteAddressBuffer surfelGiCounters;
 [[vk::binding(4, 0)]] RWByteAddressBuffer ptAnalysisCounters;
 [[vk::binding(5, 0)]] RWTexture2D<float4> surfelGiDebug;
@@ -26,15 +26,14 @@ void surfelClearMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     {
         SurfelGiCell cell;
         cell.count = 0u;
+        cell.offset = 0xffffffffu;
+        cell.writeCursor = 0u;
         cell.overflow = 0u;
-        cell.pad0 = 0u;
-        cell.pad1 = 0u;
         surfelGiCells[index] = cell;
+    }
 
-        const uint slotBase = index * SURFEL_GI_CELL_SLOT_COUNT;
-        for (uint slot = 0u; slot < SURFEL_GI_CELL_SLOT_COUNT; ++slot)
-        {
-            surfelGiCellSlots[slotBase + slot] = 0xffffffffu;
-        }
+    if (index < SURFEL_GI_CELL_TO_SURFEL_CAPACITY)
+    {
+        surfelGiCellToSurfel[index] = 0xffffffffu;
     }
 }
