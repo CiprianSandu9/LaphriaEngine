@@ -8,6 +8,10 @@ using namespace Laphria;
 namespace
 {
 constexpr uint32_t kLinearWorkgroupSize = 64;
+constexpr vk::ShaderStageFlags kSurfelRtPushStages = vk::ShaderStageFlagBits::eRaygenKHR |
+                                                     vk::ShaderStageFlagBits::eClosestHitKHR |
+                                                     vk::ShaderStageFlagBits::eMissKHR |
+                                                     vk::ShaderStageFlagBits::eAnyHitKHR;
 
 struct SurfelPreparePushConstants
 {
@@ -332,7 +336,7 @@ void SurfelPathTracerPasses::recordSurfelRayTracePass(const vk::raii::CommandBuf
 	    .pad0 = 0,
 	    .pad1 = 0};
 	commandBuffer.pushConstants<SurfelRayTracePushConstants>(*pipelines.rayTracingPipelineLayout,
-	                                                         vk::ShaderStageFlagBits::eRaygenKHR,
+	                                                         kSurfelRtPushStages,
 	                                                         0,
 	                                                         push);
 
@@ -449,7 +453,7 @@ void SurfelPathTracerPasses::recordReflectionPass(const vk::raii::CommandBuffer 
 	    .frameIndex = frameIndex,
 	    .enabled = enabled ? 1u : 0u};
 	commandBuffer.pushConstants<SurfelReflectionPushConstants>(*pipelines.rayTracingPipelineLayout,
-	                                                           vk::ShaderStageFlagBits::eRaygenKHR,
+	                                                           kSurfelRtPushStages,
 	                                                           0,
 	                                                           push);
 

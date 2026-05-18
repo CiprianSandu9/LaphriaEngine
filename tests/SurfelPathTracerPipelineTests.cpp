@@ -512,8 +512,17 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "surfelSettings.maxRaysPerSurfel",
 	                        "surfelSettings.varianceSensitivity",
 	                        "surfelPathTracerResources.maxRaysPerFrameCapacity())"});
+	bool rtPushConstantStagesOk =
+	    containsAllNeedles(passesCpp,
+	                       {"kSurfelRtPushStages",
+	                        "vk::ShaderStageFlagBits::eRaygenKHR |",
+	                        "vk::ShaderStageFlagBits::eClosestHitKHR |",
+	                        "vk::ShaderStageFlagBits::eMissKHR |",
+	                        "vk::ShaderStageFlagBits::eAnyHitKHR",
+	                        "pushConstants<SurfelRayTracePushConstants>(*pipelines.rayTracingPipelineLayout,\n\t                                                         kSurfelRtPushStages",
+	                        "pushConstants<SurfelReflectionPushConstants>(*pipelines.rayTracingPipelineLayout,\n\t                                                           kSurfelRtPushStages"});
 
-	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok;
+	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok && rtPushConstantStagesOk;
 }
 
 bool testSurfelPathTracerCellAddressBounds()
