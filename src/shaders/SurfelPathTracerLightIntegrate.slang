@@ -29,6 +29,7 @@ static const uint SURFEL_DEBUG_GBUFFER_DEPTH = 2u;
 static const uint SURFEL_DEBUG_SURFEL_RADIANCE = 5u;
 static const uint SURFEL_DEBUG_REFLECTION_RAW = 8u;
 static const uint SURFEL_DEBUG_REFLECTION_FILTERED = 9u;
+static const float SURFEL_PT_DIFFUSE_GI_SCALE = 0.35;
 
 float3 primaryRayDirection(uint2 pixel) {
     float2 uv = (float2(pixel) + float2(0.5, 0.5)) / float2(max(push.width, 1u), max(push.height, 1u));
@@ -63,7 +64,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     float3 normal = normalize(normalRaw);
     float3 albedo = max(gBufferAlbedo[pixel].rgb, float3(0.0));
-    float3 diffuseGi = push.enableDiffuseGi != 0u ? max(outputImage[pixel].rgb, float3(0.0)) : float3(0.0);
+    float3 diffuseGi = push.enableDiffuseGi != 0u ? albedo * max(outputImage[pixel].rgb, float3(0.0)) * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0);
     float directSun = max(dot(normal, sunDir), 0.0);
     float3 skyAmbient = evalSkyColor(normal, sunDir) * 0.25 + evalGroundColor(sunDir) * 0.10;
     float3 directLighting = SUN_RADIANCE * directSun + skyAmbient;

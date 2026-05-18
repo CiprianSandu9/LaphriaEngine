@@ -538,9 +538,19 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "float3 albedo = max(gBufferAlbedo[pixel].rgb, float3(0.0))",
 	                        "float3 diffuseLighting = albedo * directLighting",
 	                        "diffuseLighting + diffuseGi + reflection"});
+	bool surfelDiffuseGiOk =
+	    containsAllNeedles(evaluateShader,
+	                       {"float3 sampleWeightedSurfelRadiance(float3 position, float3 normal)",
+	                        "weightedRadiance += clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE) * weight",
+	                        "return weightSum > 0.0001 ? weightedRadiance / weightSum : float3(0.0)",
+	                        "return sampleWeightedSurfelRadiance(position, normal) * saturate(coverage)",
+	                        "outputImage[pixel] = float4(resolveSurfelRadiance(position, normal, coverage, closestSurfelIndex), 1.0)"}) &&
+	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
+	                       {"static const float SURFEL_PT_DIFFUSE_GI_SCALE = 0.35",
+	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? albedo * max(outputImage[pixel].rgb, float3(0.0)) * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0)"});
 
 	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok &&
-	       rtPushConstantStagesOk && materialAlbedoOk;
+	       rtPushConstantStagesOk && materialAlbedoOk && surfelDiffuseGiOk;
 }
 
 bool testSurfelPathTracerCellAddressBounds()

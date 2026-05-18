@@ -161,14 +161,45 @@ void allocateSurfel(uint2 pixel, float3 position, float3 normal, float radius, f
     }
 }
 
-float3 resolveSurfelRadiance(float3 normal, float coverage, uint closestSurfelIndex) {
+float3 sampleWeightedSurfelRadiance(float3 position, float3 normal) {
+    uint dim = max(push.cellDimension, 1u);
+    int3 centerCoord = cameraRelativeCellCoord(position, ubo.cameraPos.xyz, push.cellSize);
+    if (!isCellCoordValid(centerCoord, dim)) {
+        return float3(0.0);
+    }
+
+    float3 weightedRadiance = float3(0.0);
+    float weightSum = 0.0;
+    uint cellIndex = flattenCameraRelativeCellCoord(centerCoord, dim);
+    SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
+    for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
+        uint surfelIndex = cellToSurfelBuffer[cellInfo.surfelOffset + slot];
+        if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= push.maxSurfels) {
+            continue;
+        }
+
+        SurfelPathTracerSurfel surfel = surfelBuffer[surfelIndex];
+        if (!isActiveSurfel(surfel)) {
+            continue;
+        }
+
+        float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
+        float normalWeight = saturate(dot(normal, surfelNormal));
+        float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(surfel.radius * 2.0, 0.0001));
+        float weight = normalWeight * distanceWeight * distanceWeight;
+        weightedRadiance += clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE) * weight;
+        weightSum += weight;
+    }
+
+    return weightSum > 0.0001 ? weightedRadiance / weightSum : float3(0.0);
+}
+
+float3 resolveSurfelRadiance(float3 position, float3 normal, float coverage, uint closestSurfelIndex) {
     if (closestSurfelIndex == SURFEL_PT_INVALID_INDEX) {
         return float3(0.0);
     }
 
-    SurfelPathTracerSurfel surfel = surfelBuffer[closestSurfelIndex];
-    float3 gi = clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE);
-    return gi * saturate(coverage);
+    return sampleWeightedSurfelRadiance(position, normal) * saturate(coverage);
 }
 
 [shader("compute")]
@@ -197,7 +228,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         float coverage = estimateCoverage(position, normal, closestSurfelIndex, false);
         if (push.lockSurfels == 0u && push.enablePlacement != 0u && coverage < push.placementThreshold) {
             float radius = surfelRadius(depth, push.surfelTargetArea, push.surfelMinRadius, push.cellSize * 2.0);
-            allocateSurfel(pixel, position, normal, radius, resolveSurfelRadiance(normal, coverage, closestSurfelIndex), 0u);
+            allocateSurfel(pixel, position, normal, radius, resolveSurfelRadiance(position, normal, coverage, closestSurfelIndex), 0u);
         }
         if (push.lockSurfels == 0u &&
             push.enableRemoval != 0u &&
@@ -213,5 +244,5 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     float coverage = estimateCoverage(position, normal, closestSurfelIndex, true);
-    outputImage[pixel] = float4(resolveSurfelRadiance(normal, coverage, closestSurfelIndex), 1.0);
+    outputImage[pixel] = float4(resolveSurfelRadiance(position, normal, coverage, closestSurfelIndex), 1.0);
 }
