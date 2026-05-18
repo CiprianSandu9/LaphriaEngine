@@ -162,7 +162,7 @@ void SurfelPathTracerPipelines::createDescriptorSetLayouts(const VulkanDevice &d
 	    vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eRaygenKHR |
 	    vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR |
 	    vk::ShaderStageFlagBits::eAnyHitKHR;
-	std::array<vk::DescriptorSetLayoutBinding, 20> storageBindings = {
+	std::array<vk::DescriptorSetLayoutBinding, 21> storageBindings = {
 	    vk::DescriptorSetLayoutBinding{.binding = 0, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 2, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
@@ -182,7 +182,8 @@ void SurfelPathTracerPipelines::createDescriptorSetLayouts(const VulkanDevice &d
 	    vk::DescriptorSetLayoutBinding{.binding = 16, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 17, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 18, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
-	    vk::DescriptorSetLayoutBinding{.binding = 19, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages}};
+	    vk::DescriptorSetLayoutBinding{.binding = 19, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 20, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages}};
 	vk::DescriptorSetLayoutCreateInfo storageLayoutInfo{
 	    .bindingCount = static_cast<uint32_t>(storageBindings.size()),
 	    .pBindings = storageBindings.data()};

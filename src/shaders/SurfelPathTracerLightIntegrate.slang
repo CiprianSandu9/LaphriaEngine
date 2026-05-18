@@ -6,6 +6,7 @@
 [[vk::binding(16, 0)]] RWTexture2D<float4> reflectionImages;
 [[vk::binding(17, 0)]] RWTexture2D<float4> filteredReflectionImages;
 [[vk::binding(18, 0)]] RWTexture2D<float4> lightingImages;
+[[vk::binding(20, 0)]] RWTexture2D<float4> gBufferAlbedo;
 
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 
@@ -61,10 +62,12 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     float3 normal = normalize(normalRaw);
+    float3 albedo = max(gBufferAlbedo[pixel].rgb, float3(0.0));
     float3 diffuseGi = push.enableDiffuseGi != 0u ? max(outputImage[pixel].rgb, float3(0.0)) : float3(0.0);
     float directSun = max(dot(normal, sunDir), 0.0);
     float3 skyAmbient = evalSkyColor(normal, sunDir) * 0.25 + evalGroundColor(sunDir) * 0.10;
     float3 directLighting = SUN_RADIANCE * directSun + skyAmbient;
+    float3 diffuseLighting = albedo * directLighting;
     uint2 reflectionPixel = halfResolutionPixel(pixel);
     float3 reflectionRaw = reflectionImages[reflectionPixel].rgb;
     float3 reflectionFiltered = push.useBilateralReflection != 0u
@@ -72,7 +75,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
                                 : filteredReflectionImages[reflectionPixel].rgb;
     float3 reflection = push.enableReflections != 0u ? reflectionFiltered : float3(0.0);
 
-    float3 lighting = clampLuminance(directLighting + diffuseGi + reflection, SURFEL_PT_MAX_RADIANCE_LUMINANCE);
+    float3 lighting = clampLuminance(diffuseLighting + diffuseGi + reflection, SURFEL_PT_MAX_RADIANCE_LUMINANCE);
 
     if (push.debugView == SURFEL_DEBUG_GBUFFER_NORMAL) {
         lightingImages[pixel] = float4(normal * 0.5 + 0.5, 1.0);

@@ -1162,7 +1162,7 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 	}
 
 	std::array<vk::DescriptorPoolSize, 2> poolSizes = {
-	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 10 * MAX_FRAMES_IN_FLIGHT},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 11 * MAX_FRAMES_IN_FLIGHT},
 	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 10 * MAX_FRAMES_IN_FLIGHT}};
 	vk::DescriptorPoolCreateInfo poolInfo{
 	    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
@@ -1181,7 +1181,7 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
 	{
-		const std::array<vk::DescriptorImageInfo, 10> imageInfos = {
+		const std::array<vk::DescriptorImageInfo, 11> imageInfos = {
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.outputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferNormalViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferDepthViews[i], .imageLayout = vk::ImageLayout::eGeneral},
@@ -1191,8 +1191,9 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.reflectionViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.filteredReflectionViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.lightingViews[i], .imageLayout = vk::ImageLayout::eGeneral},
-		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.taaHistoryViews[i], .imageLayout = vk::ImageLayout::eGeneral}};
-		const std::array<uint32_t, 10> imageBindings = {0, 1, 2, 3, 14, 15, 16, 17, 18, 19};
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.taaHistoryViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferAlbedoViews[i], .imageLayout = vk::ImageLayout::eGeneral}};
+		const std::array<uint32_t, 11> imageBindings = {0, 1, 2, 3, 14, 15, 16, 17, 18, 19, 20};
 
 		const std::array<vk::DescriptorBufferInfo, 10> bufferInfos = {
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.countersBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
@@ -2041,6 +2042,7 @@ void EngineCore::transitionPersistentSurfelImagesToGeneral(uint32_t frameIndex) 
 	transitionImageSet(surfelPathTracerResources.gBufferNormalImages);
 	transitionImageSet(surfelPathTracerResources.gBufferDepthImages);
 	transitionImageSet(surfelPathTracerResources.gBufferMotionMaterialImages);
+	transitionImageSet(surfelPathTracerResources.gBufferAlbedoImages);
 	transitionImageSet(surfelPathTracerResources.reflectionImages);
 	transitionImageSet(surfelPathTracerResources.filteredReflectionImages);
 	transitionImageSet(surfelPathTracerResources.lightingImages);
@@ -2150,6 +2152,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	if (fi >= surfelPathTracerResources.gBufferNormalImages.size() ||
 	    fi >= surfelPathTracerResources.gBufferDepthImages.size() ||
 	    fi >= surfelPathTracerResources.gBufferMotionMaterialImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferAlbedoImages.size() ||
 	    fi >= surfelPathTracerStorageDescriptorSets.size() ||
 	    fi >= surfelPathTracerRtDescriptorSets.size())
 	{
@@ -2169,6 +2172,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferNormalImages[fi]);
 	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferDepthImages[fi]);
 	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferMotionMaterialImages[fi]);
+	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferAlbedoImages[fi]);
 
 	surfelPathTracerPasses.recordGBufferPass(commandBuffer,
 	                                         pipelines.surfelPathTracerPipelines,

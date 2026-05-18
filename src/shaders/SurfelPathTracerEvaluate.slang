@@ -163,12 +163,12 @@ void allocateSurfel(uint2 pixel, float3 position, float3 normal, float radius, f
 
 float3 resolveSurfelRadiance(float3 normal, float coverage, uint closestSurfelIndex) {
     if (closestSurfelIndex == SURFEL_PT_INVALID_INDEX) {
-        return normal * 0.5 + 0.5;
+        return float3(0.0);
     }
 
     SurfelPathTracerSurfel surfel = surfelBuffer[closestSurfelIndex];
     float3 gi = clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE);
-    return lerp(normal * 0.5 + 0.5, gi, saturate(coverage));
+    return gi * saturate(coverage);
 }
 
 [shader("compute")]

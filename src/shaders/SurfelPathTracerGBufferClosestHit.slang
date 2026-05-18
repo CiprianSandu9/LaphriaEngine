@@ -5,6 +5,7 @@ struct SurfelPathTracerGBufferPayload {
     uint modelId;
     uint materialIndex;
     float3 worldNormal;
+    float3 baseColor;
 };
 
 struct BuiltInTriangleIntersectionAttributes {
@@ -15,6 +16,9 @@ struct BuiltInTriangleIntersectionAttributes {
 [[vk::binding(5, 0)]] ByteAddressBuffer globalVertices[];
 [[vk::binding(6, 0)]] ByteAddressBuffer globalIndices[];
 [[vk::binding(7, 0)]] StructuredBuffer<MaterialData> globalMaterials[];
+[[vk::binding(8, 0)]] Sampler2D globalTextures[];
+
+[[vk::binding(0, 2)]] ConstantBuffer<UniformBuffer> ubo;
 
 static const uint kVertexStride = 60;
 
@@ -23,6 +27,7 @@ struct GBufferSurface {
     uint modelId;
     uint materialIndex;
     MaterialData material;
+    float3 baseColor;
 };
 
 Vertex loadGBufferVertex(ByteAddressBuffer buf, uint idx)
@@ -63,16 +68,27 @@ GBufferSurface decodeGBufferSurface(uint instanceId, uint geometryIndex, uint pr
 
     float3 bary = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
     float3 objectNormal = v0.normal * bary.x + v1.normal * bary.y + v2.normal * bary.z;
+    float2 uv = v0.texCoord * bary.x + v1.texCoord * bary.y + v2.texCoord * bary.z;
+    float3 vertexColor = v0.color * bary.x + v1.color * bary.y + v2.color * bary.z;
     float3 worldNormal = normalize(mul(objectNormal, (float3x3)WorldToObject3x4()));
     if (dot(worldNormal, WorldRayDirection()) > 0.0) {
         worldNormal = -worldNormal;
     }
+
+    float4 baseColor = mat.baseColorFactor;
+    if (mat.baseColorIndex >= 0) {
+        float4 sampled = globalTextures[NonUniformResourceIndex(mat.baseColorIndex + mat.globalTextureOffset)].SampleLevel(uv, 0.0);
+        baseColor.rgb *= decodeColorSample(sampled.rgb, ubo.textureColorSpaceModel);
+        baseColor.a *= sampled.a;
+    }
+    baseColor.rgb *= vertexColor;
 
     GBufferSurface surface;
     surface.worldNormal = worldNormal;
     surface.modelId = modelId;
     surface.materialIndex = materialIndex;
     surface.material = mat;
+    surface.baseColor = max(baseColor.rgb, float3(0.0));
     return surface;
 }
 
@@ -83,4 +99,5 @@ void main(inout SurfelPathTracerGBufferPayload payload, in BuiltInTriangleInters
     payload.modelId = surface.modelId;
     payload.materialIndex = surface.materialIndex;
     payload.worldNormal = surface.worldNormal;
+    payload.baseColor = surface.baseColor;
 }

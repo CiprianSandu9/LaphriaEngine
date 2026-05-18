@@ -32,6 +32,7 @@ struct ReflectionPushConstants {
 [[vk::binding(11, 1)]] RWStructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer;
 [[vk::binding(13, 1)]] RWStructuredBuffer<uint> cellToSurfelBuffer;
 [[vk::binding(16, 1)]] RWTexture2D<float4> reflectionImages;
+[[vk::binding(20, 1)]] RWTexture2D<float4> gBufferAlbedo;
 
 [[vk::binding(0, 2)]] ConstantBuffer<UniformBuffer> ubo;
 
@@ -109,7 +110,7 @@ void main() {
     MaterialData material = loadMaterial(gBufferMotionMaterial[fullPixel]);
     float roughness = clamp(material.roughnessFactor, MIN_ROUGHNESS, 1.0);
     float metallic = saturate(material.metallicFactor);
-    float3 baseColor = max(material.baseColorFactor.rgb, float3(0.0));
+    float3 baseColor = max(gBufferAlbedo[fullPixel].rgb, float3(0.0));
     float3 f0 = lerp(float3(0.04), baseColor, metallic);
 
     uint seed = pcgHash(halfPixel.x * 1973u ^ halfPixel.y * 9277u ^ push.frameIndex * 26699u ^ ubo.frameCount);

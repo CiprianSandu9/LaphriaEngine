@@ -5,6 +5,7 @@ struct SurfelPathTracerGBufferPayload {
     uint modelId;
     uint materialIndex;
     float3 worldNormal;
+    float3 baseColor;
 };
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;
@@ -13,6 +14,7 @@ struct SurfelPathTracerGBufferPayload {
 [[vk::binding(1, 1)]] RWTexture2D<float4> gBufferNormal;
 [[vk::binding(2, 1)]] RWTexture2D<float> gBufferDepth;
 [[vk::binding(3, 1)]] RWTexture2D<float4> gBufferMotionMaterial;
+[[vk::binding(20, 1)]] RWTexture2D<float4> gBufferAlbedo;
 
 [[vk::binding(0, 2)]] ConstantBuffer<UniformBuffer> ubo;
 
@@ -39,6 +41,7 @@ void main() {
     payload.modelId = 0u;
     payload.materialIndex = 0u;
     payload.worldNormal = float3(0.0, 0.0, 0.0);
+    payload.baseColor = float3(0.0, 0.0, 0.0);
 
     TraceRay(tlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
 
@@ -48,6 +51,7 @@ void main() {
         gBufferNormal[launchID] = float4(0.0, 0.0, 0.0, 0.0);
         gBufferDepth[launchID] = -1.0;
         gBufferMotionMaterial[launchID] = float4(0.0, 0.0, 0.0, 0.0);
+        gBufferAlbedo[launchID] = float4(0.0, 0.0, 0.0, 0.0);
         return;
     }
 
@@ -58,8 +62,9 @@ void main() {
     float2 motion = unjitteredUV - prevNDC;
 
     float3 normal = normalize(payload.worldNormal);
-    outputImage[launchID] = float4(normal * 0.5 + 0.5, 1.0);
+    outputImage[launchID] = float4(payload.baseColor, 1.0);
     gBufferNormal[launchID] = float4(normal, 0.0);
     gBufferDepth[launchID] = payload.hitT;
     gBufferMotionMaterial[launchID] = float4(motion, float(payload.modelId), float(payload.materialIndex));
+    gBufferAlbedo[launchID] = float4(payload.baseColor, 1.0);
 }

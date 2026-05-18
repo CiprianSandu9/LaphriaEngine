@@ -583,9 +583,10 @@ void SurfelPathTracerPasses::recordImageBarrierGBufferToCompute(
 	const std::array images = {
 	    static_cast<vk::Image>(*resources.gBufferNormalImages[frameIndex]),
 	    static_cast<vk::Image>(*resources.gBufferDepthImages[frameIndex]),
-	    static_cast<vk::Image>(*resources.gBufferMotionMaterialImages[frameIndex])};
+	    static_cast<vk::Image>(*resources.gBufferMotionMaterialImages[frameIndex]),
+	    static_cast<vk::Image>(*resources.gBufferAlbedoImages[frameIndex])};
 
-	std::array<vk::ImageMemoryBarrier2, 3> barriers{};
+	std::array<vk::ImageMemoryBarrier2, 4> barriers{};
 	for (size_t i = 0; i < images.size(); ++i)
 	{
 		barriers[i] = vk::ImageMemoryBarrier2{

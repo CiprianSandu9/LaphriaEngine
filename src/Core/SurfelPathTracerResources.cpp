@@ -125,6 +125,7 @@ void SurfelPathTracerResources::cleanupSwapchainResources()
 	clearViewsThenDestroyImages(gBufferNormalViews, gBufferNormalImages);
 	clearViewsThenDestroyImages(gBufferDepthViews, gBufferDepthImages);
 	clearViewsThenDestroyImages(gBufferMotionMaterialViews, gBufferMotionMaterialImages);
+	clearViewsThenDestroyImages(gBufferAlbedoViews, gBufferAlbedoImages);
 	clearViewsThenDestroyImages(reflectionViews, reflectionImages);
 	clearViewsThenDestroyImages(filteredReflectionViews, filteredReflectionImages);
 	clearViewsThenDestroyImages(lightingViews, lightingImages);
@@ -278,6 +279,7 @@ void SurfelPathTracerResources::createExtentImages(const VulkanDevice &dev,
 	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, gBufferNormalImages, gBufferNormalViews);
 	createStorageImageSet(dev, width, height, vk::Format::eR32Sfloat, gBufferDepthImages, gBufferDepthViews);
 	createStorageImageSet(dev, width, height, vk::Format::eR32G32B32A32Sfloat, gBufferMotionMaterialImages, gBufferMotionMaterialViews);
+	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, gBufferAlbedoImages, gBufferAlbedoViews);
 	const uint32_t halfWidth = std::max((width + 1u) / 2u, 1u);
 	const uint32_t halfHeight = std::max((height + 1u) / 2u, 1u);
 	createStorageImageSet(dev, halfWidth, halfHeight,

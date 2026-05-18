@@ -521,8 +521,26 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "vk::ShaderStageFlagBits::eAnyHitKHR",
 	                        "pushConstants<SurfelRayTracePushConstants>(*pipelines.rayTracingPipelineLayout,\n\t                                                         kSurfelRtPushStages",
 	                        "pushConstants<SurfelReflectionPushConstants>(*pipelines.rayTracingPipelineLayout,\n\t                                                           kSurfelRtPushStages"});
+	bool materialAlbedoOk =
+	    containsAllNeedles(combined,
+	                       {"gBufferAlbedo",
+	                        "gBufferAlbedoImages",
+	                        "gBufferAlbedoViews",
+	                        "vk::Format::eR16G16B16A16Sfloat, gBufferAlbedoImages",
+	                        "vk::DescriptorSetLayoutBinding{.binding = 20",
+	                        "vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 11 * MAX_FRAMES_IN_FLIGHT}",
+	                        "[[vk::binding(20, 0)]] RWTexture2D<float4> gBufferAlbedo",
+	                        "[[vk::binding(20, 1)]] RWTexture2D<float4> gBufferAlbedo",
+	                        "[[vk::binding(8, 0)]] Sampler2D globalTextures[]",
+	                        "baseColor.rgb *= decodeColorSample(sampled.rgb, ubo.textureColorSpaceModel)",
+	                        "payload.baseColor",
+	                        "gBufferAlbedo[launchID] = float4(payload.baseColor, 1.0)",
+	                        "float3 albedo = max(gBufferAlbedo[pixel].rgb, float3(0.0))",
+	                        "float3 diffuseLighting = albedo * directLighting",
+	                        "diffuseLighting + diffuseGi + reflection"});
 
-	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok && rtPushConstantStagesOk;
+	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok &&
+	       rtPushConstantStagesOk && materialAlbedoOk;
 }
 
 bool testSurfelPathTracerCellAddressBounds()

@@ -145,6 +145,8 @@ class SurfelPathTracerResources
 	std::vector<vk::raii::ImageView> gBufferDepthViews;
 	std::vector<VulkanUtils::VmaImage> gBufferMotionMaterialImages;
 	std::vector<vk::raii::ImageView> gBufferMotionMaterialViews;
+	std::vector<VulkanUtils::VmaImage> gBufferAlbedoImages;
+	std::vector<vk::raii::ImageView> gBufferAlbedoViews;
 	std::vector<VulkanUtils::VmaImage> reflectionImages;
 	std::vector<vk::raii::ImageView> reflectionViews;
 	std::vector<VulkanUtils::VmaImage> filteredReflectionImages;
