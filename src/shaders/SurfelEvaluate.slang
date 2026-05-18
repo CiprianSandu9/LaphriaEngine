@@ -2,7 +2,7 @@
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<SurfelGiRecord> surfelGiRecords;
 [[vk::binding(1, 0)]] RWStructuredBuffer<SurfelGiCell> surfelGiCells;
-[[vk::binding(2, 0)]] RWStructuredBuffer<uint> surfelGiCellSlots;
+[[vk::binding(2, 0)]] RWStructuredBuffer<uint> surfelGiCellToSurfel;
 [[vk::binding(3, 0)]] RWByteAddressBuffer surfelGiCounters;
 [[vk::binding(4, 0)]] RWByteAddressBuffer ptAnalysisCounters;
 [[vk::binding(5, 0)]] RWTexture2D<float4> surfelGiDebug;
@@ -68,8 +68,7 @@ void surfelEvaluateMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     uint cellIndex = flattenSurfelGiCell(gridCell);
     SurfelGiCell cell = surfelGiCells[cellIndex];
-    uint count = min(cell.count, SURFEL_GI_CELL_SLOT_COUNT);
-    if (count == 0u)
+    if (cell.count == 0u || cell.offset == 0xffffffffu)
     {
         ptAnalysisCounters.InterlockedAdd(surfelGiEvalCellEmptyOffset, 1u);
         surfelGiDebug[pixel] = float4(0.0f, 0.0f, 0.0f, 1.0f);
@@ -77,11 +76,25 @@ void surfelEvaluateMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     uint configuredCandidateCount = clamp(push.maxEvalCandidates, 1u, SURFEL_GI_MAX_EVAL_CANDIDATES);
-    uint boundedCandidateCount = min(count, configuredCandidateCount);
+    uint boundedCandidateCount = min(cell.count, configuredCandidateCount);
     uint accepted = 0u;
     for (uint slot = 0u; slot < boundedCandidateCount; ++slot)
     {
-        uint surfelIndex = surfelGiCellSlots[cellIndex * SURFEL_GI_CELL_SLOT_COUNT + slot];
+        uint memberIndex = slot;
+        if (cell.count > boundedCandidateCount)
+        {
+            memberIndex = pcgHash(pixel.x * 73856093u ^
+                                  pixel.y * 19349663u ^
+                                  ubo.frameCount * 83492791u ^
+                                  slot * 2654435761u);
+            memberIndex = memberIndex % cell.count;
+        }
+
+        uint membershipIndex = cell.offset + memberIndex;
+        if (membershipIndex < cell.offset || membershipIndex >= SURFEL_GI_CELL_TO_SURFEL_CAPACITY)
+            continue;
+
+        uint surfelIndex = surfelGiCellToSurfel[cell.offset + memberIndex];
         if (surfelIndex == 0xffffffffu || surfelIndex >= SURFEL_GI_MAX_SURFELS)
             continue;
 
@@ -95,6 +108,6 @@ void surfelEvaluateMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         ptAnalysisCounters.InterlockedAdd(surfelGiEvalAcceptedOffset, accepted);
 
     float acceptedRatio = float(accepted) / max(float(boundedCandidateCount), 1.0f);
-    float occupancyRatio = float(count) / float(SURFEL_GI_CELL_SLOT_COUNT);
+    float occupancyRatio = float(boundedCandidateCount) / max(float(configuredCandidateCount), 1.0f);
     surfelGiDebug[pixel] = float4(saturate(acceptedRatio), 0.0f, saturate(occupancyRatio), 1.0f);
 }

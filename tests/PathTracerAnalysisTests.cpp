@@ -689,8 +689,16 @@ bool requireSurfelGiSlotCapacityAlignment(const std::string &frameContextHeader,
 		std::cerr << "missing surfel GI evaluate main body\n";
 		return false;
 	}
+	if (!containsText(evaluateMain, "cell.offset == 0xffffffffu") ||
+	    !containsText(evaluateMain, "min(cell.count, configuredCandidateCount)") ||
+	    !containsText(evaluateMain, "surfelGiCellToSurfel[cell.offset +") ||
+	    containsText(evaluateMain, "SURFEL_GI_CELL_SLOT_COUNT"))
+	{
+		std::cerr << "compact surfel evaluation must sample from cell offset ranges\n";
+		return false;
+	}
+
 	return containsText(evaluateMain, "clamp(push.maxEvalCandidates, 1u, SURFEL_GI_MAX_EVAL_CANDIDATES)") &&
-	       containsText(evaluateMain, "min(count, configuredCandidateCount)") &&
 	       containsText(evaluateMain, "slot < boundedCandidateCount");
 }
 
