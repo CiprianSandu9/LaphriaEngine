@@ -271,6 +271,26 @@ bool requireIndexedBrightSurfelShaderContracts(const std::string &raygen)
 		std::cerr << "missing bright surfel candidate evaluator function body\n";
 		return false;
 	}
+	if (!containsText(raygen, "RESERVOIR_GI_BRIGHT_SURFEL_QUERY_BUDGET_DIVISOR"))
+	{
+		std::cerr << "missing bright surfel indexed query budget divisor\n";
+		return false;
+	}
+	const std::size_t brightSurfelBudgetGatePos =
+	    brightSurfelEvaluator.find("shouldRunReservoirGiBudgetedPixel(launchID, ubo.frameCount");
+	const std::size_t brightSurfelBudgetDivisorPos =
+	    brightSurfelEvaluator.find("RESERVOIR_GI_BRIGHT_SURFEL_QUERY_BUDGET_DIVISOR",
+	                               brightSurfelBudgetGatePos);
+	const std::size_t brightSurfelSelectorPos =
+	    brightSurfelEvaluator.find("selectWeightedIndexedBrightReceiverSurfelRecord(");
+	if (brightSurfelBudgetGatePos == std::string::npos ||
+	    brightSurfelBudgetDivisorPos == std::string::npos ||
+	    brightSurfelSelectorPos == std::string::npos ||
+	    brightSurfelBudgetGatePos > brightSurfelSelectorPos)
+	{
+		std::cerr << "bright surfel candidate evaluator must budget-gate indexed scans before selecting\n";
+		return false;
+	}
 	if (!containsText(brightSurfelEvaluator, "selectWeightedIndexedBrightReceiverSurfelRecord("))
 	{
 		std::cerr << "bright surfel candidate evaluator must call indexed selector\n";

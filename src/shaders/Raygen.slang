@@ -136,6 +136,7 @@ static const float RESERVOIR_GI_BRIGHT_SURFEL_MIN_LUMA = 0.02;
 static const float RESERVOIR_GI_BRIGHT_SURFEL_RADIUS = 0.15;
 static const float RESERVOIR_GI_BRIGHT_SURFEL_COS_THETA_MAX = 0.8660254;
 static const uint RESERVOIR_GI_BRIGHT_SURFEL_ATTEMPT_STRIDE = 4u;
+static const int RESERVOIR_GI_BRIGHT_SURFEL_QUERY_BUDGET_DIVISOR = 64;
 static const float RESERVOIR_GI_BRIGHT_SURFEL_CANDIDATE_MIN_TARGET_WEIGHT = 0.005;
 static const float RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_SIZE = 0.75;
 static const uint RESERVOIR_GI_BRIGHT_SURFEL_INDEX_CELL_SLOTS = 2u;
@@ -1339,7 +1340,7 @@ int decodeReservoirGiBudgetDivisor(uint code)
 
 bool shouldRunReservoirGiBudgetedPixel(uint2 pixel, uint frameId, int divisor, uint salt)
 {
-    int clampedDivisor = clamp(divisor, 1, 4);
+    int clampedDivisor = clamp(divisor, 1, 64);
     if (clampedDivisor <= 1) {
         return true;
     }
@@ -2801,7 +2802,10 @@ bool evaluateBrightReceiverSurfelReservoirGiCandidate(float3 hitPos,
     candidateRecord.frameId = ubo.frameCount;
     candidateRecord.flags = 0u;
 
-    if (!shouldAttemptBrightReceiverSurfel(launchID, launchSize)) {
+    if (!shouldRunReservoirGiBudgetedPixel(launchID, ubo.frameCount,
+                                           RESERVOIR_GI_BRIGHT_SURFEL_QUERY_BUDGET_DIVISOR,
+                                           0x6d2b79f5u) ||
+        !shouldAttemptBrightReceiverSurfel(launchID, launchSize)) {
         return false;
     }
 
