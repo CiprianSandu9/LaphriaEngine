@@ -1566,7 +1566,6 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
 
     if (ImGui::CollapsingHeader("Surfel Path Tracer##settings")) {
         auto &settings = surfelPathTracerSettings;
-        settings.resolutionScale = std::clamp(settings.resolutionScale, 0.5f, 1.0f);
         settings.maxSurfels = std::clamp(settings.maxSurfels, 1024u, 500000u);
         settings.maxRaysPerFrame = std::clamp(settings.maxRaysPerFrame, 1024u, settings.maxSurfels * 64u);
         settings.cellSize = std::clamp(settings.cellSize, 0.05f, 64.0f);
@@ -1585,7 +1584,6 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         ImGui::Checkbox("Reflection Filter", &settings.enableReflectionFilter);
         ImGui::Checkbox("Bilateral Cleanup", &settings.enableBilateralCleanup);
         ImGui::Checkbox("TAA", &settings.enableTaa);
-        ImGui::SliderFloat("Surfel PT Resolution", &settings.resolutionScale, 0.5f, 1.0f, "%.2f");
         int maxSurfels = static_cast<int>(settings.maxSurfels);
         ImGui::SliderInt("Max Surfels", &maxSurfels, 1024, 500000);
         settings.maxSurfels = static_cast<uint32_t>(maxSurfels);

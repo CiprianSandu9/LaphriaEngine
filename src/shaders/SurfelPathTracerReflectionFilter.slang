@@ -102,7 +102,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     float3 spatialReconstruction = weightSum > 0.0001 ? sum / weightSum : raw.rgb;
 
-    float4 previousFiltered = filteredReflectionImages[pixel];
+    float4 previousFiltered = push.resetHistory == 0u ? filteredReflectionImages[pixel] : float4(0.0);
     bool historyUsable = push.resetHistory == 0u &&
                          isFinite3(previousFiltered.rgb) &&
                          reflectionHistoryKeyMatches(previousFiltered.a, currentKey);

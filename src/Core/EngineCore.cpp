@@ -2134,6 +2134,13 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		surfelPathTracerHistoryValid.fill(false);
 	};
 
+	const auto &surfelSettings = mutableUi.surfelPathTracerSettings;
+	if (!surfelSettings.enabled)
+	{
+		recordSurfelPathTracerNoSceneFallback();
+		return;
+	}
+
 	if (!resourceManager || resourceManager->getModelCount() == 0)
 	{
 		recordSurfelPathTracerNoSceneFallback();
@@ -2171,66 +2178,75 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                         swapchain.extent);
 	surfelPathTracerPasses.recordImageBarrierGBufferToCompute(commandBuffer, surfelPathTracerResources, fi);
 
-	const auto &surfelSettings = mutableUi.surfelPathTracerSettings;
 	const bool resetPersistent = surfelSettings.resetSurfels ||
 	                             surfelPathTracerResources.needsPersistentReset();
-	const bool historyReady = !ptForceHistoryReset && surfelPathTracerHistoryValid[fi];
-	surfelPathTracerPasses.recordPreparePass(commandBuffer,
-	                                         pipelines.surfelPathTracerPipelines,
-	                                         *surfelPathTracerStorageDescriptorSets[fi],
-	                                         surfelPathTracerResources.maxSurfelsCapacity(),
-	                                         resetPersistent,
-	                                         surfelPathTracerResources.cellCount(),
-	                                         surfelPathTracerResources.perCellSurfelLimitCapacity());
-	mutableSurfelPathTracerResources.markPersistentResetConsumed();
-	mutableUi.surfelPathTracerSettings.resetSurfels = false;
+	const bool updateSurfels = !surfelSettings.lockSurfels || resetPersistent;
+	// Current descriptors expose one history image per frame-in-flight, so a frame cannot
+	// safely sample the previous completed frame while writing the current history image.
+	const bool historyReady = false;
+	if (updateSurfels)
+	{
+		surfelPathTracerPasses.recordPreparePass(commandBuffer,
+		                                         pipelines.surfelPathTracerPipelines,
+		                                         *surfelPathTracerStorageDescriptorSets[fi],
+		                                         surfelPathTracerResources.maxSurfelsCapacity(),
+		                                         resetPersistent,
+		                                         surfelPathTracerResources.cellCount(),
+		                                         surfelPathTracerResources.perCellSurfelLimitCapacity());
+		mutableSurfelPathTracerResources.markPersistentResetConsumed();
+		mutableUi.surfelPathTracerSettings.resetSurfels = false;
 
-	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
-	surfelPathTracerPasses.recordEvaluatePass(commandBuffer,
-	                                          pipelines.surfelPathTracerPipelines,
-	                                          *surfelPathTracerStorageDescriptorSets[fi],
-	                                          *descriptorSets[fi],
-	                                          Laphria::SurfelPathTracerEvaluateMode::Generate,
-	                                          surfelSettings.cellSize,
-	                                          surfelPathTracerResources.cellDimensionCapacity(),
-	                                          surfelPathTracerResources.maxSurfelsCapacity(),
-	                                          swapchain.extent);
-	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
-	surfelPathTracerPasses.recordUpdatePass(commandBuffer,
-	                                        pipelines.surfelPathTracerPipelines,
-	                                        *surfelPathTracerStorageDescriptorSets[fi],
-	                                        surfelPathTracerResources.maxSurfelsCapacity(),
-	                                        surfelPathTracerResources.maxRaysPerFrameCapacity(),
-	                                        surfelSettings.cellSize,
-	                                        surfelPathTracerResources.cellDimensionCapacity());
-	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
-	surfelPathTracerPasses.recordCellInfoPass(commandBuffer,
-	                                          pipelines.surfelPathTracerPipelines,
-	                                          *surfelPathTracerStorageDescriptorSets[fi],
-	                                          surfelPathTracerResources.cellCount(),
-	                                          surfelPathTracerResources.perCellSurfelLimitCapacity());
-	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
-	surfelPathTracerPasses.recordCellToSurfelPass(commandBuffer,
-	                                              pipelines.surfelPathTracerPipelines,
-	                                              *surfelPathTracerStorageDescriptorSets[fi],
-	                                              surfelPathTracerResources.maxSurfelsCapacity(),
-	                                              surfelSettings.cellSize,
-	                                              surfelPathTracerResources.cellDimensionCapacity(),
-	                                              surfelPathTracerResources.perCellSurfelLimitCapacity());
-	surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
-	surfelPathTracerPasses.recordSurfelRayTracePass(commandBuffer,
-	                                                pipelines.surfelPathTracerPipelines,
-	                                                surfelPathTracerResources,
-	                                                *surfelPathTracerRtDescriptorSets[fi],
-	                                                *surfelPathTracerStorageDescriptorSets[fi],
-	                                                *descriptorSets[fi],
-	                                                surfelPathTracerResources.maxSurfelsCapacity());
-	surfelPathTracerPasses.recordStorageBarrierRtToCompute(commandBuffer);
-	surfelPathTracerPasses.recordIntegratePass(commandBuffer,
-	                                           pipelines.surfelPathTracerPipelines,
-	                                           *surfelPathTracerStorageDescriptorSets[fi],
-	                                           surfelPathTracerResources.maxSurfelsCapacity());
-	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		surfelPathTracerPasses.recordEvaluatePass(commandBuffer,
+		                                          pipelines.surfelPathTracerPipelines,
+		                                          *surfelPathTracerStorageDescriptorSets[fi],
+		                                          *descriptorSets[fi],
+		                                          Laphria::SurfelPathTracerEvaluateMode::Generate,
+		                                          surfelSettings.cellSize,
+		                                          surfelPathTracerResources.cellDimensionCapacity(),
+		                                          surfelPathTracerResources.maxSurfelsCapacity(),
+		                                          swapchain.extent);
+		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		surfelPathTracerPasses.recordUpdatePass(commandBuffer,
+		                                        pipelines.surfelPathTracerPipelines,
+		                                        *surfelPathTracerStorageDescriptorSets[fi],
+		                                        surfelPathTracerResources.maxSurfelsCapacity(),
+		                                        surfelPathTracerResources.maxRaysPerFrameCapacity(),
+		                                        surfelSettings.cellSize,
+		                                        surfelPathTracerResources.cellDimensionCapacity());
+		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		surfelPathTracerPasses.recordCellInfoPass(commandBuffer,
+		                                          pipelines.surfelPathTracerPipelines,
+		                                          *surfelPathTracerStorageDescriptorSets[fi],
+		                                          surfelPathTracerResources.cellCount(),
+		                                          surfelPathTracerResources.perCellSurfelLimitCapacity());
+		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		surfelPathTracerPasses.recordCellToSurfelPass(commandBuffer,
+		                                              pipelines.surfelPathTracerPipelines,
+		                                              *surfelPathTracerStorageDescriptorSets[fi],
+		                                              surfelPathTracerResources.maxSurfelsCapacity(),
+		                                              surfelSettings.cellSize,
+		                                              surfelPathTracerResources.cellDimensionCapacity(),
+		                                              surfelPathTracerResources.perCellSurfelLimitCapacity());
+		surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
+		surfelPathTracerPasses.recordSurfelRayTracePass(commandBuffer,
+		                                                pipelines.surfelPathTracerPipelines,
+		                                                surfelPathTracerResources,
+		                                                *surfelPathTracerRtDescriptorSets[fi],
+		                                                *surfelPathTracerStorageDescriptorSets[fi],
+		                                                *descriptorSets[fi],
+		                                                surfelPathTracerResources.maxSurfelsCapacity());
+		surfelPathTracerPasses.recordStorageBarrierRtToCompute(commandBuffer);
+		surfelPathTracerPasses.recordIntegratePass(commandBuffer,
+		                                           pipelines.surfelPathTracerPipelines,
+		                                           *surfelPathTracerStorageDescriptorSets[fi],
+		                                           surfelPathTracerResources.maxSurfelsCapacity());
+		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	}
+	else
+	{
+		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	}
 	surfelPathTracerPasses.recordEvaluatePass(commandBuffer,
 	                                          pipelines.surfelPathTracerPipelines,
 	                                          *surfelPathTracerStorageDescriptorSets[fi],
@@ -2286,6 +2302,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                                swapchain.extent);
 	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 	const bool taaHistoryEnabled =
+	    historyReady &&
 	    surfelSettings.enableTaa &&
 	    surfelSettings.debugView == UISystem::SurfelPathTracerDebugView::FinalColor;
 	surfelPathTracerPasses.recordTaaPass(commandBuffer,

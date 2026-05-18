@@ -314,7 +314,6 @@ public:
         bool enableReflectionFilter = true;
         bool enableBilateralCleanup = true;
         bool enableTaa = true;
-        float resolutionScale = 1.0f;
         uint32_t maxSurfels = 150000;
         uint32_t maxRaysPerFrame = 150000 * 64;
         float cellSize = 2.0f;
