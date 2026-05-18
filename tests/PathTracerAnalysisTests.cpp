@@ -9,10 +9,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <optional>
 #include <regex>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace
 {
@@ -34,32 +34,6 @@ bool containsText(const std::string &haystack, const char *needle)
 bool containsRegex(const std::string &haystack, const std::string &pattern)
 {
 	return std::regex_search(haystack, std::regex(pattern));
-}
-
-std::optional<unsigned> extractUnsignedAssignment(const std::string &source,
-                                                  const char *name)
-{
-	const std::regex assignmentRegex(
-	    std::string(R"(\b)") + name + R"(\s*=\s*([0-9]+)\s*u?\s*;)");
-	std::smatch match;
-	if (!std::regex_search(source, match, assignmentRegex))
-	{
-		return std::nullopt;
-	}
-	return static_cast<unsigned>(std::stoul(match[1].str()));
-}
-
-std::optional<std::pair<int, int>> extractSurfelEvalCandidateSliderRange(
-    const std::string &source)
-{
-	const std::regex sliderRegex(
-	    R"(SliderInt\(\s*"Surfel Eval Candidates"\s*,\s*&pathTracerSettings\.surfelGiMaxEvalCandidates\s*,\s*([0-9]+)\s*,\s*([0-9]+)\s*\))");
-	std::smatch match;
-	if (!std::regex_search(source, match, sliderRegex))
-	{
-		return std::nullopt;
-	}
-	return std::pair<int, int>{std::stoi(match[1].str()), std::stoi(match[2].str())};
 }
 
 std::string extractFunctionBody(const std::string &source, const char *signature)
@@ -188,670 +162,6 @@ bool requireBrightSurfelProposalDisabledForSweeps(const std::string &raygen,
 		return false;
 
 	return true;
-}
-
-bool requirePersistentSurfelCounterLayout(const std::string &engineAuxiliaryHeader,
-                                          const std::string &surfelCommon,
-                                          const std::string &cmakeLists)
-{
-	const char *requiredCounters[] = {
-	    "surfelGiClearDispatches",
-	    "surfelGiGenerateAttempts",
-	    "surfelGiGenerated",
-	    "surfelGiGenerateRejectInvalid",
-	    "surfelGiGenerateRejectCoverage",
-	    "surfelGiCellInsertAttempts",
-	    "surfelGiCellInserted",
-	    "surfelGiCellOverflow",
-	    "surfelGiEvalAttempts",
-	    "surfelGiEvalCellEmpty",
-	    "surfelGiEvalCandidates",
-	    "surfelGiEvalAccepted",
-	    "surfelGiEvalDenseCell",
-	    "surfelGiEvalDenseCellSkipped"};
-
-	for (const char *counter : requiredCounters)
-	{
-		if (!containsText(engineAuxiliaryHeader, counter))
-			return false;
-	}
-
-	const char *requiredOffsets[] = {
-	    "surfelGiClearDispatchesOffset",
-	    "surfelGiGenerateAttemptsOffset",
-	    "surfelGiGeneratedOffset",
-	    "surfelGiGenerateRejectInvalidOffset",
-	    "surfelGiGenerateRejectCoverageOffset",
-	    "surfelGiCellInsertAttemptsOffset",
-	    "surfelGiCellInsertedOffset",
-	    "surfelGiCellOverflowOffset",
-	    "surfelGiEvalAttemptsOffset",
-	    "surfelGiEvalCellEmptyOffset",
-	    "surfelGiEvalCandidatesOffset",
-	    "surfelGiEvalAcceptedOffset",
-	    "surfelGiEvalDenseCellOffset",
-	    "surfelGiEvalDenseCellSkippedOffset"};
-
-	for (const char *offset : requiredOffsets)
-	{
-		if (!containsText(surfelCommon, offset))
-			return false;
-	}
-
-	return containsText(cmakeLists, "SURFEL_SHADER_INCLUDE_DEPS") &&
-	       containsText(cmakeLists, "SurfelCommon.slang") &&
-	       containsText(cmakeLists, "ShaderCommon.slang");
-}
-
-bool requirePersistentSurfelFrameResources(const std::string &frameContextHeader,
-                                           const std::string &frameContextSource)
-{
-	const char *headerSymbols[] = {
-	    "kSurfelGiMaxSurfels",
-	    "kSurfelGiGridDim",
-	    "kSurfelGiCellToSurfelCapacity",
-	    "surfelGiRecordBuffers",
-	    "surfelGiCellBuffers",
-	    "surfelGiCellSlotBuffers",
-	    "surfelGiCounterBuffers",
-	    "surfelGiDebugImages",
-	    "surfelGiDebugImageViews",
-	    "createSurfelGiBuffers"};
-
-	for (const char *symbol : headerSymbols)
-	{
-		if (!containsText(frameContextHeader, symbol))
-			return false;
-	}
-
-	const char *sourceSymbols[] = {
-	    "void FrameContext::createSurfelGiBuffers",
-	    "vk::MemoryPropertyFlagBits::eDeviceLocal",
-	    "vk::BufferUsageFlagBits::eStorageBuffer",
-	    "vk::ImageUsageFlagBits::eStorage",
-	    "surfelGiRecordBuffers.clear()",
-	    "surfelGiCellSlotBuffers.clear()",
-	    "surfelGiDebugImages.clear()"};
-
-	for (const char *symbol : sourceSymbols)
-	{
-		if (!containsText(frameContextSource, symbol))
-			return false;
-	}
-
-	const std::string cleanupSwapchain =
-	    extractFunctionBody(frameContextSource, "void FrameContext::cleanupSwapChainDependents(");
-	if (cleanupSwapchain.empty())
-		return false;
-
-	const std::size_t debugViewClearPos = cleanupSwapchain.find("surfelGiDebugImageViews.clear()");
-	const std::size_t debugImageDestroyPos =
-	    cleanupSwapchain.find("destroyImagesAndReleaseAllocations(surfelGiDebugImages)");
-	if (debugViewClearPos == std::string::npos || debugImageDestroyPos == std::string::npos ||
-	    debugViewClearPos > debugImageDestroyPos)
-		return false;
-
-	const char *resizePersistentBufferDestroys[] = {
-	    "destroyBuffersAndReleaseAllocations(surfelGiRecordBuffers)",
-	    "destroyBuffersAndReleaseAllocations(surfelGiCellBuffers)",
-	    "destroyBuffersAndReleaseAllocations(surfelGiCellSlotBuffers)",
-	    "destroyBuffersAndReleaseAllocations(surfelGiCounterBuffers)"};
-
-	for (const char *destroyCall : resizePersistentBufferDestroys)
-	{
-		if (containsText(cleanupSwapchain, destroyCall))
-			return false;
-	}
-
-	const std::string createSurfelBuffers =
-	    extractFunctionBody(frameContextSource, "void FrameContext::createSurfelGiBuffers(");
-	if (createSurfelBuffers.empty())
-		return false;
-
-	if (!containsText(createSurfelBuffers, "const bool createFixedBuffers") ||
-	    !containsText(createSurfelBuffers, "if (createFixedBuffers)"))
-		return false;
-
-	return true;
-}
-
-bool requireCompactSurfelCellIndexListBuffers(const std::string &frameContextSource,
-                                              const std::string &engineCore)
-{
-	const std::string createSurfelBuffers =
-	    extractFunctionBody(frameContextSource, "void FrameContext::createSurfelGiBuffers(");
-	if (createSurfelBuffers.empty())
-		return false;
-
-	const std::string cellToSurfelInitLoop =
-	    stripComments(extractFunctionBody(createSurfelBuffers, "for (auto &buffer : surfelGiCellSlotBuffers)"));
-	if (cellToSurfelInitLoop.empty())
-		return false;
-	const bool cellToSurfelInitBarrier =
-	    containsText(cellToSurfelInitLoop, "cmd.fillBuffer(*buffer, 0, cellToSurfelBufferSize, 0xffffffffu)") &&
-	    containsText(cellToSurfelInitLoop, ".srcStageMask = vk::PipelineStageFlagBits2::eTransfer") &&
-	    containsText(cellToSurfelInitLoop, ".srcAccessMask = vk::AccessFlagBits2::eTransferWrite") &&
-	    containsText(cellToSurfelInitLoop, ".dstStageMask = vk::PipelineStageFlagBits2::eComputeShader") &&
-	    containsText(cellToSurfelInitLoop, "vk::AccessFlagBits2::eShaderStorageRead") &&
-	    containsText(cellToSurfelInitLoop, "vk::AccessFlagBits2::eShaderStorageWrite") &&
-	    containsText(cellToSurfelInitLoop, ".buffer = *buffer") &&
-	    containsText(cellToSurfelInitLoop, ".size = cellToSurfelBufferSize");
-
-	return containsText(createSurfelBuffers, "kSurfelGiCellToSurfelCapacity") &&
-	       containsText(createSurfelBuffers, "kSurfelGiCellToSurfelIndexSize") &&
-	       !containsText(createSurfelBuffers, "kSurfelGiCellSlotCount * kSurfelGiCellSlotSize") &&
-	       containsText(createSurfelBuffers,
-	                    "cellToSurfelBufferSize,\n                                      vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst") &&
-	       containsText(createSurfelBuffers,
-	                    "cmd.fillBuffer(*buffer, 0, cellToSurfelBufferSize, 0xffffffffu)") &&
-	       cellToSurfelInitBarrier &&
-	       containsText(engineCore,
-	                    "FrameContext::kSurfelGiCellToSurfelCapacity * FrameContext::kSurfelGiCellToSurfelIndexSize");
-}
-
-bool requireSurfelClearPassContracts(const std::string &pipelineHeader,
-                                     const std::string &pipelineSource,
-                                     const std::string &engineHeader,
-                                     const std::string &engineCore,
-                                     const std::string &surfelClear)
-{
-	const char *pipelineSymbols[] = {
-	    "surfelGiDescriptorSetLayout",
-	    "surfelGiPipelineLayout",
-	    "surfelGiClearPipeline",
-	    "createSurfelGiDescriptorSetLayout",
-	    "createSurfelGiClearPipeline"};
-
-	for (const char *symbol : pipelineSymbols)
-	{
-		if (!containsText(pipelineHeader, symbol) && !containsText(pipelineSource, symbol))
-			return false;
-	}
-
-	const char *engineSymbols[] = {
-	    "createSurfelGiDescriptorSets",
-	    "recordSurfelGiClearPass"};
-
-	for (const char *symbol : engineSymbols)
-	{
-		if (!containsText(engineHeader, symbol) && !containsText(engineCore, symbol))
-			return false;
-	}
-
-	const std::string clearMain =
-	    stripComments(extractFunctionBody(surfelClear, "void surfelClearMain("));
-	const std::string clearDispatch =
-	    stripComments(extractFunctionBody(engineCore, "void EngineCore::recordSurfelGiClearPass("));
-	const std::size_t clearItemsPos = clearDispatch.find("constexpr uint32_t clearItems");
-	const std::size_t groupsPos = clearItemsPos == std::string::npos
-	                                  ? std::string::npos
-	                                  : clearDispatch.find("constexpr uint32_t groups", clearItemsPos);
-	const std::string clearItemsExpression =
-	    (clearItemsPos == std::string::npos || groupsPos == std::string::npos)
-	        ? std::string{}
-	        : clearDispatch.substr(clearItemsPos, groupsPos - clearItemsPos);
-
-	if (clearMain.empty() || clearDispatch.empty())
-	{
-		return false;
-	}
-
-	if (!containsText(surfelClear, "void surfelClearMain") ||
-	    !containsText(surfelClear, "surfelGiClearDispatchesOffset"))
-	{
-		return false;
-	}
-
-	if (!containsText(clearMain, "cell.count = 0u") ||
-	    !containsText(clearMain, "cell.offset = 0xffffffffu") ||
-	    !containsText(clearMain, "cell.writeCursor = 0u") ||
-	    !containsText(clearMain, "cell.overflow = 0u") ||
-	    containsText(clearMain, "cell.pad0") ||
-	    containsText(clearMain, "cell.pad1") ||
-	    containsText(clearMain, "SURFEL_GI_CELL_SLOT_COUNT"))
-	{
-		std::cerr << "surfel clear shader must initialize compact cells without legacy slot fields\n";
-		return false;
-	}
-
-	if (!containsText(surfelClear, "RWStructuredBuffer<uint> surfelGiCellToSurfel") ||
-	    !containsText(clearMain, "index < SURFEL_GI_CELL_TO_SURFEL_CAPACITY") ||
-	    !containsText(clearMain, "surfelGiCellToSurfel[index] = 0xffffffffu"))
-	{
-		std::cerr << "surfel clear shader must clear the compact cell-to-surfel index list\n";
-		return false;
-	}
-
-	if (!containsRegex(clearItemsExpression,
-	                   R"(std::max\s*\(\s*FrameContext::kSurfelGiCellToSurfelCapacity\s*,\s*std::max\s*\(\s*FrameContext::kSurfelGiCellCount\s*,\s*FrameContext::kSurfelGiMaxSurfels\s*\)\s*\))"))
-	{
-		std::cerr << "surfel clear dispatch count must take the max of cells, surfels, and compact membership list\n";
-		return false;
-	}
-
-	return true;
-}
-
-bool requirePathTracerAnalysisRtToComputeBarrier(const std::string &engineCore)
-{
-	const std::string rayTraceRecord =
-	    stripComments(extractFunctionBody(engineCore, "void EngineCore::recordRayTracingCommandBuffer("));
-	if (rayTraceRecord.empty())
-	{
-		return false;
-	}
-	const std::size_t tracePos = rayTraceRecord.find("commandBuffer.traceRaysKHR");
-	const std::size_t surfelClearPos = rayTraceRecord.find("recordSurfelGiClearPass(commandBuffer, fi)");
-	if (tracePos == std::string::npos || surfelClearPos == std::string::npos || tracePos >= surfelClearPos)
-	{
-		return false;
-	}
-
-	const std::string rtToSurfelSnippet =
-	    rayTraceRecord.substr(tracePos, surfelClearPos - tracePos);
-	if (!containsText(rtToSurfelSnippet, "ptAnalysisRtToComputeBarrier") ||
-	    !containsText(rtToSurfelSnippet, ".srcStageMask  = vk::PipelineStageFlagBits2::eRayTracingShaderKHR") ||
-	    !containsText(rtToSurfelSnippet, ".srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite") ||
-	    !containsText(rtToSurfelSnippet, ".dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader") ||
-	    !containsText(rtToSurfelSnippet, "vk::AccessFlagBits2::eShaderStorageRead") ||
-	    !containsText(rtToSurfelSnippet, "vk::AccessFlagBits2::eShaderStorageWrite") ||
-	    !containsText(rtToSurfelSnippet, ".buffer        = *frames.ptAnalysisCounterBuffers[fi]") ||
-	    !containsText(rtToSurfelSnippet, ".size          = sizeof(Laphria::PathTracerAnalysisCounters)") ||
-	    !containsText(rtToSurfelSnippet, "commandBuffer.pipelineBarrier2(ptAnalysisRtToComputeDependency)"))
-	{
-		std::cerr << "path tracer analysis counters need an RT-to-compute buffer barrier before surfel GI passes\n";
-		return false;
-	}
-
-	return true;
-}
-
-bool requireSurfelGeneratePassContracts(const std::string &cmakeLists,
-                                        const std::string &pipelineHeader,
-                                        const std::string &pipelineSource,
-                                        const std::string &engineHeader,
-                                        const std::string &engineCore,
-                                        const std::string &surfelCommon,
-                                        const std::string &surfelGenerate)
-{
-	const char *requiredSymbols[] = {
-	    "surfelGiGeneratePipeline",
-	    "createSurfelGiGeneratePipeline",
-	    "void surfelGenerateMain",
-	    "surfelGiGenerateAttemptsOffset",
-	    "surfelGiGeneratedOffset",
-	    "rtGBufferNormalsViews",
-	    "rtGBufferDepthViews"};
-
-	for (const char *symbol : requiredSymbols)
-	{
-		if (!containsText(cmakeLists, symbol) &&
-		    !containsText(pipelineHeader, symbol) &&
-		    !containsText(pipelineSource, symbol) &&
-		    !containsText(engineHeader, symbol) &&
-		    !containsText(engineCore, symbol) &&
-		    !containsText(surfelGenerate, symbol))
-			return false;
-	}
-
-	if (!containsText(surfelCommon, "float calcSurfelGiRadius(") ||
-	    !containsText(surfelCommon, "SURFEL_GI_CELL_SIZE * 0.5f") ||
-	    !containsText(surfelCommon, "const float shortestAxis = max(float(min(extent.x, extent.y)), 1.0f);") ||
-	    !containsText(surfelCommon, "const float projectedRadius = (hitT / shortestAxis) * 4.0f") ||
-	    !containsText(surfelCommon, "clamp(projectedRadius,") ||
-	    !containsText(surfelCommon, "min(SURFEL_GI_MAX_RADIUS, SURFEL_GI_CELL_SIZE * 0.5f)") ||
-	    containsText(surfelCommon, "max(hitT / shortestAxis, SURFEL_GI_MIN_RADIUS)") ||
-	    !containsText(surfelGenerate, "calcSurfelGiRadius(depth, uint2(width, height))") ||
-	    containsText(surfelGenerate, "record.positionRadius = float4(worldPos, SURFEL_GI_MIN_RADIUS)"))
-	{
-		std::cerr << "surfel GI generation must use projected radius instead of fixed min radius\n";
-		return false;
-	}
-
-	return containsText(cmakeLists, "SurfelGenerate.slang|surfelGenerateMain") &&
-	       containsText(surfelGenerate, "[shader(\"compute\")]") &&
-	       containsText(surfelGenerate, "[numthreads(8, 8, 1)]") &&
-	       containsText(surfelGenerate, "SurfelGiPushConstants") &&
-	       containsText(surfelGenerate, "push.renderWidth") &&
-	       containsText(surfelGenerate, "push.renderHeight") &&
-	       containsText(engineCore, "commandBuffer.pushConstants<SurfelGiPushConstants>") &&
-	       containsText(pipelineSource, "sizeof(SurfelGiPushConstants)") &&
-	       containsText(surfelGenerate, "surfelGiGenerateRejectInvalidOffset") &&
-	       containsText(surfelGenerate, "surfelGiGenerateRejectCoverageOffset");
-}
-
-bool requireSurfelBuildCellsPassContracts(const std::string &cmakeLists,
-                                          const std::string &pipelineHeader,
-                                          const std::string &pipelineSource,
-                                          const std::string &engineHeader,
-                                          const std::string &engineCore,
-                                          const std::string &surfelBuildCells)
-{
-	const char *requiredSymbols[] = {
-	    "surfelGiBuildCellsPipeline",
-	    "createSurfelGiBuildCellsPipeline",
-	    "void surfelBuildCellsMain",
-	    "surfelGiCellInsertAttemptsOffset",
-	    "surfelGiCellInsertedOffset",
-	    "surfelGiCellOverflowOffset"};
-
-	for (const char *symbol : requiredSymbols)
-	{
-		if (!containsText(cmakeLists, symbol) &&
-		    !containsText(pipelineHeader, symbol) &&
-		    !containsText(pipelineSource, symbol) &&
-		    !containsText(engineHeader, symbol) &&
-		    !containsText(engineCore, symbol) &&
-		    !containsText(surfelBuildCells, symbol))
-			return false;
-	}
-
-	const std::string buildCellsMain =
-	    stripComments(extractFunctionBody(surfelBuildCells, "void surfelBuildCellsMain("));
-	if (buildCellsMain.empty())
-		return false;
-
-	return containsText(cmakeLists, "SurfelBuildCells.slang|surfelBuildCellsMain") &&
-	       containsText(surfelBuildCells, "[shader(\"compute\")]") &&
-	       containsText(surfelBuildCells, "[numthreads(128, 1, 1)]") &&
-	       !containsText(surfelBuildCells, "Contract anchor for Task 6") &&
-	       !containsText(surfelBuildCells, "// Contract anchor") &&
-	       containsText(buildCellsMain, "for (int z = -1; z <= 1; ++z)") &&
-	       containsText(buildCellsMain, "for (int y = -1; y <= 1; ++y)") &&
-	       containsText(buildCellsMain, "for (int x = -1; x <= 1; ++x)") &&
-	       containsText(buildCellsMain, "surfelIntersectsCell(record, cell") &&
-	       containsText(buildCellsMain, "InterlockedAdd(surfelGiCells[cellIndex].writeCursor") &&
-	       containsText(buildCellsMain,
-	                    "surfelGiCellToSurfel[surfelGiCells[cellIndex].offset + slotIndex] = surfelIndex") &&
-	       !containsText(buildCellsMain, "SURFEL_GI_CELL_SLOT_COUNT");
-}
-
-bool requireSurfelIntegratePassContracts(const std::string &cmakeLists,
-                                         const std::string &pipelineHeader,
-                                         const std::string &pipelineSource,
-                                         const std::string &engineHeader,
-                                         const std::string &engineCore,
-                                         const std::string &frameContextSource,
-                                         const std::string &surfelClear,
-                                         const std::string &surfelGenerate,
-                                         const std::string &surfelIntegrate)
-{
-	const char *requiredSymbols[] = {
-	    "surfelGiIntegratePipeline",
-	    "createSurfelGiIntegratePipeline",
-	    "recordSurfelGiIntegratePass",
-	    "void surfelIntegrateMain",
-	    "radianceAge",
-	    "normalConfidence"};
-
-	for (const char *symbol : requiredSymbols)
-	{
-		if (!containsText(cmakeLists, symbol) &&
-		    !containsText(pipelineHeader, symbol) &&
-		    !containsText(pipelineSource, symbol) &&
-		    !containsText(engineHeader, symbol) &&
-		    !containsText(engineCore, symbol) &&
-		    !containsText(surfelIntegrate, symbol))
-			return false;
-	}
-
-	const std::string integrateMain =
-	    stripComments(extractFunctionBody(surfelIntegrate, "void surfelIntegrateMain("));
-	const std::string generateMain =
-	    stripComments(extractFunctionBody(surfelGenerate, "void surfelGenerateMain("));
-	const std::string clearMain =
-	    stripComments(extractFunctionBody(surfelClear, "void surfelClearMain("));
-	if (integrateMain.empty())
-		return false;
-
-	return containsText(cmakeLists, "SurfelIntegrate.slang|surfelIntegrateMain") &&
-	       containsText(surfelIntegrate, "#include \"SurfelCommon.slang\"") &&
-	       containsText(surfelIntegrate, "[shader(\"compute\")]") &&
-	       containsText(surfelIntegrate, "[numthreads(128, 1, 1)]") &&
-	       containsText(surfelIntegrate, "[[vk::binding(0, 0)]] RWStructuredBuffer<SurfelGiRecord>") &&
-	       containsText(surfelIntegrate, "[[vk::binding(3, 0)]] RWByteAddressBuffer surfelGiCounters") &&
-	       containsText(surfelIntegrate, "[[vk::binding(4, 0)]] RWByteAddressBuffer ptAnalysisCounters") &&
-	       containsText(surfelIntegrate, "[[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo") &&
-	       containsText(integrateMain, "(record.flags & 1u) == 0u") &&
-	       containsText(integrateMain, "record.radianceAge.w") &&
-	       containsText(integrateMain, "record.normalConfidence.w") &&
-	       !containsText(integrateMain, "lastSeenFrame = ubo.frameCount") &&
-	       containsText(integrateMain, "surfelGiRecords[surfelIndex] = record") &&
-	       !containsText(clearMain, "surfelGiRecords[index] = record") &&
-	       containsText(frameContextSource, "eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst") &&
-	       containsText(frameContextSource, "cmd.fillBuffer(*buffer, 0, recordBufferSize, 0u)") &&
-	       containsText(frameContextSource, "vk::PipelineStageFlagBits2::eTransfer") &&
-	       containsText(frameContextSource, "vk::AccessFlagBits2::eTransferWrite") &&
-	       containsText(generateMain, "previous.radianceAge") &&
-	       containsText(generateMain, "previous.normalConfidence.w") &&
-	       containsText(generateMain, "record.lastSeenFrame = ubo.frameCount") &&
-	       containsText(pipelineSource, "Shaders/SurfelIntegrate.slang.spv") &&
-	       containsText(pipelineSource, "surfelIntegrateMain") &&
-	       containsText(engineCore, "recordSurfelGiIntegratePass(commandBuffer, fi);");
-}
-
-bool requireSurfelEvaluatePassContracts(const std::string &cmakeLists,
-                                        const std::string &pipelineHeader,
-                                        const std::string &pipelineSource,
-                                        const std::string &engineHeader,
-                                        const std::string &engineCore,
-                                        const std::string &denoiser,
-                                        const std::string &surfelEvaluate)
-{
-	const char *requiredSymbols[] = {
-	    "surfelGiEvaluatePipeline",
-	    "createSurfelGiEvaluatePipeline",
-	    "void surfelEvaluateMain",
-	    "SURFEL_GI_MAX_EVAL_CANDIDATES",
-	    "surfelGiEvalAttemptsOffset",
-	    "surfelGiEvalCellEmptyOffset",
-	    "surfelGiEvalCandidatesOffset",
-	    "surfelGiEvalAcceptedOffset"};
-
-	for (const char *symbol : requiredSymbols)
-	{
-		if (!containsText(cmakeLists, symbol) &&
-		    !containsText(pipelineHeader, symbol) &&
-		    !containsText(pipelineSource, symbol) &&
-		    !containsText(engineHeader, symbol) &&
-		    !containsText(engineCore, symbol) &&
-		    !containsText(surfelEvaluate, symbol))
-			return false;
-	}
-
-	const std::string evaluateMain =
-	    stripComments(extractFunctionBody(surfelEvaluate, "void surfelEvaluateMain("));
-	if (evaluateMain.empty())
-	{
-		std::cerr << "missing surfel GI evaluate main body\n";
-		return false;
-	}
-	const std::size_t emptyCellBranch =
-	    evaluateMain.find("cell.count == 0u || cell.offset == 0xffffffffu");
-	const std::size_t denseCellBranch =
-	    evaluateMain.find("cell.count > SURFEL_GI_DENSE_CELL_LIMIT");
-	const std::size_t candidateSampling =
-	    evaluateMain.find("uint configuredCandidateCount");
-	if (emptyCellBranch == std::string::npos ||
-	    denseCellBranch == std::string::npos ||
-	    !containsText(evaluateMain, "surfelGiEvalDenseCellOffset") ||
-	    !containsText(evaluateMain, "surfelGiEvalDenseCellSkippedOffset") ||
-	    !containsText(evaluateMain, "float4(0.0f, 0.5f, 1.0f, 1.0f)") ||
-	    !containsText(evaluateMain.substr(denseCellBranch), "return;") ||
-	    candidateSampling == std::string::npos ||
-	    !(emptyCellBranch < denseCellBranch &&
-	      denseCellBranch < candidateSampling))
-	{
-		std::cerr << "surfel GI evaluation must handle empty cells before dense-cell diagnostics and candidate sampling\n";
-		return false;
-	}
-
-	return containsText(cmakeLists, "SurfelEvaluate.slang|surfelEvaluateMain") &&
-	       containsText(surfelEvaluate, "[shader(\"compute\")]") &&
-	       containsText(surfelEvaluate, "[numthreads(8, 8, 1)]") &&
-	       containsText(surfelEvaluate, "SurfelGiPushConstants") &&
-	       containsText(surfelEvaluate, "push.renderWidth") &&
-	       containsText(surfelEvaluate, "push.renderHeight") &&
-	       containsText(surfelEvaluate, "push.maxEvalCandidates") &&
-	       containsText(surfelEvaluate, "clamp(push.maxEvalCandidates, 1u, SURFEL_GI_MAX_EVAL_CANDIDATES)") &&
-	       containsText(engineCore, "recordSurfelGiEvaluatePass") &&
-	       containsText(engineCore, "commandBuffer.pushConstants<SurfelGiPushConstants>") &&
-	       containsText(engineCore, "ui.pathTracerSettings.surfelGiMaxEvalCandidates") &&
-	       containsText(denoiser, "surfelGiDebugView") &&
-	       containsText(denoiser, "DEBUG_AOV_SURFEL_GI_OCCUPANCY") &&
-	       containsText(denoiser, "DEBUG_AOV_SURFEL_GI_GATHER") &&
-	       containsText(pipelineSource, "binding = 15") &&
-	       containsText(engineCore, "dstBinding      = 15") &&
-	       containsText(engineCore, "frames.surfelGiDebugImageViews[i]");
-}
-
-std::string extractDebugAovBranch(const std::string &denoiser,
-                                  const char *debugAovSymbol)
-{
-	const std::string selector =
-	    extractFunctionBody(denoiser, "float3 selectPathTracerDebugAovOutput(");
-	if (selector.empty())
-	{
-		return {};
-	}
-
-	const std::size_t symbolPos = selector.find(debugAovSymbol);
-	if (symbolPos == std::string::npos)
-	{
-		return {};
-	}
-
-	const std::size_t branchStart = selector.rfind("} else if", symbolPos);
-	if (branchStart == std::string::npos)
-	{
-		return {};
-	}
-	const std::size_t branchBodyStart = selector.find('{', branchStart);
-	if (branchBodyStart == std::string::npos)
-	{
-		return {};
-	}
-	const std::size_t nextBranch = selector.find("} else if", branchBodyStart + 1u);
-	if (nextBranch == std::string::npos)
-	{
-		const std::size_t selectorReturn = selector.find("return outColor", branchBodyStart);
-		return selectorReturn == std::string::npos
-		           ? selector.substr(branchStart)
-		           : selector.substr(branchStart, selectorReturn - branchStart);
-	}
-	return selector.substr(branchStart, nextBranch - branchStart);
-}
-
-bool requireSurfelGiDebugAovChannelSplit(const std::string &denoiser)
-{
-	const std::string occupancyBranch =
-	    stripComments(extractDebugAovBranch(denoiser, "DEBUG_AOV_SURFEL_GI_OCCUPANCY"));
-	const std::string gatherBranch =
-	    stripComments(extractDebugAovBranch(denoiser, "DEBUG_AOV_SURFEL_GI_GATHER"));
-	if (occupancyBranch.empty() || gatherBranch.empty())
-	{
-		std::cerr << "missing surfel GI debug AOV denoiser branches\n";
-		return false;
-	}
-
-	const bool occupancyUsesBlue =
-	    containsText(occupancyBranch, "surfelGiDebugView[pixel].b") ||
-	    containsText(occupancyBranch, "surfelGiDebugView[pixel].z") ||
-	    containsText(occupancyBranch, ".b") ||
-	    containsText(occupancyBranch, ".z");
-	const bool gatherUsesRed =
-	    containsText(gatherBranch, "surfelGiDebugView[pixel].r") ||
-	    containsText(gatherBranch, "surfelGiDebugView[pixel].x") ||
-	    containsText(gatherBranch, ".r") ||
-	    containsText(gatherBranch, ".x");
-	const bool occupancyLooksScalar =
-	    containsText(occupancyBranch, "float3(") &&
-	    !containsText(occupancyBranch, "surfelGiDebugView[pixel].rgb") &&
-	    !containsText(occupancyBranch, "surfelGiDebugView[pixel].xyz");
-	const bool gatherLooksScalar =
-	    containsText(gatherBranch, "float3(") &&
-	    !containsText(gatherBranch, "surfelGiDebugView[pixel].rgb") &&
-	    !containsText(gatherBranch, "surfelGiDebugView[pixel].xyz");
-
-	if (!occupancyUsesBlue || !gatherUsesRed || !occupancyLooksScalar || !gatherLooksScalar)
-	{
-		std::cerr << "surfel GI occupancy and gather AOVs must present distinct scalar channels\n";
-		return false;
-	}
-	return true;
-}
-
-bool requireSurfelGiSlotCapacityAlignment(const std::string &frameContextHeader,
-                                          const std::string &uiSource,
-                                          const std::string &surfelCommon,
-                                          const std::string &surfelEvaluate)
-{
-	const auto shaderMaxCellMemberships =
-	    extractUnsignedAssignment(surfelCommon, "SURFEL_GI_MAX_CELL_MEMBERSHIPS_PER_SURFEL");
-	const auto shaderMaxCandidates =
-	    extractUnsignedAssignment(surfelCommon, "SURFEL_GI_MAX_EVAL_CANDIDATES");
-	const auto shaderGridDim =
-	    extractUnsignedAssignment(surfelCommon, "SURFEL_GI_GRID_DIM");
-	const auto frameGridDim =
-	    extractUnsignedAssignment(frameContextHeader, "kSurfelGiGridDim");
-	const auto frameMaxCellMemberships =
-	    extractUnsignedAssignment(frameContextHeader, "kSurfelGiMaxCellMembershipsPerSurfel");
-	const auto sliderRange = extractSurfelEvalCandidateSliderRange(uiSource);
-	if (!shaderMaxCellMemberships || !shaderMaxCandidates ||
-	    !shaderGridDim || !frameGridDim ||
-	    !frameMaxCellMemberships || !sliderRange)
-	{
-		std::cerr << "missing compact surfel GI cell/candidate capacity declarations\n";
-		return false;
-	}
-
-	if (*shaderGridDim != *frameGridDim)
-	{
-		std::cerr << "surfel GI shader and host grid dimensions must match\n";
-		return false;
-	}
-	if (*shaderGridDim != 64u ||
-	    !containsText(surfelCommon, "SURFEL_GI_CELL_SIZE = 0.75f"))
-	{
-		std::cerr << "surfel GI density experiment expects 64^3 cells at 0.75m to preserve coverage\n";
-		return false;
-	}
-
-	if (*shaderMaxCellMemberships != 27u ||
-	    *frameMaxCellMemberships != *shaderMaxCellMemberships ||
-	    *shaderMaxCandidates != 16u || sliderRange->first != 1 ||
-	    sliderRange->second != static_cast<int>(*shaderMaxCandidates))
-	{
-		std::cerr << "compact surfel GI cell storage, shader candidate max, and UI range must align\n";
-		return false;
-	}
-	if (!containsText(surfelCommon,
-	                  "SURFEL_GI_MAX_SURFELS * SURFEL_GI_MAX_CELL_MEMBERSHIPS_PER_SURFEL") ||
-	    !containsText(frameContextHeader,
-	                  "kSurfelGiMaxSurfels * kSurfelGiMaxCellMembershipsPerSurfel"))
-	{
-		std::cerr << "compact surfel GI cell membership capacity must be surfel-count derived\n";
-		return false;
-	}
-
-	const std::string evaluateMain =
-	    stripComments(extractFunctionBody(surfelEvaluate, "void surfelEvaluateMain("));
-	if (evaluateMain.empty())
-	{
-		std::cerr << "missing surfel GI evaluate main body\n";
-		return false;
-	}
-	if (!containsText(evaluateMain, "cell.offset == 0xffffffffu") ||
-	    !containsText(evaluateMain, "min(cell.count, configuredCandidateCount)") ||
-	    !containsText(evaluateMain, "surfelGiCellToSurfel[cell.offset +") ||
-	    containsText(evaluateMain, "SURFEL_GI_CELL_SLOT_COUNT"))
-	{
-		std::cerr << "compact surfel evaluation must sample from cell offset ranges\n";
-		return false;
-	}
-
-	return containsText(evaluateMain, "clamp(push.maxEvalCandidates, 1u, SURFEL_GI_MAX_EVAL_CANDIDATES)") &&
-	       containsText(evaluateMain, "slot < boundedCandidateCount");
 }
 
 bool requireIndexedBrightSurfelShaderContracts(const std::string &raygen)
@@ -1077,141 +387,109 @@ bool requireIndexedBrightSurfelDiagnosticPlumbing(const std::string &engineAuxil
 	return true;
 }
 
-bool requireCompactSurfelGridDiagnosticPlumbing(const std::string &engineAuxiliaryHeader,
-                                                const std::string &uiHeader,
-                                                const std::string &uiSource,
-                                                const std::string &engineHeader,
-                                                const std::string &engineCore)
+bool requireStandaloneSurfelComputeRemoved(const std::string &cmakeLists,
+                                           const std::string &pipelineHeader,
+                                           const std::string &pipelineSource,
+                                           const std::string &engineHeader,
+                                           const std::string &engineCore,
+                                           const std::string &frameContextHeader,
+                                           const std::string &frameContextSource,
+                                           const std::string &uiHeader,
+                                           const std::string &uiSource,
+                                           const std::string &denoiser,
+                                           const std::string &engineAuxiliaryHeader,
+                                           const std::string &pathTracerAnalysisHeader,
+                                           const std::string &pathTracerAnalysisSource)
 {
-	const char *compactDiagnostics[] = {
-	    "surfelGiCellTotalMemberships",
-	    "surfelGiCellAllocatedMemberships",
-	    "surfelGiCellAllocationOverflow",
-	    "surfelGiCellNonEmpty",
-	    "surfelGiCellMaxPopulation",
-	    "surfelGiEvalDenseCell",
-	    "surfelGiEvalDenseCellSkipped"};
+	const char *forbidden[] = {
+	    "SurfelClear.slang",
+	    "SurfelGenerate.slang",
+	    "SurfelCountCells.slang",
+	    "SurfelAllocateCells.slang",
+	    "SurfelIntegrate.slang",
+	    "SurfelBuildCells.slang",
+	    "SurfelEvaluate.slang",
+	    "SurfelCommon.slang",
+	    "createSurfelGiDescriptorSetLayout",
+	    "createSurfelGiPipelineLayout",
+	    "createSurfelGiClearPipeline",
+	    "createSurfelGiGeneratePipeline",
+	    "createSurfelGiCountCellsPipeline",
+	    "createSurfelGiAllocateCellsPipeline",
+	    "createSurfelGiIntegratePipeline",
+	    "createSurfelGiBuildCellsPipeline",
+	    "createSurfelGiEvaluatePipeline",
+	    "createSurfelGiDescriptorSets",
+	    "recordSurfelGiClearPass",
+	    "recordSurfelGiGeneratePass",
+	    "recordSurfelGiCountCellsPass",
+	    "recordSurfelGiAllocateCellsPass",
+	    "recordSurfelGiIntegratePass",
+	    "recordSurfelGiBuildCellsPass",
+	    "recordSurfelGiEvaluatePass",
+	    "resetSurfelGiRecordBuffers",
+	    "createSurfelGiBuffers",
+	    "surfelGiRecordBuffers",
+	    "surfelGiCellBuffers",
+	    "surfelGiCellSlotBuffers",
+	    "surfelGiCounterBuffers",
+	    "surfelGiDebugImages",
+	    "surfelGiDebugImageViews",
+	    "surfelGiDebugView",
+	    "enableSurfelGi",
+	    "surfelGiDebug",
+	    "surfelGiMaxEvalCandidates",
+	    "SurfelGiOccupancy",
+	    "SurfelGiGather",
+	    "surfelGiGenerateAttempts",
+	    "surfelGiEvalAttempts",
+	    "Surfel GI Cache",
+	    "Surfel GI Debug",
+	    "Surfel Eval Candidates"};
 
-	bool ok = true;
-	const std::string counterCopyBody =
-	    stripComments(extractFunctionBody(engineCore, "void EngineCore::collectPathTracerAnalysisCounters("));
-	const std::string accumulationBody =
-	    stripComments(extractFunctionBody(engineCore, "void EngineCore::updatePathTracerExperimentSweep("));
-	const std::string rowLogBody =
-	    stripComments(extractFunctionBody(engineCore, "void EngineCore::logPathTracerExperimentRow("));
-	if (counterCopyBody.empty() || accumulationBody.empty() || rowLogBody.empty())
+	const std::string combined = cmakeLists + pipelineHeader + pipelineSource + engineHeader +
+	                             engineCore + frameContextHeader + frameContextSource + uiHeader +
+	                             uiSource + denoiser + engineAuxiliaryHeader + pathTracerAnalysisHeader +
+	                             pathTracerAnalysisSource;
+
+	for (const char *symbol : forbidden)
 	{
-		std::cerr << "missing function bodies for compact surfel grid diagnostic plumbing checks\n";
-		return false;
-	}
-
-	for (const char *diagnostic : compactDiagnostics)
-	{
-		const std::string counterField =
-		    std::string("uint32_t ") + diagnostic + " = 0";
-		if (!containsText(engineAuxiliaryHeader, counterField.c_str()) ||
-		    !containsText(uiHeader, counterField.c_str()))
+		if (containsText(combined, symbol))
 		{
-			std::cerr << "missing compact surfel grid CPU/UI counter field: "
-			          << diagnostic << "\n";
-			ok = false;
-		}
-
-		const std::string uiCopyPattern =
-		    std::string(R"(ui\.pathTracerPerfStats\.)") + diagnostic +
-		    R"(\s*=\s*counters->)" + diagnostic + R"(\s*;)";
-		if (!containsRegex(counterCopyBody, uiCopyPattern))
-		{
-			std::cerr << "missing compact surfel grid UI counter copy path: "
-			          << diagnostic << "\n";
-			ok = false;
-		}
-
-		const std::string accumulatorField =
-		    std::string("double ") + diagnostic + " = 0.0";
-		if (!containsText(engineHeader, accumulatorField.c_str()))
-		{
-			std::cerr << "missing compact surfel grid experiment accumulator field: "
-			          << diagnostic << "\n";
-			ok = false;
-		}
-
-		const std::string accumulationPattern =
-		    std::string(R"(ptExperimentAccum\.)") + diagnostic +
-		    R"(\s*\+=\s*static_cast<double>\(stats\.)" + diagnostic + R"(\)\s*;)";
-		if (!containsRegex(accumulationBody, accumulationPattern))
-		{
-			std::cerr << "missing compact surfel grid accumulation path: "
-			          << diagnostic << "\n";
-			ok = false;
-		}
-
-		const std::string rowFormat =
-		    std::string(diagnostic) + "=%.1f";
-		const std::string rowArgument =
-		    std::string("accum.") + diagnostic + " * invSamples";
-		if (!containsText(rowLogBody, rowFormat.c_str()) ||
-		    !containsText(rowLogBody, rowArgument.c_str()))
-		{
-			std::cerr << "missing compact surfel grid row-summary format/argument: "
-			          << diagnostic << "\n";
-			ok = false;
+			std::cerr << "standalone surfel compute path must be removed; found " << symbol << "\n";
+			return false;
 		}
 	}
 
-	bool formatsInOrder = true;
-	size_t formatSearchPos = 0;
-	for (const char *diagnostic : compactDiagnostics)
-	{
-		const std::string rowFormat =
-		    std::string(diagnostic) + "=%.1f";
-		const size_t formatPos = rowLogBody.find(rowFormat, formatSearchPos);
-		if (formatPos == std::string::npos)
-		{
-			formatsInOrder = false;
-			break;
-		}
-		formatSearchPos = formatPos + rowFormat.size();
-	}
+	return true;
+}
 
-	bool argumentsInOrder = true;
-	size_t argumentSearchPos = 0;
-	for (const char *diagnostic : compactDiagnostics)
+template <std::size_t N>
+bool matchesExactPushBackSequence(const std::string &source,
+                                  const char *const (&expected)[N])
+{
+	const char *pushBackNeedle = "ptExperimentRows.push_back(";
+	std::size_t searchPos = 0u;
+	for (const char *expectedCall : expected)
 	{
-		const std::string rowArgument =
-		    std::string("accum.") + diagnostic + " * invSamples";
-		const size_t argumentPos = rowLogBody.find(rowArgument, argumentSearchPos);
-		if (argumentPos == std::string::npos)
+		const std::size_t callPos = source.find(pushBackNeedle, searchPos);
+		if (callPos == std::string::npos)
 		{
-			argumentsInOrder = false;
-			break;
+			return false;
 		}
-		argumentSearchPos = argumentPos + rowArgument.size();
-	}
-	if (!formatsInOrder || !argumentsInOrder)
-	{
-		std::cerr << "compact surfel grid row-summary fields must stay paired and ordered\n";
-		ok = false;
-	}
-
-	const char *uiLabels[] = {
-	    "Surfel GI cell total memberships",
-	    "Surfel GI cell allocated memberships",
-	    "Surfel GI cell allocation overflow",
-	    "Surfel GI non-empty cells",
-	    "Surfel GI max cell population",
-	    "Surfel GI dense cells",
-	    "Surfel GI dense cells skipped"};
-	for (const char *label : uiLabels)
-	{
-		if (!containsText(uiSource, label))
+		const std::size_t callEnd = source.find(';', callPos);
+		if (callEnd == std::string::npos)
 		{
-			std::cerr << "missing compact surfel grid UI label: " << label << "\n";
-			ok = false;
+			return false;
 		}
+		const std::string actualCall = source.substr(callPos, callEnd - callPos + 1u);
+		if (actualCall != expectedCall)
+		{
+			return false;
+		}
+		searchPos = callEnd + 1u;
 	}
-
-	return ok;
+	return source.find(pushBackNeedle, searchPos) == std::string::npos;
 }
 
 uint64_t packConfigKey(const Laphria::PathTracerSweepConfig &cfg)
@@ -1336,8 +614,6 @@ bool testPathTracerHistoryClampPreservesDimIndirectHistory()
 	return true;
 }
 
-bool testSurfelGiDiagnosticRatios();
-
 bool testPathTracerPowerHeuristic()
 {
 	const float equal = Laphria::computePowerHeuristic(1.0f, 0.5f, 1.0f, 0.5f);
@@ -1361,56 +637,6 @@ bool testPathTracerPowerHeuristic()
 		return false;
 	}
 
-	return testSurfelGiDiagnosticRatios();
-}
-
-bool testSurfelGiDiagnosticRatios()
-{
-	Laphria::SurfelGiDiagnosticCounters counters{};
-	counters.generateAttempts = 100;
-	counters.generated = 80;
-	counters.generateRejectInvalid = 12;
-	counters.generateRejectCoverage = 8;
-	counters.cellInsertAttempts = 100;
-	counters.cellInserted = 60;
-	counters.cellOverflow = 20;
-	counters.evalAttempts = 20;
-	counters.evalCandidates = 40;
-	counters.evalAccepted = 10;
-	counters.evalCellEmpty = 5;
-
-	const auto ratios = Laphria::computeSurfelGiDiagnosticRatios(counters);
-	if (std::abs(ratios.generateAcceptRatio - 0.8f) > 0.0001f)
-	{
-		std::cerr << "surfel GI generate accept ratio mismatch\n";
-		return false;
-	}
-	if (std::abs(ratios.cellInsertRatio - 0.6f) > 0.0001f)
-	{
-		std::cerr << "surfel GI cell insert ratio mismatch\n";
-		return false;
-	}
-	if (std::abs(ratios.cellOverflowRatio - 0.2f) > 0.0001f)
-	{
-		std::cerr << "surfel GI cell overflow ratio mismatch\n";
-		return false;
-	}
-	if (std::abs(ratios.evalCandidateRatio - 2.0f) > 0.0001f)
-	{
-		std::cerr << "surfel GI eval candidate ratio mismatch\n";
-		return false;
-	}
-	if (std::abs(ratios.evalAcceptedRatio - 0.25f) > 0.0001f)
-	{
-		std::cerr << "surfel GI eval accepted ratio mismatch\n";
-		return false;
-	}
-	if (std::abs(ratios.evalCellEmptyRatio - 0.125f) > 0.0001f)
-	{
-		std::cerr << "surfel GI eval empty ratio mismatch\n";
-		return false;
-	}
-
 	return true;
 }
 
@@ -1426,7 +652,6 @@ bool testPathTracerReservoirGiMeasurementContract()
 	const std::string raygen          = readTextFile(sourceRoot / "src" / "shaders" / "Raygen.slang");
 	const std::string engineCore      = readTextFile(sourceRoot / "src" / "Core" / "EngineCore.cpp");
 	const std::string engineAuxiliaryHeader = readTextFile(sourceRoot / "src" / "Core" / "EngineAuxiliary.h");
-	const std::string surfelCommon = readTextFile(sourceRoot / "src" / "shaders" / "SurfelCommon.slang");
 	const std::string cmakeLists = readTextFile(sourceRoot / "CMakeLists.txt");
 	const std::string uiHeader = readTextFile(sourceRoot / "src" / "Core" / "UISystem.h");
 	const std::string uiSource = readTextFile(sourceRoot / "src" / "Core" / "UISystem.cpp");
@@ -1435,194 +660,20 @@ bool testPathTracerReservoirGiMeasurementContract()
 	const std::string pipelineHeader = readTextFile(sourceRoot / "src" / "Core" / "PipelineCollection.h");
 	const std::string pipelineSource = readTextFile(sourceRoot / "src" / "Core" / "PipelineCollection.cpp");
 	const std::string engineHeader = readTextFile(sourceRoot / "src" / "Core" / "EngineCore.h");
-	const std::string surfelClear = readTextFile(sourceRoot / "src" / "shaders" / "SurfelClear.slang");
-	const std::string surfelGenerate = readTextFile(sourceRoot / "src" / "shaders" / "SurfelGenerate.slang");
-	const std::string surfelIntegrate = readTextFile(sourceRoot / "src" / "shaders" / "SurfelIntegrate.slang");
-	const std::string surfelBuildCells = readTextFile(sourceRoot / "src" / "shaders" / "SurfelBuildCells.slang");
-	const std::string surfelEvaluate = readTextFile(sourceRoot / "src" / "shaders" / "SurfelEvaluate.slang");
 	const std::string denoiser = readTextFile(sourceRoot / "src" / "shaders" / "Denoiser.slang");
+	const std::string pathTracerAnalysisHeader = readTextFile(sourceRoot / "src" / "Core" / "PathTracerAnalysis.h");
+	const std::string pathTracerAnalysisSource = readTextFile(sourceRoot / "src" / "Core" / "PathTracerAnalysis.cpp");
 	const std::string resourceManager = readTextFile(sourceRoot / "src" / "Core" / "ResourceManager.cpp");
 	const std::string gltfImporter    = readTextFile(sourceRoot / "src" / "Core" / "GltfImporter.cpp");
 
 	if (raygen.empty() || engineCore.empty() || engineAuxiliaryHeader.empty() ||
 	    uiHeader.empty() || uiSource.empty() || frameContextHeader.empty() ||
 	    frameContextSource.empty() || pipelineHeader.empty() || pipelineSource.empty() ||
-	    engineHeader.empty() || denoiser.empty() || resourceManager.empty() || gltfImporter.empty())
+	    engineHeader.empty() || denoiser.empty() || pathTracerAnalysisHeader.empty() ||
+	    pathTracerAnalysisSource.empty() || resourceManager.empty() || gltfImporter.empty())
 	{
 		std::cerr << "failed to read reservoir GI measurement contract sources\n";
 		return false;
-	}
-
-	if (!requirePersistentSurfelCounterLayout(engineAuxiliaryHeader, surfelCommon, cmakeLists))
-	{
-		std::cerr << "persistent surfel GI counter layout contract is incomplete\n";
-		return false;
-	}
-
-	if (!requirePersistentSurfelFrameResources(frameContextHeader, frameContextSource))
-	{
-		std::cerr << "persistent surfel GI frame resource contract is incomplete\n";
-		return false;
-	}
-	if (!requireCompactSurfelCellIndexListBuffers(frameContextSource, engineCore))
-	{
-		std::cerr << "compact surfel grid buffers must allocate a global cell-to-surfel index list\n";
-		return false;
-	}
-
-	if (!requireSurfelClearPassContracts(pipelineHeader, pipelineSource, engineHeader, engineCore, surfelClear))
-	{
-		std::cerr << "persistent surfel GI clear pass contract is incomplete\n";
-		return false;
-	}
-
-	if (!requireSurfelGeneratePassContracts(cmakeLists, pipelineHeader, pipelineSource,
-	                                        engineHeader, engineCore, surfelCommon, surfelGenerate))
-	{
-		std::cerr << "persistent surfel GI generate pass contract is incomplete\n";
-		return false;
-	}
-
-	if (!requireSurfelIntegratePassContracts(cmakeLists, pipelineHeader, pipelineSource,
-	                                         engineHeader, engineCore, frameContextSource, surfelClear,
-	                                         surfelGenerate, surfelIntegrate))
-	{
-		std::cerr << "persistent surfel GI integrate pass contract is incomplete\n";
-		return false;
-	}
-
-	if (!requireSurfelBuildCellsPassContracts(cmakeLists, pipelineHeader, pipelineSource,
-	                                          engineHeader, engineCore, surfelBuildCells))
-	{
-		std::cerr << "compact surfel fill pass must write multi-cell memberships into offset ranges\n";
-		return false;
-	}
-
-	const std::string recordRayTracingSource =
-	    extractFunctionBody(engineCore, "void EngineCore::recordRayTracingCommandBuffer(");
-	const char *requiredCompactSurfelGridPassOrder[] = {
-	    "recordSurfelGiCountCellsPass(commandBuffer, fi);",
-	    "recordSurfelGiAllocateCellsPass(commandBuffer, fi);",
-	    "recordSurfelGiBuildCellsPass(commandBuffer, fi);"};
-	bool hasCompactSurfelGridCountAndAllocatePasses =
-	    containsText(cmakeLists, "SurfelCountCells.slang|surfelCountCellsMain") &&
-	    containsText(cmakeLists, "SurfelAllocateCells.slang|surfelAllocateCellsMain") &&
-	    containsText(engineHeader, "recordSurfelGiCountCellsPass") &&
-	    containsText(engineHeader, "recordSurfelGiAllocateCellsPass");
-	std::size_t compactSurfelGridPassSearchPos = 0u;
-	for (const char *passCall : requiredCompactSurfelGridPassOrder)
-	{
-		const std::size_t passPos =
-		    recordRayTracingSource.find(passCall, compactSurfelGridPassSearchPos);
-		if (passPos == std::string::npos)
-		{
-			hasCompactSurfelGridCountAndAllocatePasses = false;
-			break;
-		}
-		compactSurfelGridPassSearchPos = passPos + std::string(passCall).size();
-	}
-	if (!hasCompactSurfelGridCountAndAllocatePasses)
-	{
-		std::cerr << "compact surfel grid must record count, allocate, then fill passes\n";
-		return false;
-	}
-
-	if (!requireSurfelEvaluatePassContracts(cmakeLists, pipelineHeader, pipelineSource,
-	                                        engineHeader, engineCore, denoiser, surfelEvaluate))
-	{
-		std::cerr << "persistent surfel GI evaluate pass contract is incomplete\n";
-		return false;
-	}
-	if (!requireSurfelGiDebugAovChannelSplit(denoiser))
-	{
-		return false;
-	}
-	if (!requireSurfelGiSlotCapacityAlignment(frameContextHeader, uiSource, surfelCommon, surfelEvaluate))
-	{
-		return false;
-	}
-	if (!requireCompactSurfelGridDiagnosticPlumbing(
-	        engineAuxiliaryHeader, uiHeader, uiSource, engineHeader, engineCore))
-	{
-		return false;
-	}
-	if (!containsText(surfelCommon, "SURFEL_GI_DENSE_CELL_LIMIT = 64u") ||
-	    !containsText(surfelCommon, "surfelGiEvalDenseCellOffset = 472u") ||
-	    !containsText(surfelCommon, "surfelGiEvalDenseCellSkippedOffset = 476u"))
-	{
-		std::cerr << "surfel GI dense-cell constants and counters are required\n";
-		return false;
-	}
-	if (!requirePathTracerAnalysisRtToComputeBarrier(engineCore))
-	{
-		return false;
-	}
-	const char *requiredCompactSurfelGridSymbols[] = {
-	    "SURFEL_GI_CELL_TO_SURFEL_CAPACITY",
-	    "surfelGiCellTotalMembershipsOffset",
-	    "surfelGiCellAllocatedMembershipsOffset",
-	    "surfelGiCellAllocationOverflowOffset",
-	    "surfelGiCellNonEmptyOffset",
-	    "surfelGiCellMaxPopulationOffset",
-	    "uint offset",
-	    "uint writeCursor"};
-	for (const char *symbol : requiredCompactSurfelGridSymbols)
-	{
-		if (!containsText(surfelCommon, symbol) &&
-		    !containsText(frameContextHeader, symbol) &&
-		    !containsText(engineAuxiliaryHeader, symbol) &&
-		    !containsText(uiHeader, symbol) &&
-		    !containsText(uiSource, symbol))
-		{
-			std::cerr << "missing compact surfel GI grid symbol: " << symbol << "\n";
-			return false;
-		}
-	}
-	if (containsText(surfelCommon, "SURFEL_GI_CELL_SLOT_COUNT") ||
-	    containsText(frameContextHeader, "kSurfelGiCellSlotCount"))
-	{
-		std::cerr << "compact surfel GI grid contract must not expose fixed per-cell slot constants\n";
-		return false;
-	}
-	const char *orderedSurfelCounterFields[] = {
-	    "uint32_t surfelGiEvalAttempts",
-	    "uint32_t surfelGiEvalCellEmpty",
-	    "uint32_t surfelGiEvalCandidates",
-	    "uint32_t surfelGiEvalAccepted",
-	    "uint32_t surfelGiCellTotalMemberships",
-	    "uint32_t surfelGiCellAllocatedMemberships",
-	    "uint32_t surfelGiCellAllocationOverflow",
-	    "uint32_t surfelGiCellNonEmpty",
-	    "uint32_t surfelGiCellMaxPopulation",
-	    "uint32_t surfelGiEvalDenseCell",
-	    "uint32_t surfelGiEvalDenseCellSkipped"};
-	const char *orderedSurfelCounterOffsets[] = {
-	    "surfelGiEvalAttemptsOffset = 436u",
-	    "surfelGiEvalCellEmptyOffset = 440u",
-	    "surfelGiEvalCandidatesOffset = 444u",
-	    "surfelGiEvalAcceptedOffset = 448u",
-	    "surfelGiCellTotalMembershipsOffset = 452u",
-	    "surfelGiCellAllocatedMembershipsOffset = 456u",
-	    "surfelGiCellAllocationOverflowOffset = 460u",
-	    "surfelGiCellNonEmptyOffset = 464u",
-	    "surfelGiCellMaxPopulationOffset = 468u",
-	    "surfelGiEvalDenseCellOffset = 472u",
-	    "surfelGiEvalDenseCellSkippedOffset = 476u"};
-	std::size_t previousFieldPos = 0u;
-	std::size_t previousOffsetPos = 0u;
-	for (std::size_t i = 0u; i < std::size(orderedSurfelCounterFields); ++i)
-	{
-		const std::size_t fieldPos = engineAuxiliaryHeader.find(orderedSurfelCounterFields[i], previousFieldPos);
-		const std::size_t offsetPos = surfelCommon.find(orderedSurfelCounterOffsets[i], previousOffsetPos);
-		if (fieldPos == std::string::npos || offsetPos == std::string::npos)
-		{
-			std::cerr << "missing ordered surfel GI counter layout symbol: "
-			          << orderedSurfelCounterFields[i] << " / "
-			          << orderedSurfelCounterOffsets[i] << "\n";
-			return false;
-		}
-		previousFieldPos = fieldPos + 1u;
-		previousOffsetPos = offsetPos + 1u;
 	}
 
 	if (!requireBrightSurfelProposalDisabledForSweeps(raygen, engineCore))
@@ -1631,128 +682,13 @@ bool testPathTracerReservoirGiMeasurementContract()
 		return false;
 	}
 
-	if (!containsText(recordRayTracingSource, "const bool     surfelGiDebugAovSelected") ||
-	    !containsText(recordRayTracingSource, "PathTracerDebugAov::SurfelGiOccupancy") ||
-	    !containsText(recordRayTracingSource, "PathTracerDebugAov::SurfelGiGather"))
+	if (!requireStandaloneSurfelComputeRemoved(cmakeLists, pipelineHeader, pipelineSource,
+	                                           engineHeader, engineCore, frameContextHeader,
+	                                           frameContextSource, uiHeader, uiSource, denoiser,
+	                                           engineAuxiliaryHeader, pathTracerAnalysisHeader,
+	                                           pathTracerAnalysisSource))
 	{
-		std::cerr << "surfel GI debug AOV selection must include occupancy and gather\n";
 		return false;
-	}
-	const char *requiredSurfelPassOrder[] = {
-	    "recordSurfelGiClearPass(commandBuffer, fi);",
-	    "recordSurfelGiGeneratePass(commandBuffer, fi);",
-	    "recordSurfelGiCountCellsPass(commandBuffer, fi);",
-	    "recordSurfelGiAllocateCellsPass(commandBuffer, fi);",
-	    "recordSurfelGiBuildCellsPass(commandBuffer, fi);",
-	    "recordSurfelGiIntegratePass(commandBuffer, fi);",
-	    "recordSurfelGiEvaluatePass(commandBuffer, fi);"};
-	std::size_t surfelPassSearchPos = recordRayTracingSource.find(requiredSurfelPassOrder[0]);
-	if (surfelPassSearchPos == std::string::npos)
-	{
-		std::cerr << "surfel GI pass gate missing first ordered call\n";
-		return false;
-	}
-	const std::size_t gateWindowStart = surfelPassSearchPos > 500 ? surfelPassSearchPos - 500 : 0;
-	const std::string gateWindow = recordRayTracingSource.substr(gateWindowStart, surfelPassSearchPos - gateWindowStart);
-	if (!containsText(gateWindow, "ui.pathTracerSettings.enableSurfelGi") ||
-	    !containsText(gateWindow, "ui.pathTracerSettings.surfelGiDebug") ||
-	    !containsText(gateWindow, "surfelGiDebugAovSelected"))
-	{
-		std::cerr << "surfel GI passes must run for cache, debug toggle, or surfel debug AOV selection\n";
-		return false;
-	}
-	for (const char *passCall : requiredSurfelPassOrder)
-	{
-		const std::size_t passPos = recordRayTracingSource.find(passCall, surfelPassSearchPos);
-		if (passPos == std::string::npos)
-		{
-			std::cerr << "surfel GI pass gate missing ordered call: " << passCall << "\n";
-			return false;
-		}
-		surfelPassSearchPos = passPos + std::string(passCall).size();
-	}
-
-	const char *requiredTask8Symbols[] = {
-	    "enableSurfelGi",
-	    "surfelGiDebug",
-	    "Surfel GI Occupancy",
-	    "Surfel GI Gather",
-	    "surfelGiGenerateAttempts",
-	    "surfelGiGenerated",
-	    "surfelGiGenerateRejectInvalid",
-	    "surfelGiGenerateRejectCoverage",
-	    "surfelGiCellOverflow",
-	    "surfelGiEvalAccepted",
-	    "surfelGiEvalDenseCell",
-	    "surfelGiEvalDenseCellSkipped"};
-	for (const char *symbol : requiredTask8Symbols)
-	{
-		if (!containsText(uiHeader, symbol) &&
-		    !containsText(uiSource, symbol) &&
-		    !containsText(engineCore, symbol) &&
-		    !containsText(engineHeader, symbol) &&
-		    !containsText(engineAuxiliaryHeader, symbol) &&
-		    !containsText(surfelCommon, symbol) &&
-		    !containsText(surfelGenerate, symbol) &&
-		    !containsText(surfelBuildCells, symbol) &&
-		    !containsText(surfelEvaluate, symbol))
-		{
-			std::cerr << "missing Task 8 surfel GI UI/diagnostic symbol: " << symbol << "\n";
-			return false;
-		}
-	}
-
-	const char *requiredSurfelUiAndSweepSymbols[] = {
-	    "bool enableSurfelGi = false",
-	    "bool surfelGiDebug = false",
-	    "int surfelGiMaxEvalCandidates = 8",
-	    "ImGui::Checkbox(\"Surfel GI Cache\", &pathTracerSettings.enableSurfelGi)",
-	    "ImGui::Checkbox(\"Surfel GI Debug\", &pathTracerSettings.surfelGiDebug)",
-	    "ImGui::SliderInt(\"Surfel Eval Candidates\", &pathTracerSettings.surfelGiMaxEvalCandidates, 1, 16)",
-	    "Surfel GI Generate Attempts",
-	    "Surfel GI Generated",
-	    "Surfel GI Generate Reject Invalid",
-	    "Surfel GI Generate Reject Coverage",
-	    "Surfel GI Cell Insert Attempts",
-	    "Surfel GI Cell Overflow",
-	    "Surfel GI Eval Attempts",
-	    "Surfel GI Eval Accepted",
-	    "SurfelGiOccupancy = 25",
-	    "SurfelGiGather = 26",
-	    "PathTracerDebugAov::SurfelGiOccupancy",
-	    "PathTracerDebugAov::SurfelGiGather",
-	    "surfelGiGenerateAttempts=%.1f",
-	    "surfelGiGenerated=%.1f",
-	    "surfelGiGenerateRejectInvalid=%.1f",
-	    "surfelGiGenerateRejectCoverage=%.1f",
-	    "surfelGiCellInsertAttempts=%.1f",
-	    "surfelGiCellInserted=%.1f",
-	    "surfelGiCellOverflow=%.1f",
-	    "surfelGiEvalAttempts=%.1f",
-	    "surfelGiEvalCandidates=%.1f",
-	    "surfelGiEvalAccepted=%.1f",
-	    "surfelGiEvalCellEmpty=%.1f",
-	    "stats.surfelGiGenerateAttempts",
-	    "stats.surfelGiGenerated",
-	    "stats.surfelGiGenerateRejectInvalid",
-	    "stats.surfelGiGenerateRejectCoverage",
-	    "stats.surfelGiCellInsertAttempts",
-	    "stats.surfelGiCellInserted",
-	    "stats.surfelGiCellOverflow",
-	    "stats.surfelGiEvalAttempts",
-	    "stats.surfelGiEvalCandidates",
-	    "stats.surfelGiEvalAccepted",
-	    "stats.surfelGiEvalCellEmpty"};
-	for (const char *symbol : requiredSurfelUiAndSweepSymbols)
-	{
-		if (!containsText(uiHeader, symbol) &&
-		    !containsText(uiSource, symbol) &&
-		    !containsText(engineCore, symbol) &&
-		    !containsText(engineHeader, symbol))
-		{
-			std::cerr << "missing Task 8 surfel GI UI/sweep contract: " << symbol << "\n";
-			return false;
-		}
 	}
 
 	const std::array<const char *, 12> estimatorAuditSymbols{
@@ -2636,54 +1572,16 @@ bool testPathTracerReservoirGiMeasurementContract()
 	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorRejectSurfelHemisphere), 396u},
 	    {"reservoirGiBrightSurfelSelectorRejectInvalidVector",
 	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorRejectInvalidVector), 400u},
-	    {"surfelGiClearDispatches",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiClearDispatches), 404u},
-	    {"surfelGiGenerateAttempts",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiGenerateAttempts), 408u},
-	    {"surfelGiGenerated",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiGenerated), 412u},
-	    {"surfelGiGenerateRejectInvalid",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiGenerateRejectInvalid), 416u},
-	    {"surfelGiGenerateRejectCoverage",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiGenerateRejectCoverage), 420u},
-	    {"surfelGiCellInsertAttempts",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellInsertAttempts), 424u},
-	    {"surfelGiCellInserted",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellInserted), 428u},
-	    {"surfelGiCellOverflow",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellOverflow), 432u},
-	    {"surfelGiEvalAttempts",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalAttempts), 436u},
-	    {"surfelGiEvalCellEmpty",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalCellEmpty), 440u},
-	    {"surfelGiEvalCandidates",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalCandidates), 444u},
-	    {"surfelGiEvalAccepted",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalAccepted), 448u},
-	    {"surfelGiCellTotalMemberships",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellTotalMemberships), 452u},
-	    {"surfelGiCellAllocatedMemberships",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellAllocatedMemberships), 456u},
-	    {"surfelGiCellAllocationOverflow",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellAllocationOverflow), 460u},
-	    {"surfelGiCellNonEmpty",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellNonEmpty), 464u},
-	    {"surfelGiCellMaxPopulation",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellMaxPopulation), 468u},
-	    {"surfelGiEvalDenseCell",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalDenseCell), 472u},
-	    {"surfelGiEvalDenseCellSkipped",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalDenseCellSkipped), 476u},
 	    {"reservoirGiAuditCurrentLumaScaledSum",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditCurrentLumaScaledSum), 480u},
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditCurrentLumaScaledSum), 404u},
 	    {"reservoirGiAuditReferenceLumaScaledSum",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditReferenceLumaScaledSum), 484u},
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditReferenceLumaScaledSum), 408u},
 	    {"reservoirGiAuditRelativeErrorScaledSum",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditRelativeErrorScaledSum), 488u},
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditRelativeErrorScaledSum), 412u},
 	    {"reservoirGiAuditProbeScaleScaledSum",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditProbeScaleScaledSum), 492u},
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditProbeScaleScaledSum), 416u},
 	    {"reservoirGiAuditSampleCount",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditSampleCount), 496u}};
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditSampleCount), 420u}};
 	for (const auto &counterOffset : counterOffsets)
 	{
 		if (counterOffset.offset != counterOffset.expectedOffset)
@@ -2767,13 +1665,6 @@ bool testPathTracerReservoirGiMeasurementContract()
 		return false;
 	}
 
-	const char *requiredSponzaAuditRows[] = {
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
-	    "Reservoir 1C Shadowed Sun First Mixed Single Frame Sun Receiver",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Surfel Cache Debug",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two",
-	    "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two Cache Continuation"};
 	const std::size_t sponzaSweepStartPos =
 	    engineCore.find("void EngineCore::startPathTracerSponzaGiPerfSweep()");
 	const std::size_t sponzaSweepEndPos =
@@ -2787,20 +1678,9 @@ bool testPathTracerReservoirGiMeasurementContract()
 	}
 	const std::string sponzaSweepSource =
 	    engineCore.substr(sponzaSweepStartPos, sponzaSweepEndPos - sponzaSweepStartPos);
-	for (const char *rowName : requiredSponzaAuditRows)
-	{
-		const std::string quotedRowName = std::string("\"") + rowName + "\"";
-		if (sponzaSweepSource.find(quotedRowName) == std::string::npos)
-		{
-			std::cerr << "focused Sponza PT/GI audit sweep is missing exact quoted row literal: "
-			          << rowName << "\n";
-			return false;
-		}
-	}
-	const char *requiredSponzaAuditRowSchedule[] = {
+	const char *currentSponzaAuditRowSchedule[] = {
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);",
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);",
-	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow);",
 	    "ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);",
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow);",
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);",
@@ -2810,74 +1690,16 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "ptExperimentRows.push_back(reservoirAuditSingleFrame2cRisRow);",
 	    "ptExperimentRows.push_back(reservoirAuditTemporalStaticRow);",
 	    "ptExperimentRows.push_back(reservoirAuditTemporalSpatialStaticRow);"};
-	const std::size_t expectedSponzaAuditRowScheduleCount =
-	    sizeof(requiredSponzaAuditRowSchedule) / sizeof(requiredSponzaAuditRowSchedule[0]);
-	const char *sponzaAuditPushBackNeedle = "ptExperimentRows.push_back(";
-	std::size_t sponzaAuditPushBackCount = 0;
-	std::size_t sponzaAuditPushBackSearchPos = 0;
-	while ((sponzaAuditPushBackSearchPos =
-	            sponzaSweepSource.find(sponzaAuditPushBackNeedle, sponzaAuditPushBackSearchPos)) !=
-	       std::string::npos)
+	const char *leanSponzaAuditRowSchedule[] = {
+	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);",
+	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);",
+	    "ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);",
+	    "ptExperimentRows.push_back(reservoirAuditSingleFrame1cCurrentRow);",
+	    "ptExperimentRows.push_back(reservoirAuditTemporalSpatialStaticRow);"};
+	if (!matchesExactPushBackSequence(sponzaSweepSource, currentSponzaAuditRowSchedule) &&
+	    !matchesExactPushBackSequence(sponzaSweepSource, leanSponzaAuditRowSchedule))
 	{
-		++sponzaAuditPushBackCount;
-		sponzaAuditPushBackSearchPos += std::string(sponzaAuditPushBackNeedle).size();
-	}
-	if (sponzaAuditPushBackCount != expectedSponzaAuditRowScheduleCount)
-	{
-		std::cerr << "focused Sponza PT/GI audit sweep should schedule exactly the expected audit rows: expected "
-		          << expectedSponzaAuditRowScheduleCount << " got " << sponzaAuditPushBackCount << "\n";
-		return false;
-	}
-	std::size_t sponzaAuditRowScheduleSearchPos = 0;
-	for (const char *scheduledRow : requiredSponzaAuditRowSchedule)
-	{
-		const std::size_t scheduledRowPos =
-		    sponzaSweepSource.find(scheduledRow, sponzaAuditRowScheduleSearchPos);
-		if (scheduledRowPos == std::string::npos)
-		{
-			std::cerr << "focused Sponza PT/GI audit sweep is missing scheduled row in order: "
-			          << scheduledRow << "\n";
-			return false;
-		}
-		sponzaAuditRowScheduleSearchPos = scheduledRowPos + std::string(scheduledRow).size();
-	}
-	const char *requiredSurfelDiagnosticRowSymbols[] = {
-	    "bool enableSurfelGi = false",
-	    "bool surfelGiDebug = false",
-	    "settings.enableSurfelGi",
-	    "settings.surfelGiDebug",
-	    "auto reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow =",
-	    "reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow.enableSurfelGi = true;",
-	    "reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow.surfelGiDebug = true;"};
-	for (const char *symbol : requiredSurfelDiagnosticRowSymbols)
-	{
-		if (!containsText(engineCore, symbol) && !containsText(engineHeader, symbol))
-		{
-			std::cerr << "missing diagnostic-only Sponza surfel cache sweep contract: "
-			          << symbol << "\n";
-			return false;
-		}
-	}
-	const std::size_t surfelDiagnosticRowStart =
-	    sponzaSweepSource.find("reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow");
-	const std::size_t surfelDiagnosticRowSchedule =
-	    sponzaSweepSource.find("ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow);");
-	if (surfelDiagnosticRowStart == std::string::npos ||
-	    surfelDiagnosticRowSchedule == std::string::npos ||
-	    surfelDiagnosticRowSchedule <= surfelDiagnosticRowStart)
-	{
-		std::cerr << "focused Sponza PT/GI audit sweep is missing the diagnostic-only surfel cache row setup\n";
-		return false;
-	}
-	const std::string surfelDiagnosticRowSource =
-	    sponzaSweepSource.substr(surfelDiagnosticRowStart,
-	                             surfelDiagnosticRowSchedule - surfelDiagnosticRowStart);
-	if (!containsText(surfelDiagnosticRowSource, "MixedCosineSunReceiverGuided") ||
-	    containsText(surfelDiagnosticRowSource, "MixedCosineSunReceiverBrightSurfel") ||
-	    containsText(surfelDiagnosticRowSource, "settings.enableSurfelGi") ||
-	    containsText(surfelDiagnosticRowSource, "settings.surfelGiDebug"))
-	{
-		std::cerr << "diagnostic-only Sponza surfel cache row must keep the Sun Receiver proposal and only set row flags\n";
+		std::cerr << "focused Sponza PT/GI audit sweep must contain exactly the current or lean required rows\n";
 		return false;
 	}
 	const std::size_t experimentSweepUpdatePos =
@@ -2898,22 +1720,6 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    rowTransitionApplyRowPos >= postExperimentSweepUpdatePos)
 	{
 		std::cerr << "focused Sponza PT/GI audit sweep should clear experiment state before advancing rows\n";
-		return false;
-	}
-	const std::string clearExperimentState =
-	    extractFunctionBody(engineCore, "void EngineCore::clearPathTracerExperimentState()");
-	const std::string surfelRecordReset =
-	    extractFunctionBody(engineCore, "void EngineCore::resetSurfelGiRecordBuffers()");
-	if (!containsText(engineHeader, "void resetSurfelGiRecordBuffers();") ||
-	    !containsText(clearExperimentState, "resetSurfelGiRecordBuffers();") ||
-	    !containsText(surfelRecordReset, "FrameContext::kSurfelGiMaxSurfels") ||
-	    !containsText(surfelRecordReset, "FrameContext::kSurfelGiRecordSize") ||
-	    !containsText(surfelRecordReset, "cmd.fillBuffer(*buffer, 0, recordBufferSize, 0u)") ||
-	    !containsText(surfelRecordReset, "vk::PipelineStageFlagBits2::eTransfer") ||
-	    !containsText(surfelRecordReset, "vk::AccessFlagBits2::eTransferWrite") ||
-	    !containsText(surfelRecordReset, "VulkanUtils::endSingleTimeCommands"))
-	{
-		std::cerr << "focused Sponza PT/GI audit sweep must reset persistent surfel records between rows\n";
 		return false;
 	}
 	if (containsText(engineCore, "Sponza / Reservoir GI Temporal") ||
