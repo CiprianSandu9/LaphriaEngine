@@ -10,20 +10,10 @@ struct UpdatePushConstants {
     float cellSize;
     uint cellDimension;
     uint maxRays;
+    float4 cameraPosition;
 };
 
 [[vk::push_constant]] UpdatePushConstants push;
-
-uint cellIndexForPosition(float3 position, float cellSize, uint cellDimension) {
-    float safeCellSize = max(cellSize, 0.0001f);
-    uint dim = max(cellDimension, 1u);
-    float halfDim = float(dim) * 0.5f;
-    float maxCoord = float(dim - 1u);
-    float3 centeredCell = floor(position / safeCellSize) + float3(halfDim, halfDim, halfDim);
-    float3 clampedCell = clamp(centeredCell, float3(0.0f, 0.0f, 0.0f), float3(maxCoord, maxCoord, maxCoord));
-    uint3 coord = uint3(clampedCell);
-    return coord.x + coord.y * dim + coord.z * dim * dim;
-}
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -40,7 +30,16 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     surfel.shortMeanAndLife.w = min(surfel.shortMeanAndLife.w + 1.0f, float(SURFEL_PT_MAX_LIFE));
 
-    uint cellIndex = cellIndexForPosition(surfel.position, push.cellSize, push.cellDimension);
+    uint cellIndex = cameraRelativeCellIndexForPosition(surfel.position,
+                                                        push.cameraPosition.xyz,
+                                                        push.cellSize,
+                                                        push.cellDimension);
+    if (cellIndex == SURFEL_PT_INVALID_INDEX) {
+        surfel.rayOffset = 0u;
+        surfel.rayCount = 0u;
+        surfelBuffer[surfelIndex] = surfel;
+        return;
+    }
     uint cellCountOffset = (1u + cellIndex) * 4u;
     cellCounterBuffer.InterlockedAdd(cellCountOffset, 1u);
 

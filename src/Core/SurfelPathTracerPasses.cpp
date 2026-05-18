@@ -23,6 +23,7 @@ struct SurfelUpdatePushConstants
 	float cellSize = 1.0f;
 	uint32_t cellDimension = 1;
 	uint32_t maxRays = 0;
+	glm::vec4 cameraPosition{0.0f};
 };
 
 struct SurfelCellInfoPushConstants
@@ -39,6 +40,7 @@ struct SurfelCellToSurfelPushConstants
 	float cellSize = 1.0f;
 	uint32_t cellDimension = 1;
 	uint32_t perCellSurfelLimit = 0;
+	glm::vec4 cameraPosition{0.0f};
 };
 
 struct SurfelRayTracePushConstants
@@ -220,7 +222,8 @@ void SurfelPathTracerPasses::recordUpdatePass(const vk::raii::CommandBuffer &com
                                               uint32_t maxSurfels,
                                               uint32_t maxRays,
                                               float cellSize,
-                                              uint32_t cellDimension) const
+                                              uint32_t cellDimension,
+                                              const glm::vec3 &cameraPosition) const
 {
 	bindComputeStorageSet(commandBuffer, pipelines, pipelines.updatePipeline, imageSet);
 
@@ -228,7 +231,8 @@ void SurfelPathTracerPasses::recordUpdatePass(const vk::raii::CommandBuffer &com
 	    .maxSurfels = std::max(maxSurfels, 1u),
 	    .cellSize = std::max(cellSize, 0.0001f),
 	    .cellDimension = std::max(cellDimension, 1u),
-	    .maxRays = std::max(maxRays, 1u)};
+	    .maxRays = std::max(maxRays, 1u),
+	    .cameraPosition = glm::vec4(cameraPosition, 1.0f)};
 	commandBuffer.pushConstants<SurfelUpdatePushConstants>(*pipelines.computePipelineLayout,
 	                                                       vk::ShaderStageFlagBits::eCompute,
 	                                                       0,
@@ -262,7 +266,8 @@ void SurfelPathTracerPasses::recordCellToSurfelPass(const vk::raii::CommandBuffe
                                                     uint32_t maxSurfels,
                                                     float cellSize,
                                                     uint32_t cellDimension,
-                                                    uint32_t perCellSurfelLimit) const
+                                                    uint32_t perCellSurfelLimit,
+                                                    const glm::vec3 &cameraPosition) const
 {
 	bindComputeStorageSet(commandBuffer, pipelines, pipelines.cellToSurfelPipeline, imageSet);
 
@@ -270,7 +275,8 @@ void SurfelPathTracerPasses::recordCellToSurfelPass(const vk::raii::CommandBuffe
 	    .maxSurfels = std::max(maxSurfels, 1u),
 	    .cellSize = std::max(cellSize, 0.0001f),
 	    .cellDimension = std::max(cellDimension, 1u),
-	    .perCellSurfelLimit = std::max(perCellSurfelLimit, 1u)};
+	    .perCellSurfelLimit = std::max(perCellSurfelLimit, 1u),
+	    .cameraPosition = glm::vec4(cameraPosition, 1.0f)};
 	commandBuffer.pushConstants<SurfelCellToSurfelPushConstants>(*pipelines.computePipelineLayout,
 	                                                             vk::ShaderStageFlagBits::eCompute,
 	                                                             0,

@@ -108,6 +108,39 @@ bool isFinite3(float3 value) {
            abs(value.z) < 3.402823e38;
 }
 
+int3 cameraRelativeCellCoord(float3 position, float3 cameraPosition, float cellSize)
+{
+    return int3(round((position - cameraPosition) / max(cellSize, 0.0001)));
+}
+
+bool isCellCoordValid(int3 coord, uint cellDimension)
+{
+    uint dim = max(cellDimension, 1u);
+    int halfDim = int(dim) / 2;
+    int upperDim = int(dim) - halfDim;
+    return coord.x >= -halfDim && coord.x < upperDim &&
+           coord.y >= -halfDim && coord.y < upperDim &&
+           coord.z >= -halfDim && coord.z < upperDim;
+}
+
+uint flattenCameraRelativeCellCoord(int3 coord, uint cellDimension)
+{
+    uint dim = max(cellDimension, 1u);
+    int halfDim = int(dim) / 2;
+    uint3 unsignedCoord = uint3(coord + int3(halfDim, halfDim, halfDim));
+    return unsignedCoord.x + unsignedCoord.y * dim + unsignedCoord.z * dim * dim;
+}
+
+uint cameraRelativeCellIndexForPosition(float3 position, float3 cameraPosition, float cellSize, uint cellDimension)
+{
+    int3 coord = cameraRelativeCellCoord(position, cameraPosition, cellSize);
+    if (!isCellCoordValid(coord, cellDimension))
+    {
+        return SURFEL_PT_INVALID_INDEX;
+    }
+    return flattenCameraRelativeCellCoord(coord, cellDimension);
+}
+
 float luminance(float3 value) {
     return dot(value, float3(0.2126, 0.7152, 0.0722));
 }

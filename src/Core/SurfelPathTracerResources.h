@@ -117,6 +117,13 @@ class SurfelPathTracerResources
 		                      static_cast<uint64_t>(coord.z) * dim * dim;
 		return {coord, static_cast<uint32_t>(flat)};
 	}
+	static SurfelPathTracerCellAddress cameraRelativeCellAddressForPosition(const glm::vec3 &position,
+	                                                                        const glm::vec3 &cameraPosition,
+	                                                                        float cellSize,
+	                                                                        uint32_t cellDimension)
+	{
+		return cellAddressForPosition(position - cameraPosition, cellSize, cellDimension);
+	}
 
 	VulkanUtils::VmaBuffer countersBuffer;
 	VulkanUtils::VmaBuffer surfelBuffer;

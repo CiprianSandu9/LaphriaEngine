@@ -135,6 +135,12 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "surfelTerminatedPaths",
 	    "pathMisses",
 	    "cellAddressForPosition",
+	    "cameraRelativeCellAddressForPosition",
+	    "cameraRelativeCellIndexForPosition",
+	    "cameraRelativeCellCoord",
+	    "flattenCameraRelativeCellCoord",
+	    "coord.x >= -halfDim",
+	    "coord.x < upperDim",
 	    "needsPersistentReset",
 	    "~SurfelPathTracerResources",
 	    "SurfelPathTracerResources(const SurfelPathTracerResources &) = delete",
@@ -334,10 +340,34 @@ bool testSurfelPathTracerCellAddressBounds()
 {
 	const auto atCenter = Laphria::SurfelPathTracerResources::cellAddressForPosition(glm::vec3(0.0f), 1.0f, 64);
 	const auto atFar = Laphria::SurfelPathTracerResources::cellAddressForPosition(glm::vec3(100000.0f), 1.0f, 64);
+	const glm::vec3 cameraB(100000.0f, 20.0f, -300.0f);
+	const glm::vec3 position = cameraB + glm::vec3(1.0f, 0.0f, 0.0f);
+	const auto atB =
+	    Laphria::SurfelPathTracerResources::cameraRelativeCellAddressForPosition(position, cameraB, 1.0f, 64);
+	const auto atNegativeEdge =
+	    Laphria::SurfelPathTracerResources::cameraRelativeCellAddressForPosition(cameraB + glm::vec3(-32.0f, 0.0f, 0.0f),
+	                                                                             cameraB,
+	                                                                             1.0f,
+	                                                                             64);
+	const auto atPositiveEdge =
+	    Laphria::SurfelPathTracerResources::cameraRelativeCellAddressForPosition(cameraB + glm::vec3(31.0f, 0.0f, 0.0f),
+	                                                                             cameraB,
+	                                                                             1.0f,
+	                                                                             64);
 
 	if (atCenter.flatIndex >= 64u * 64u * 64u || atFar.flatIndex >= 64u * 64u * 64u)
 	{
 		std::cerr << "surfel cell address escaped valid bounds\n";
+		return false;
+	}
+	if (std::abs(atB.coord.x - 33) > 1)
+	{
+		std::cerr << "camera-relative surfel cell address did not stay near the grid center\n";
+		return false;
+	}
+	if (atNegativeEdge.coord.x != 0 || atPositiveEdge.coord.x != 63)
+	{
+		std::cerr << "camera-relative surfel cell address lost an even-dimension boundary cell\n";
 		return false;
 	}
 	return true;

@@ -41,35 +41,25 @@ float3 reconstructWorldPosition(uint2 pixel, float depth) {
     return ubo.cameraPos.xyz + primaryRayDirection(pixel) * depth;
 }
 
-uint cellIndexForPosition(float3 position) {
-    uint cellDimension = max(push.cellDimension, 1u);
-    float cellSize = max(push.cellSize, 0.0001);
-    float dim = float(cellDimension);
-    float halfDim = dim * 0.5;
-    float maxCoord = dim - 1.0;
-    float3 centeredCell = floor(position / cellSize) + float3(halfDim, halfDim, halfDim);
-    float3 clampedCell = clamp(centeredCell, float3(0.0, 0.0, 0.0), float3(maxCoord, maxCoord, maxCoord));
-    uint3 coord = uint3(clampedCell);
-    return coord.x + coord.y * cellDimension + coord.z * cellDimension * cellDimension;
-}
-
 float estimateCoverage(float3 position, float3 normal, out uint closestSurfelIndex) {
     closestSurfelIndex = SURFEL_PT_INVALID_INDEX;
-    uint centerCell = cellIndexForPosition(position);
     uint dim = max(push.cellDimension, 1u);
-    uint3 centerCoord = uint3(centerCell % dim, (centerCell / dim) % dim, centerCell / (dim * dim));
+    int3 centerCoord = cameraRelativeCellCoord(position, ubo.cameraPos.xyz, push.cellSize);
+    if (!isCellCoordValid(centerCoord, dim)) {
+        return 0.0;
+    }
 
     float coverage = 0.0;
     float bestWeight = 0.0;
     for (int z = -1; z <= 1; ++z) {
         for (int y = -1; y <= 1; ++y) {
             for (int x = -1; x <= 1; ++x) {
-                int3 coord = int3(centerCoord) + int3(x, y, z);
-                if (any(coord < int3(0, 0, 0)) || any(coord >= int3(int(dim), int(dim), int(dim)))) {
+                int3 coord = centerCoord + int3(x, y, z);
+                if (!isCellCoordValid(coord, dim)) {
                     continue;
                 }
 
-                uint cellIndex = uint(coord.x) + uint(coord.y) * dim + uint(coord.z) * dim * dim;
+                uint cellIndex = flattenCameraRelativeCellCoord(coord, dim);
                 SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
                 for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
                     uint surfelIndex = cellToSurfelBuffer[cellInfo.surfelOffset + slot];

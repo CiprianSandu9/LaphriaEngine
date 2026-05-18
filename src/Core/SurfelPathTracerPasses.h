@@ -40,7 +40,8 @@ class SurfelPathTracerPasses
 	                      uint32_t maxSurfels,
 	                      uint32_t maxRays,
 	                      float cellSize,
-	                      uint32_t cellDimension) const;
+	                      uint32_t cellDimension,
+	                      const glm::vec3 &cameraPosition) const;
 
 	void recordCellInfoPass(const vk::raii::CommandBuffer &commandBuffer,
 	                        const SurfelPathTracerPipelines &pipelines,
@@ -54,7 +55,8 @@ class SurfelPathTracerPasses
 	                            uint32_t maxSurfels,
 	                            float cellSize,
 	                            uint32_t cellDimension,
-	                            uint32_t perCellSurfelLimit) const;
+	                            uint32_t perCellSurfelLimit,
+	                            const glm::vec3 &cameraPosition) const;
 
 	void recordSurfelRayTracePass(const vk::raii::CommandBuffer &commandBuffer,
 	                              const SurfelPathTracerPipelines &pipelines,
