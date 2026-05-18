@@ -69,8 +69,14 @@ struct SurfelEvaluatePushConstants
 	float cellSize = 1.0f;
 	uint32_t cellDimension = 1;
 	uint32_t maxSurfels = 0;
-	uint32_t pad1 = 0;
-	uint32_t pad2 = 0;
+	float placementThreshold = 0.35f;
+	float removalThreshold = 4.0f;
+	float surfelTargetArea = 16.0f;
+	float surfelMinRadius = 0.05f;
+	uint32_t frameIndex = 0;
+	uint32_t lockSurfels = 0;
+	uint32_t enablePlacement = 1;
+	uint32_t enableRemoval = 1;
 };
 
 struct SurfelReflectionPushConstants
@@ -361,6 +367,14 @@ void SurfelPathTracerPasses::recordEvaluatePass(const vk::raii::CommandBuffer &c
                                                 float cellSize,
                                                 uint32_t cellDimension,
                                                 uint32_t maxSurfels,
+                                                float placementThreshold,
+                                                float removalThreshold,
+                                                float surfelTargetArea,
+                                                float surfelMinRadius,
+                                                uint32_t frameIndex,
+                                                bool lockSurfels,
+                                                bool enableSurfelPlacement,
+                                                bool enableSurfelRemoval,
                                                 vk::Extent2D extent) const
 {
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.evaluatePipeline);
@@ -378,8 +392,14 @@ void SurfelPathTracerPasses::recordEvaluatePass(const vk::raii::CommandBuffer &c
 	    .cellSize = std::max(cellSize, 0.0001f),
 	    .cellDimension = std::max(cellDimension, 1u),
 	    .maxSurfels = std::max(maxSurfels, 1u),
-	    .pad1 = 0,
-	    .pad2 = 0};
+	    .placementThreshold = std::max(placementThreshold, 0.0f),
+	    .removalThreshold = std::max(removalThreshold, placementThreshold),
+	    .surfelTargetArea = std::max(surfelTargetArea, 1.0f),
+	    .surfelMinRadius = std::max(surfelMinRadius, 0.0001f),
+	    .frameIndex = frameIndex,
+	    .lockSurfels = lockSurfels ? 1u : 0u,
+	    .enablePlacement = enableSurfelPlacement ? 1u : 0u,
+	    .enableRemoval = enableSurfelRemoval ? 1u : 0u};
 	commandBuffer.pushConstants<SurfelEvaluatePushConstants>(*pipelines.computePipelineLayout,
 	                                                         vk::ShaderStageFlagBits::eCompute,
 	                                                         0,

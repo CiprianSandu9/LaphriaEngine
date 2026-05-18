@@ -80,6 +80,14 @@ class SurfelPathTracerPasses
 	                        float cellSize,
 	                        uint32_t cellDimension,
 	                        uint32_t maxSurfels,
+	                        float placementThreshold,
+	                        float removalThreshold,
+	                        float surfelTargetArea,
+	                        float surfelMinRadius,
+	                        uint32_t frameIndex,
+	                        bool lockSurfels,
+	                        bool enableSurfelPlacement,
+	                        bool enableSurfelRemoval,
 	                        vk::Extent2D extent) const;
 
 	void recordReflectionPass(const vk::raii::CommandBuffer &commandBuffer,

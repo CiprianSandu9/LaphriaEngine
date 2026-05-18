@@ -2205,6 +2205,14 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                          surfelSettings.cellSize,
 		                                          surfelPathTracerResources.cellDimensionCapacity(),
 		                                          surfelPathTracerResources.maxSurfelsCapacity(),
+		                                          surfelSettings.placementThreshold,
+		                                          surfelSettings.removalThreshold,
+		                                          surfelSettings.surfelTargetArea,
+		                                          surfelSettings.surfelMinRadius,
+		                                          fi,
+		                                          surfelSettings.lockSurfels,
+		                                          surfelSettings.enableSurfelPlacement,
+		                                          surfelSettings.enableSurfelRemoval,
 		                                          swapchain.extent);
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		surfelPathTracerPasses.recordUpdatePass(commandBuffer,
@@ -2258,6 +2266,14 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                          surfelSettings.cellSize,
 	                                          surfelPathTracerResources.cellDimensionCapacity(),
 	                                          surfelPathTracerResources.maxSurfelsCapacity(),
+	                                          surfelSettings.placementThreshold,
+	                                          surfelSettings.removalThreshold,
+	                                          surfelSettings.surfelTargetArea,
+	                                          surfelSettings.surfelMinRadius,
+	                                          fi,
+	                                          surfelSettings.lockSurfels,
+	                                          false,
+	                                          false,
 	                                          swapchain.extent);
 
 	surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);

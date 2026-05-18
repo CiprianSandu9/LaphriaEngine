@@ -363,6 +363,14 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerEvaluate.slang", filesOk);
 	const std::string cellToSurfelShader =
 	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerCellToSurfel.slang", filesOk);
+	const std::string commonShader =
+	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerCommon.slang", filesOk);
+	const std::string raygenShader = readTextFile(root / "src" / "shaders" / "SurfelPathTracerRaygen.slang", filesOk);
+	const std::string integrateShader =
+	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerIntegrate.slang", filesOk);
+	const std::string reflectionShader =
+	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerReflection.slang", filesOk);
+	const std::string engineCore = readTextFile(root / "src" / "Core" / "EngineCore.cpp", filesOk);
 	const std::string passesCpp = readTextFile(root / "src" / "Core" / "SurfelPathTracerPasses.cpp", filesOk);
 	const bool task5Ok =
 	    containsAllNeedles(updateShader,
@@ -383,7 +391,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                       {"push.lockSurfels == 0u && shouldRecycleSurfel",
 	                        "counters.InterlockedAdd(SURFEL_PT_COUNTER_RECYCLED_SURFELS_OFFSET, 1u);"}) &&
 	    containsAllNeedles(evaluateShader,
-	                       {"if (closestSurfelIndex != SURFEL_PT_INVALID_INDEX)",
+	                       {"if (stampClosest && closestSurfelIndex != SURFEL_PT_INVALID_INDEX)",
 	                        "surfel.lastReferencedFrame = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET)",
 	                        "surfel.lastSeenFrame = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET)"});
 	if (containsNeedle(updateShader, "SURFEL_PT_COUNTER_ALIVE_SURFELS_OFFSET"))
@@ -391,8 +399,66 @@ bool testSurfelPathTracerPipelineContractFiles()
 		std::cerr << "SurfelPathTracer lifecycle contract must not decrement aliveSurfels in Update\n";
 		task6Ok = false;
 	}
+	bool task7Ok =
+	    containsAllNeedles(commonShader,
+	                       {"SURFEL_PT_SURFEL_FLAG_ACTIVE",
+	                        "SURFEL_PT_SURFEL_FLAG_PENDING_FREE",
+	                        "bool isActiveSurfel(SurfelPathTracerSurfel surfel)"}) &&
+	    containsAllNeedles(updateShader,
+	                       {"if ((surfel.flags & SURFEL_PT_SURFEL_FLAG_PENDING_FREE) != 0u)",
+	                        "if (!isActiveSurfel(surfel))",
+	                        "counters.InterlockedAdd(SURFEL_PT_COUNTER_REMOVED_SURFELS_OFFSET, 1u);"}) &&
+	    appearsBefore(updateShader,
+	                  "if ((surfel.flags & SURFEL_PT_SURFEL_FLAG_PENDING_FREE) != 0u)",
+	                  "if (!isActiveSurfel(surfel))") &&
+	    containsAllNeedles(evaluateShader,
+	                       {"float placementThreshold;",
+	                        "float removalThreshold;",
+	                        "float surfelTargetArea;",
+	                        "float surfelMinRadius;",
+	                        "uint enablePlacement;",
+	                        "uint enableRemoval;",
+	                        "coverage += weight;",
+	                        "push.enablePlacement != 0u",
+	                        "push.enableRemoval != 0u",
+	                        "surfel.flags = SURFEL_PT_SURFEL_FLAG_ACTIVE",
+	                        "SURFEL_PT_SURFEL_FLAG_PENDING_FREE",
+	                        "uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);",
+	                        "estimateCoverage(position, normal, closestSurfelIndex, false)",
+	                        "estimateCoverage(position, normal, closestSurfelIndex, true)",
+	                        "allocateSurfel(pixel, position, normal, radius, resolveSurfelRadiance"}) &&
+	    containsAllNeedles(passesCpp,
+	                       {"placementThreshold",
+	                        "removalThreshold",
+	                        "surfelTargetArea",
+	                        "surfelMinRadius"}) &&
+	    containsAllNeedles(engineCore,
+	                       {"surfelSettings.placementThreshold",
+	                        "surfelSettings.removalThreshold",
+	                        "surfelSettings.surfelTargetArea",
+	                        "surfelSettings.surfelMinRadius",
+	                        "enableSurfelPlacement",
+	                        "enableSurfelRemoval"});
+	for (std::string_view shader : {updateShader,
+	                                evaluateShader,
+	                                cellToSurfelShader,
+	                                raygenShader,
+	                                integrateShader,
+	                                reflectionShader})
+	{
+		if (!containsNeedle(shader, "isActiveSurfel(surfel)"))
+		{
+			std::cerr << "SurfelPathTracer active-surfel contract missing in shader\n";
+			task7Ok = false;
+		}
+	}
+	if (containsNeedle(evaluateShader, "pushDeadSurfel"))
+	{
+		std::cerr << "SurfelPathTracer Evaluate must only mark pending frees, not push dead surfels\n";
+		task7Ok = false;
+	}
 
-	return filesOk && ok && task5Ok && task6Ok;
+	return filesOk && ok && task5Ok && task6Ok && task7Ok;
 }
 
 bool testSurfelPathTracerCellAddressBounds()

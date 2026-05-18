@@ -55,7 +55,32 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     SurfelPathTracerSurfel surfel = surfelBuffer[surfelIndex];
-    if (surfel.flags == 0u) {
+    if ((surfel.flags & SURFEL_PT_SURFEL_FLAG_PENDING_FREE) != 0u)
+    {
+        if (pushDeadSurfel(surfelIndex, push.maxSurfels))
+        {
+            surfel.flags = 0u;
+            surfel.radius = 0.0;
+            surfel.rayOffset = 0u;
+            surfel.rayCount = 0u;
+            surfelBuffer[surfelIndex] = surfel;
+            counters.InterlockedAdd(SURFEL_PT_COUNTER_REMOVED_SURFELS_OFFSET, 1u);
+        }
+        return;
+    }
+
+    if (!isActiveSurfel(surfel)) {
+        if ((surfel.flags & SURFEL_PT_SURFEL_FLAG_ACTIVE) != 0u &&
+            push.lockSurfels == 0u &&
+            pushDeadSurfel(surfelIndex, push.maxSurfels))
+        {
+            surfel.flags = 0u;
+            surfel.radius = 0.0;
+            surfel.rayOffset = 0u;
+            surfel.rayCount = 0u;
+            surfelBuffer[surfelIndex] = surfel;
+            counters.InterlockedAdd(SURFEL_PT_COUNTER_RECYCLED_SURFELS_OFFSET, 1u);
+        }
         return;
     }
 

@@ -25,7 +25,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     SurfelPathTracerSurfel surfel = surfelBuffer[surfelIndex];
-    if (surfel.flags == 0u || surfel.radius <= 0.0f || !isFinite3(surfel.position)) {
+    if (!isActiveSurfel(surfel)) {
         return;
     }
 

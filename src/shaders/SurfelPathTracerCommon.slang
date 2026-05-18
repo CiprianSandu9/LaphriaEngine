@@ -8,6 +8,8 @@ static const uint SURFEL_PT_INVALID_INDEX = 0xFFFFFFFFu;
 static const uint SURFEL_PT_ATLAS_TILE_SIZE = 6u;
 static const uint SURFEL_PT_SLEEP_AWAKE = 0u;
 static const uint SURFEL_PT_SLEEP_SLEEPING = 1u;
+static const uint SURFEL_PT_SURFEL_FLAG_ACTIVE = 1u;
+static const uint SURFEL_PT_SURFEL_FLAG_PENDING_FREE = 2u;
 static const uint SURFEL_PT_STATUS_LAST_SEEN = 0x2u;
 static const uint SURFEL_PT_STATUS_LAST_REFERENCED = 0x4u;
 static const float SURFEL_PT_RAY_BIAS = 0.001;
@@ -108,6 +110,14 @@ bool isFinite3(float3 value) {
            abs(value.z) < 3.402823e38;
 }
 
+bool isActiveSurfel(SurfelPathTracerSurfel surfel)
+{
+    return (surfel.flags & SURFEL_PT_SURFEL_FLAG_ACTIVE) != 0u &&
+           (surfel.flags & SURFEL_PT_SURFEL_FLAG_PENDING_FREE) == 0u &&
+           surfel.radius > 0.0 &&
+           isFinite3(surfel.position);
+}
+
 int3 cameraRelativeCellCoord(float3 position, float3 cameraPosition, float cellSize)
 {
     return int3(round((position - cameraPosition) / max(cellSize, 0.0001)));
@@ -143,7 +153,7 @@ uint cameraRelativeCellIndexForPosition(float3 position, float3 cameraPosition, 
 
 bool isSurfelIntersectCell(SurfelPathTracerSurfel surfel, int3 cellCoord, float3 cameraPosition, float cellSize)
 {
-    if (surfel.flags == 0u || surfel.radius <= 0.0 || !isFinite3(surfel.position))
+    if (!isActiveSurfel(surfel))
     {
         return false;
     }
@@ -157,13 +167,9 @@ bool isSurfelIntersectCell(SurfelPathTracerSurfel surfel, int3 cellCoord, float3
 
 bool shouldRecycleSurfel(SurfelPathTracerSurfel surfel, uint frameIndex, float distanceToCamera, float aliveRatio)
 {
-    if (surfel.flags == 0u)
+    if (!isActiveSurfel(surfel))
     {
         return false;
-    }
-    if (surfel.radius <= 0.0 || !isFinite3(surfel.position))
-    {
-        return true;
     }
 
     uint ageSinceSeen = frameIndex >= surfel.lastSeenFrame ? frameIndex - surfel.lastSeenFrame : 0u;
