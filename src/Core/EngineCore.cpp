@@ -339,6 +339,7 @@ void EngineCore::run()
 		if (resourceManager)
 		{
 			createRayTracingDescriptorSets();
+			createSurfelPathTracerRtDescriptorSets();
 		}
 		mainLoop();
 		const auto vmaStats = Laphria::VmaContext::getStats();
@@ -487,6 +488,8 @@ void EngineCore::initVulkan()
 	pipelines.createDescriptorSetLayouts(vulkan);
 	pipelines.surfelPathTracerPipelines.createPipelineLayouts(vulkan, *pipelines.descriptorSetLayoutGlobal);
 	pipelines.surfelPathTracerPipelines.createComputePipelines(vulkan);
+	pipelines.surfelPathTracerPipelines.createGBufferRayTracingPipeline(vulkan);
+	pipelines.surfelPathTracerPipelines.createGBufferShaderBindingTable(vulkan);
 
 	// Pipeline creation order matches dependency on the descriptor set layouts above.
 	pipelines.createGraphicsPipeline(vulkan, swapchain.surfaceFormat.format, vulkan.findDepthFormat());
@@ -637,6 +640,7 @@ void EngineCore::mainLoop()
 		{
 			prevModelCount = currentModelCount;
 			createRayTracingDescriptorSets();
+			createSurfelPathTracerRtDescriptorSets();
 		}
 
 		ImGui::Render();
@@ -1109,6 +1113,77 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 	{
 		surfelPathTracerStorageDescriptorPool = nullptr;
 	}
+
+	std::array<vk::DescriptorPoolSize, 2> poolSizes = {
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 10 * MAX_FRAMES_IN_FLIGHT},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 10 * MAX_FRAMES_IN_FLIGHT}};
+	vk::DescriptorPoolCreateInfo poolInfo{
+	    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+	    .maxSets = MAX_FRAMES_IN_FLIGHT,
+	    .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+	    .pPoolSizes = poolSizes.data()};
+	surfelPathTracerStorageDescriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
+
+	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
+	                                             *pipelines.surfelPathTracerPipelines.storageDescriptorSetLayout);
+	vk::DescriptorSetAllocateInfo allocInfo{
+	    .descriptorPool = *surfelPathTracerStorageDescriptorPool,
+	    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+	    .pSetLayouts = layouts.data()};
+	surfelPathTracerStorageDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
+
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+	{
+		const std::array<vk::DescriptorImageInfo, 10> imageInfos = {
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.outputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferNormalViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferDepthViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferMotionMaterialViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.irradianceAtlasViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.surfelDepthAtlasViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.reflectionViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.filteredReflectionViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.lightingViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.taaHistoryViews[i], .imageLayout = vk::ImageLayout::eGeneral}};
+		const std::array<uint32_t, 10> imageBindings = {0, 1, 2, 3, 14, 15, 16, 17, 18, 19};
+
+		const std::array<vk::DescriptorBufferInfo, 10> bufferInfos = {
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.countersBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.surfelBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.aliveBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.deadBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.dirtyBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.recycleBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.rayBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.cellInfoBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.cellCounterBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.cellToSurfelBuffer, .offset = 0, .range = VK_WHOLE_SIZE}};
+
+		std::vector<vk::WriteDescriptorSet> writes;
+		writes.reserve(20);
+		for (size_t imageIndex = 0; imageIndex < imageInfos.size(); ++imageIndex)
+		{
+			writes.push_back(vk::WriteDescriptorSet{
+			    .dstSet = *surfelPathTracerStorageDescriptorSets[i],
+			    .dstBinding = imageBindings[imageIndex],
+			    .dstArrayElement = 0,
+			    .descriptorCount = 1,
+			    .descriptorType = vk::DescriptorType::eStorageImage,
+			    .pImageInfo = &imageInfos[imageIndex]});
+		}
+		for (uint32_t binding = 4; binding <= 13; ++binding)
+		{
+			writes.push_back(vk::WriteDescriptorSet{
+			    .dstSet = *surfelPathTracerStorageDescriptorSets[i],
+			    .dstBinding = binding,
+			    .dstArrayElement = 0,
+			    .descriptorCount = 1,
+			    .descriptorType = vk::DescriptorType::eStorageBuffer,
+			    .pBufferInfo = &bufferInfos[binding - 4]});
+		}
+
+		vulkan.logicalDevice.updateDescriptorSets(writes, {});
+	}
 }
 
 void EngineCore::createSurfelPathTracerRtDescriptorSets()
@@ -1117,6 +1192,118 @@ void EngineCore::createSurfelPathTracerRtDescriptorSets()
 	if (*surfelPathTracerRtDescriptorPool)
 	{
 		surfelPathTracerRtDescriptorPool = nullptr;
+	}
+
+	constexpr uint32_t bindlessCapacity = Laphria::EngineConfig::kBindlessModelCapacity;
+	std::array<vk::DescriptorPoolSize, 3> poolSizes = {
+	    vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 3 * bindlessCapacity * MAX_FRAMES_IN_FLIGHT},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, bindlessCapacity * MAX_FRAMES_IN_FLIGHT}};
+	vk::DescriptorPoolCreateInfo poolInfo{
+	    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet |
+	             vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind,
+	    .maxSets = MAX_FRAMES_IN_FLIGHT,
+	    .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+	    .pPoolSizes = poolSizes.data()};
+	surfelPathTracerRtDescriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
+
+	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
+	                                             *pipelines.surfelPathTracerPipelines.rayTracingDescriptorSetLayout);
+	vk::DescriptorSetAllocateInfo allocInfo{
+	    .descriptorPool = *surfelPathTracerRtDescriptorPool,
+	    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+	    .pSetLayouts = layouts.data()};
+	surfelPathTracerRtDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
+
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+	{
+		vk::WriteDescriptorSetAccelerationStructureKHR tlasInfo{
+		    .accelerationStructureCount = 1,
+		    .pAccelerationStructures = &*frames.tlas[i]};
+		vk::WriteDescriptorSet tlasWrite{
+		    .pNext = &tlasInfo,
+		    .dstSet = *surfelPathTracerRtDescriptorSets[i],
+		    .dstBinding = 0,
+		    .dstArrayElement = 0,
+		    .descriptorCount = 1,
+		    .descriptorType = vk::DescriptorType::eAccelerationStructureKHR};
+
+		std::vector<vk::WriteDescriptorSet> descriptorWrites;
+		descriptorWrites.push_back(tlasWrite);
+
+		std::vector<vk::DescriptorBufferInfo> vertexInfos;
+		std::vector<vk::DescriptorBufferInfo> indexInfos;
+		std::vector<vk::DescriptorBufferInfo> materialInfos;
+		std::vector<vk::DescriptorImageInfo> textureInfos;
+
+		for (int modelId = 0; modelId < static_cast<int>(bindlessCapacity); ++modelId)
+		{
+			ModelResource *model = resourceManager ? resourceManager->getModelResource(modelId) : nullptr;
+			if (!model)
+			{
+				break;
+			}
+			if (!*model->vertexBuffer || !*model->indexBuffer || !*model->materialBuffer)
+			{
+				throw std::runtime_error("Surfel GBuffer RT descriptor: model " + std::to_string(modelId) + " has null buffer(s)");
+			}
+
+			const vk::Buffer rtVertexBuffer =
+			    (model->hasRuntimeSkinning && *model->skinnedVertexBuffer) ? *model->skinnedVertexBuffer : *model->vertexBuffer;
+			vertexInfos.push_back({rtVertexBuffer, 0, VK_WHOLE_SIZE});
+			indexInfos.push_back({*model->indexBuffer, 0, VK_WHOLE_SIZE});
+			materialInfos.push_back({*model->materialBuffer, 0, VK_WHOLE_SIZE});
+
+			for (size_t texIdx = 0; texIdx < model->textureImageViews.size(); ++texIdx)
+			{
+				textureInfos.push_back({*model->textureSamplers[texIdx],
+				                        *model->textureImageViews[texIdx],
+				                        vk::ImageLayout::eShaderReadOnlyOptimal});
+			}
+		}
+
+		if (!vertexInfos.empty())
+		{
+			descriptorWrites.push_back(vk::WriteDescriptorSet{
+			    .dstSet = *surfelPathTracerRtDescriptorSets[i],
+			    .dstBinding = 5,
+			    .dstArrayElement = 0,
+			    .descriptorCount = static_cast<uint32_t>(vertexInfos.size()),
+			    .descriptorType = vk::DescriptorType::eStorageBuffer,
+			    .pBufferInfo = vertexInfos.data()});
+		}
+		if (!indexInfos.empty())
+		{
+			descriptorWrites.push_back(vk::WriteDescriptorSet{
+			    .dstSet = *surfelPathTracerRtDescriptorSets[i],
+			    .dstBinding = 6,
+			    .dstArrayElement = 0,
+			    .descriptorCount = static_cast<uint32_t>(indexInfos.size()),
+			    .descriptorType = vk::DescriptorType::eStorageBuffer,
+			    .pBufferInfo = indexInfos.data()});
+		}
+		if (!materialInfos.empty())
+		{
+			descriptorWrites.push_back(vk::WriteDescriptorSet{
+			    .dstSet = *surfelPathTracerRtDescriptorSets[i],
+			    .dstBinding = 7,
+			    .dstArrayElement = 0,
+			    .descriptorCount = static_cast<uint32_t>(materialInfos.size()),
+			    .descriptorType = vk::DescriptorType::eStorageBuffer,
+			    .pBufferInfo = materialInfos.data()});
+		}
+		if (!textureInfos.empty())
+		{
+			descriptorWrites.push_back(vk::WriteDescriptorSet{
+			    .dstSet = *surfelPathTracerRtDescriptorSets[i],
+			    .dstBinding = 8,
+			    .dstArrayElement = 0,
+			    .descriptorCount = static_cast<uint32_t>(textureInfos.size()),
+			    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+			    .pImageInfo = textureInfos.data()});
+		}
+
+		vulkan.logicalDevice.updateDescriptorSets(descriptorWrites, {});
 	}
 }
 
@@ -1823,7 +2010,12 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		throw std::runtime_error("Surfel path tracer resources are not initialized");
 	}
 	if (fi >= surfelPathTracerResources.outputImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferNormalImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferDepthImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferMotionMaterialImages.size() ||
 	    fi >= surfelPathTracerSkyDescriptorSets.size() ||
+	    fi >= surfelPathTracerStorageDescriptorSets.size() ||
+	    fi >= surfelPathTracerRtDescriptorSets.size() ||
 	    fi >= descriptorSets.size())
 	{
 		throw std::runtime_error("Surfel path tracer frame resources are incomplete");
@@ -1841,6 +2033,36 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                        {},
 	                        vk::AccessFlagBits2::eShaderWrite,
 	                        vk::PipelineStageFlagBits2::eTopOfPipe,
+	                        vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	                        vk::ImageAspectFlagBits::eColor);
+	auto transitionSurfelGBufferToRtWrite = [&](vk::Image image) {
+		transition_image_layout(image,
+		                        vk::ImageLayout::eGeneral,
+		                        vk::ImageLayout::eGeneral,
+		                        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+		                        vk::AccessFlagBits2::eShaderWrite,
+		                        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+		                        vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+		                        vk::ImageAspectFlagBits::eColor);
+	};
+	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferNormalImages[fi]);
+	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferDepthImages[fi]);
+	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferMotionMaterialImages[fi]);
+
+	surfelPathTracerPasses.recordGBufferPass(commandBuffer,
+	                                         pipelines.surfelPathTracerPipelines,
+	                                         *surfelPathTracerRtDescriptorSets[fi],
+	                                         *surfelPathTracerStorageDescriptorSets[fi],
+	                                         *descriptorSets[fi],
+	                                         swapchain.extent);
+
+	// TODO: Route surfel debug views to output once the later lighting/TAA stages exist.
+	transition_image_layout(*surfelPathTracerResources.outputImages[fi],
+	                        vk::ImageLayout::eGeneral,
+	                        vk::ImageLayout::eGeneral,
+	                        vk::AccessFlagBits2::eShaderWrite,
+	                        vk::AccessFlagBits2::eShaderWrite,
+	                        vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
 	                        vk::PipelineStageFlagBits2::eComputeShader,
 	                        vk::ImageAspectFlagBits::eColor);
 
@@ -3824,6 +4046,13 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 			{
 				continue;
 			}
+			if (node->modelId >= static_cast<int>(Laphria::EngineConfig::kBindlessModelCapacity))
+			{
+				throw std::runtime_error(
+				    "TLAS custom-index modelId " + std::to_string(node->modelId) +
+				    " exceeds bindless RT descriptor capacity " +
+				    std::to_string(Laphria::EngineConfig::kBindlessModelCapacity));
+			}
 
 			ModelResource *modelRes = resourceManager->getModelResource(node->modelId);
 			if (!modelRes || modelRes->blasElements.empty())
@@ -3858,9 +4087,8 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 					primitiveOffset += modelRes->meshes[i].primitives.size();
 				}
 
-				// Encode modelId in top 10 bits, primitiveOffset in bottom 14 bits
+				// Encode modelId in top bits, primitiveOffset in bottom 14 bits
 				// InstanceCustomIndex is exactly 24 bit in size.
-				assert(node->modelId < 1024 && "modelId exceeds 10-bit limit; customIndex encoding will be corrupted");
 				uint32_t customIndex = (node->modelId << 14) | (primitiveOffset & 0x3FFF);
 
 				vk::AccelerationStructureDeviceAddressInfoKHR addressInfo{};

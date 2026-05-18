@@ -13,6 +13,13 @@ namespace Laphria
 class SurfelPathTracerPasses
 {
   public:
+	void recordGBufferPass(const vk::raii::CommandBuffer &commandBuffer,
+	                       const SurfelPathTracerPipelines &pipelines,
+	                       vk::DescriptorSet rtSet,
+	                       vk::DescriptorSet storageSet,
+	                       vk::DescriptorSet globalSet,
+	                       vk::Extent2D extent) const;
+
 	void recordSkyPass(const vk::raii::CommandBuffer &commandBuffer,
 	                   const SurfelPathTracerPipelines &pipelines,
 	                   const SurfelPathTracerResources &resources,

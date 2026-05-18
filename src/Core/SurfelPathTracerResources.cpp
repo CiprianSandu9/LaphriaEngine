@@ -223,7 +223,7 @@ void SurfelPathTracerResources::createExtentImages(const VulkanDevice &dev,
 	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, outputImages, outputImageViews);
 	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, gBufferNormalImages, gBufferNormalViews);
 	createStorageImageSet(dev, width, height, vk::Format::eR32Sfloat, gBufferDepthImages, gBufferDepthViews);
-	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, gBufferMotionMaterialImages, gBufferMotionMaterialViews);
+	createStorageImageSet(dev, width, height, vk::Format::eR32G32B32A32Sfloat, gBufferMotionMaterialImages, gBufferMotionMaterialViews);
 	createStorageImageSet(dev, std::max(width / 2u, 1u), std::max(height / 2u, 1u),
 	                      vk::Format::eR16G16B16A16Sfloat, reflectionImages, reflectionViews);
 	createStorageImageSet(dev, std::max(width / 2u, 1u), std::max(height / 2u, 1u),

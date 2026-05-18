@@ -4,6 +4,31 @@
 
 using namespace Laphria;
 
+void SurfelPathTracerPasses::recordGBufferPass(const vk::raii::CommandBuffer &commandBuffer,
+                                               const SurfelPathTracerPipelines &pipelines,
+                                               vk::DescriptorSet rtSet,
+                                               vk::DescriptorSet storageSet,
+                                               vk::DescriptorSet globalSet,
+                                               vk::Extent2D extent) const
+{
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.gBufferRayTracingPipeline);
+	const std::array descriptorSets = {rtSet, storageSet, globalSet};
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR,
+	                                 *pipelines.rayTracingPipelineLayout,
+	                                 0,
+	                                 descriptorSets,
+	                                 nullptr);
+
+	vk::StridedDeviceAddressRegionKHR callableRegion{};
+	commandBuffer.traceRaysKHR(pipelines.gBufferSbt.raygenRegion,
+	                           pipelines.gBufferSbt.missRegion,
+	                           pipelines.gBufferSbt.hitRegion,
+	                           callableRegion,
+	                           extent.width,
+	                           extent.height,
+	                           1);
+}
+
 void SurfelPathTracerPasses::recordSkyPass(const vk::raii::CommandBuffer &commandBuffer,
                                            const SurfelPathTracerPipelines &pipelines,
                                            const SurfelPathTracerResources &resources,

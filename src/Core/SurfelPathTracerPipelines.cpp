@@ -1,6 +1,7 @@
 #include "SurfelPathTracerPipelines.h"
 
 #include <array>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -93,6 +94,55 @@ vk::raii::Pipeline createComputePipeline(const VulkanDevice &dev,
 	    .stage = computeShaderStageInfo,
 	    .layout = layout};
 	return vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
+}
+
+void createShaderBindingTableForPipeline(const VulkanDevice &dev,
+                                         const vk::raii::Pipeline &pipeline,
+                                         SurfelPathTracerSbtRegions &sbt)
+{
+	const uint32_t handleSize      = dev.rayTracingProperties.shaderGroupHandleSize;
+	const uint32_t handleAlignment = dev.rayTracingProperties.shaderGroupHandleAlignment;
+	const uint32_t baseAlignment   = dev.rayTracingProperties.shaderGroupBaseAlignment;
+
+	const uint32_t handleSizeAligned = VulkanUtils::alignUp(handleSize, handleAlignment);
+	const uint32_t raygenSBTSize     = VulkanUtils::alignUp(handleSizeAligned, baseAlignment);
+	const uint32_t missSBTSize       = VulkanUtils::alignUp(handleSizeAligned, baseAlignment);
+	const uint32_t hitSBTSize        = VulkanUtils::alignUp(handleSizeAligned, baseAlignment);
+
+	constexpr uint32_t groupCount = 3;
+	const uint32_t sbtSize = groupCount * handleSize;
+	std::vector<uint8_t> handles = pipeline.getRayTracingShaderGroupHandlesKHR<uint8_t>(0, groupCount, sbtSize);
+
+	auto createSBTBuffer = [&](VulkanUtils::VmaBuffer &buffer, uint32_t size, const void *data, uint32_t handleOffset) {
+		VulkanUtils::createBuffer(
+		    dev.logicalDevice, dev.physicalDevice, size,
+		    vk::BufferUsageFlagBits::eShaderBindingTableKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+		    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+		    buffer);
+
+		void *mapped = buffer.memory.mapMemory(0, size);
+		std::memcpy(mapped, static_cast<const uint8_t *>(data) + handleOffset, handleSize);
+		buffer.memory.unmapMemory();
+	};
+
+	createSBTBuffer(sbt.raygenSBTBuffer, raygenSBTSize, handles.data(), 0);
+	createSBTBuffer(sbt.missSBTBuffer, missSBTSize, handles.data(), handleSize);
+	createSBTBuffer(sbt.hitSBTBuffer, hitSBTSize, handles.data(), handleSize * 2);
+
+	vk::BufferDeviceAddressInfo raygenInfo{.buffer = *sbt.raygenSBTBuffer};
+	sbt.raygenRegion.deviceAddress = dev.logicalDevice.getBufferAddress(raygenInfo);
+	sbt.raygenRegion.stride = raygenSBTSize;
+	sbt.raygenRegion.size = raygenSBTSize;
+
+	vk::BufferDeviceAddressInfo missInfo{.buffer = *sbt.missSBTBuffer};
+	sbt.missRegion.deviceAddress = dev.logicalDevice.getBufferAddress(missInfo);
+	sbt.missRegion.stride = handleSizeAligned;
+	sbt.missRegion.size = missSBTSize;
+
+	vk::BufferDeviceAddressInfo hitInfo{.buffer = *sbt.hitSBTBuffer};
+	sbt.hitRegion.deviceAddress = dev.logicalDevice.getBufferAddress(hitInfo);
+	sbt.hitRegion.stride = handleSizeAligned;
+	sbt.hitRegion.size = hitSBTSize;
 }
 } // namespace
 
@@ -203,9 +253,48 @@ void SurfelPathTracerPipelines::createComputePipelines(const VulkanDevice &dev)
 	skyPipeline = createComputePipeline(dev, *skyPipelineLayout, "Shaders/SurfelPathTracerSky.slang.spv", "main");
 }
 
-void SurfelPathTracerPipelines::createGBufferRayTracingPipeline(const VulkanDevice &)
+void SurfelPathTracerPipelines::createGBufferRayTracingPipeline(const VulkanDevice &dev)
 {
-	// Task 6 will create the first non-null RT pipeline.
+	vk::raii::ShaderModule rgenModule = createShaderModule(dev, readFile("Shaders/SurfelPathTracerGBuffer.slang.spv"));
+	vk::raii::ShaderModule rmissModule = createShaderModule(dev, readFile("Shaders/SurfelPathTracerGBufferMiss.slang.spv"));
+	vk::raii::ShaderModule rchitModule = createShaderModule(dev, readFile("Shaders/SurfelPathTracerGBufferClosestHit.slang.spv"));
+	vk::raii::ShaderModule ranyModule = createShaderModule(dev, readFile("Shaders/SurfelPathTracerGBufferAnyHit.slang.spv"));
+
+	std::array<vk::PipelineShaderStageCreateInfo, 4> stages = {
+	    vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eRaygenKHR, .module = *rgenModule, .pName = "main"},
+	    vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eMissKHR, .module = *rmissModule, .pName = "main"},
+	    vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eClosestHitKHR, .module = *rchitModule, .pName = "main"},
+	    vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eAnyHitKHR, .module = *ranyModule, .pName = "main"}};
+
+	std::array<vk::RayTracingShaderGroupCreateInfoKHR, 3> groups = {
+	    vk::RayTracingShaderGroupCreateInfoKHR{
+	        .type = vk::RayTracingShaderGroupTypeKHR::eGeneral,
+	        .generalShader = 0,
+	        .closestHitShader = VK_SHADER_UNUSED_KHR,
+	        .anyHitShader = VK_SHADER_UNUSED_KHR,
+	        .intersectionShader = VK_SHADER_UNUSED_KHR},
+	    vk::RayTracingShaderGroupCreateInfoKHR{
+	        .type = vk::RayTracingShaderGroupTypeKHR::eGeneral,
+	        .generalShader = 1,
+	        .closestHitShader = VK_SHADER_UNUSED_KHR,
+	        .anyHitShader = VK_SHADER_UNUSED_KHR,
+	        .intersectionShader = VK_SHADER_UNUSED_KHR},
+	    vk::RayTracingShaderGroupCreateInfoKHR{
+	        .type = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup,
+	        .generalShader = VK_SHADER_UNUSED_KHR,
+	        .closestHitShader = 2,
+	        .anyHitShader = 3,
+	        .intersectionShader = VK_SHADER_UNUSED_KHR}};
+
+	vk::RayTracingPipelineCreateInfoKHR pipelineInfo{
+	    .stageCount = static_cast<uint32_t>(stages.size()),
+	    .pStages = stages.data(),
+	    .groupCount = static_cast<uint32_t>(groups.size()),
+	    .pGroups = groups.data(),
+	    .maxPipelineRayRecursionDepth = 1,
+	    .layout = *rayTracingPipelineLayout};
+
+	gBufferRayTracingPipeline = dev.logicalDevice.createRayTracingPipelineKHR(nullptr, nullptr, pipelineInfo);
 }
 
 void SurfelPathTracerPipelines::createSurfelRayTracingPipeline(const VulkanDevice &)
@@ -218,9 +307,9 @@ void SurfelPathTracerPipelines::createReflectionRayTracingPipeline(const VulkanD
 	// Task 6 will create the first non-null RT pipeline.
 }
 
-void SurfelPathTracerPipelines::createGBufferShaderBindingTable(const VulkanDevice &)
+void SurfelPathTracerPipelines::createGBufferShaderBindingTable(const VulkanDevice &dev)
 {
-	// SBT allocation is deferred until the corresponding RT pipeline exists.
+	createShaderBindingTableForPipeline(dev, gBufferRayTracingPipeline, gBufferSbt);
 }
 
 void SurfelPathTracerPipelines::createSurfelShaderBindingTable(const VulkanDevice &)

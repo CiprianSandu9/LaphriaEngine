@@ -2,6 +2,7 @@
 
 struct SurfelPathTracerGBufferPayload {
     float hitT;
+    uint modelId;
     uint materialIndex;
     float3 worldNormal;
 };
@@ -9,6 +10,7 @@ struct SurfelPathTracerGBufferPayload {
 [shader("miss")]
 void main(inout SurfelPathTracerGBufferPayload payload) {
     payload.hitT = -1.0;
-    payload.materialIndex = SURFEL_PT_INVALID_INDEX;
-    payload.worldNormal = float3(0.0, 1.0, 0.0);
+    payload.modelId = 0u;
+    payload.materialIndex = 0u;
+    payload.worldNormal = float3(0.0, 0.0, 0.0);
 }

@@ -43,15 +43,22 @@ bool containsNeedle(const std::string &haystack, std::string_view needle)
 bool testSurfelPathTracerPipelineContracts()
 {
 	const std::filesystem::path root = sourceRoot();
-	const std::array<std::filesystem::path, 8> contractFiles = {
+	const std::array<std::filesystem::path, 15> contractFiles = {
 	    root / "CMakeLists.txt",
 	    root / "src" / "Core" / "EngineAuxiliary.h",
 	    root / "src" / "Core" / "UISystem.h",
+	    root / "src" / "Core" / "EngineCore.cpp",
 	    root / "src" / "Core" / "SurfelPathTracerPipelines.h",
+	    root / "src" / "Core" / "SurfelPathTracerPipelines.cpp",
 	    root / "src" / "Core" / "SurfelPathTracerResources.h",
 	    root / "src" / "Core" / "SurfelPathTracerResources.cpp",
 	    root / "src" / "Core" / "SurfelPathTracerPasses.h",
+	    root / "src" / "Core" / "SurfelPathTracerPasses.cpp",
 	    root / "src" / "shaders" / "SurfelPathTracerCommon.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerGBuffer.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerGBufferMiss.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerGBufferClosestHit.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerGBufferAnyHit.slang",
 	};
 
 	std::string combined;
@@ -62,7 +69,7 @@ bool testSurfelPathTracerPipelineContracts()
 		combined += '\n';
 	}
 
-	const std::array<std::string_view, 41> needles = {
+	const std::array<std::string_view, 61> needles = {
 	    "RenderMode::SurfelPathTracer",
 	    "SurfelPathTracerSettings",
 	    "SurfelPathTracerStats",
@@ -104,6 +111,26 @@ bool testSurfelPathTracerPipelineContracts()
 	    "SurfelPathTracerBilateral.slang|main",
 	    "SurfelPathTracerLightIntegrate.slang|main",
 	    "SurfelPathTracerTaa.slang|main",
+	    "recordGBufferPass",
+	    "gBufferRayTracingPipeline",
+	    "rayTracingDescriptorSetLayout",
+	    "surfelPathTracerStorageDescriptorSets",
+	    "surfelPathTracerRtDescriptorSets",
+	    "gBufferSbt",
+	    "traceRaysKHR",
+	    "SurfelPathTracerGBuffer.slang",
+	    "SurfelPathTracerGBufferMiss.slang",
+	    "SurfelPathTracerGBufferClosestHit.slang",
+	    "SurfelPathTracerGBufferAnyHit.slang",
+	    "decodeGBufferSurface",
+	    "gBufferMotionMaterial",
+	    "gBufferNormal",
+	    "gBufferDepth",
+	    "RaytracingAccelerationStructure tlas",
+	    "node->modelId >= static_cast<int>(Laphria::EngineConfig::kBindlessModelCapacity)",
+	    "vk::Format::eR32G32B32A32Sfloat, gBufferMotionMaterialImages",
+	    "uint modelId;",
+	    "float4(motion, float(payload.modelId), float(payload.materialIndex))",
 	};
 
 	bool ok = true;
