@@ -1755,6 +1755,40 @@ bool testPathTracerReservoirGiMeasurementContract()
 		}
 	}
 
+	const std::array<const char *, 13> estimatorAuditSymbols{
+	    "enum class PathTracerReservoirGiEstimatorAuditMode",
+	    "reservoirGiEstimatorAuditMode",
+	    "ReservoirEstimatorAuditOff",
+	    "ReservoirEstimatorAuditCurrent",
+	    "ReservoirEstimatorAuditSingleCandidateReference",
+	    "ReservoirEstimatorAuditNoProbeScale",
+	    "reservoirGiAuditCurrentLuma",
+	    "reservoirGiAuditReferenceLuma",
+	    "reservoirGiAuditRelativeErrorPct",
+	    "reservoirGiAuditProbeScale",
+	    "PT_FLAGS_RESERVOIR_ESTIMATOR_AUDIT_SHIFT",
+	    "PT_FLAGS_RESERVOIR_ESTIMATOR_AUDIT_MASK",
+	    "reservoirGiEstimatorAuditMode = int("};
+	for (const char *symbol : estimatorAuditSymbols)
+	{
+		if (!containsText(uiHeader, symbol) &&
+		    !containsText(uiSource, symbol) &&
+		    !containsText(engineAuxiliaryHeader, symbol) &&
+		    !containsText(engineCore, symbol) &&
+		    !containsText(raygen, symbol))
+		{
+			std::cerr << "reservoir estimator audit missing symbol: " << symbol << "\n";
+			return false;
+		}
+	}
+
+	if (!containsText(raygen, "float reservoirProbeScale =") ||
+	    !containsText(raygen, "reservoirGiAuditProbeScaleOffset"))
+	{
+		std::cerr << "reservoir estimator audit must instrument reservoirProbeScale\n";
+		return false;
+	}
+
 	const char *requiredRaygenSymbols[] = {
 	    "RESERVOIR_GI_RECORD_SIZE = 160",
 	    "RESERVOIR_GI_RECORD_PRIMARY_POSITION_OFFSET = 0",
