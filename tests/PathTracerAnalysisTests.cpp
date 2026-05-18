@@ -1196,6 +1196,42 @@ bool testPathTracerReservoirGiMeasurementContract()
 		std::cerr << "compact surfel GI grid contract must not expose fixed per-cell slot constants\n";
 		return false;
 	}
+	const char *orderedSurfelCounterFields[] = {
+	    "uint32_t surfelGiEvalAttempts",
+	    "uint32_t surfelGiEvalCellEmpty",
+	    "uint32_t surfelGiEvalCandidates",
+	    "uint32_t surfelGiEvalAccepted",
+	    "uint32_t surfelGiCellTotalMemberships",
+	    "uint32_t surfelGiCellAllocatedMemberships",
+	    "uint32_t surfelGiCellAllocationOverflow",
+	    "uint32_t surfelGiCellNonEmpty",
+	    "uint32_t surfelGiCellMaxPopulation"};
+	const char *orderedSurfelCounterOffsets[] = {
+	    "surfelGiEvalAttemptsOffset = 436u",
+	    "surfelGiEvalCellEmptyOffset = 440u",
+	    "surfelGiEvalCandidatesOffset = 444u",
+	    "surfelGiEvalAcceptedOffset = 448u",
+	    "surfelGiCellTotalMembershipsOffset = 452u",
+	    "surfelGiCellAllocatedMembershipsOffset = 456u",
+	    "surfelGiCellAllocationOverflowOffset = 460u",
+	    "surfelGiCellNonEmptyOffset = 464u",
+	    "surfelGiCellMaxPopulationOffset = 468u"};
+	std::size_t previousFieldPos = 0u;
+	std::size_t previousOffsetPos = 0u;
+	for (std::size_t i = 0u; i < std::size(orderedSurfelCounterFields); ++i)
+	{
+		const std::size_t fieldPos = engineAuxiliaryHeader.find(orderedSurfelCounterFields[i], previousFieldPos);
+		const std::size_t offsetPos = surfelCommon.find(orderedSurfelCounterOffsets[i], previousOffsetPos);
+		if (fieldPos == std::string::npos || offsetPos == std::string::npos)
+		{
+			std::cerr << "missing ordered surfel GI counter layout symbol: "
+			          << orderedSurfelCounterFields[i] << " / "
+			          << orderedSurfelCounterOffsets[i] << "\n";
+			return false;
+		}
+		previousFieldPos = fieldPos + 1u;
+		previousOffsetPos = offsetPos + 1u;
+	}
 
 	if (!requireBrightSurfelProposalDisabledForSweeps(raygen, engineCore))
 	{
@@ -2144,7 +2180,41 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    {"reservoirGiBrightSurfelSelectorRejectSurfelHemisphere",
 	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorRejectSurfelHemisphere), 396u},
 	    {"reservoirGiBrightSurfelSelectorRejectInvalidVector",
-	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorRejectInvalidVector), 400u}};
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiBrightSurfelSelectorRejectInvalidVector), 400u},
+	    {"surfelGiClearDispatches",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiClearDispatches), 404u},
+	    {"surfelGiGenerateAttempts",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiGenerateAttempts), 408u},
+	    {"surfelGiGenerated",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiGenerated), 412u},
+	    {"surfelGiGenerateRejectInvalid",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiGenerateRejectInvalid), 416u},
+	    {"surfelGiGenerateRejectCoverage",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiGenerateRejectCoverage), 420u},
+	    {"surfelGiCellInsertAttempts",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellInsertAttempts), 424u},
+	    {"surfelGiCellInserted",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellInserted), 428u},
+	    {"surfelGiCellOverflow",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellOverflow), 432u},
+	    {"surfelGiEvalAttempts",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalAttempts), 436u},
+	    {"surfelGiEvalCellEmpty",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalCellEmpty), 440u},
+	    {"surfelGiEvalCandidates",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalCandidates), 444u},
+	    {"surfelGiEvalAccepted",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalAccepted), 448u},
+	    {"surfelGiCellTotalMemberships",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellTotalMemberships), 452u},
+	    {"surfelGiCellAllocatedMemberships",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellAllocatedMemberships), 456u},
+	    {"surfelGiCellAllocationOverflow",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellAllocationOverflow), 460u},
+	    {"surfelGiCellNonEmpty",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellNonEmpty), 464u},
+	    {"surfelGiCellMaxPopulation",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellMaxPopulation), 468u}};
 	for (const auto &counterOffset : counterOffsets)
 	{
 		if (counterOffset.offset != counterOffset.expectedOffset)
