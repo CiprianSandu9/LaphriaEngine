@@ -320,6 +320,7 @@ class EngineCore
 	void collectPathTracerAnalysisCounters(uint32_t frameSlot);
 	void startPathTracerSponzaGiPerfSweep();
 	void clearPathTracerExperimentState();
+	void resetSurfelGiRecordBuffers();
 	void applySponzaValidationPreset(UISystem::PathTracerSponzaValidationView view);
 	void updatePathTracerExperimentSweep();
 	void applyPathTracerExperimentRow(const PathTracerExperimentRow &row);

@@ -2317,6 +2317,22 @@ bool testPathTracerReservoirGiMeasurementContract()
 		std::cerr << "focused Sponza PT/GI audit sweep should clear experiment state before advancing rows\n";
 		return false;
 	}
+	const std::string clearExperimentState =
+	    extractFunctionBody(engineCore, "void EngineCore::clearPathTracerExperimentState()");
+	const std::string surfelRecordReset =
+	    extractFunctionBody(engineCore, "void EngineCore::resetSurfelGiRecordBuffers()");
+	if (!containsText(engineHeader, "void resetSurfelGiRecordBuffers();") ||
+	    !containsText(clearExperimentState, "resetSurfelGiRecordBuffers();") ||
+	    !containsText(surfelRecordReset, "FrameContext::kSurfelGiMaxSurfels") ||
+	    !containsText(surfelRecordReset, "FrameContext::kSurfelGiRecordSize") ||
+	    !containsText(surfelRecordReset, "cmd.fillBuffer(*buffer, 0, recordBufferSize, 0u)") ||
+	    !containsText(surfelRecordReset, "vk::PipelineStageFlagBits2::eTransfer") ||
+	    !containsText(surfelRecordReset, "vk::AccessFlagBits2::eTransferWrite") ||
+	    !containsText(surfelRecordReset, "VulkanUtils::endSingleTimeCommands"))
+	{
+		std::cerr << "focused Sponza PT/GI audit sweep must reset persistent surfel records between rows\n";
+		return false;
+	}
 	if (containsText(engineCore, "Sponza / Reservoir GI Temporal") ||
 	    containsText(engineCore, "Sponza / Reservoir GI Temporal Spatial") ||
 	    containsText(engineCore, "Sponza / Reservoir GI Single Frame 2 Candidates No RIS") ||

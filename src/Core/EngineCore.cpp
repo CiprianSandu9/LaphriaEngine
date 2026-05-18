@@ -2787,6 +2787,46 @@ void EngineCore::clearPathTracerExperimentState()
 			std::memset(mapped, 0, static_cast<size_t>(frames.reservoirGiBrightSurfelBufferSize));
 		}
 	}
+	resetSurfelGiRecordBuffers();
+}
+
+void EngineCore::resetSurfelGiRecordBuffers()
+{
+	if (frames.surfelGiRecordBuffers.empty())
+	{
+		return;
+	}
+
+	constexpr vk::DeviceSize recordBufferSize =
+	    static_cast<vk::DeviceSize>(FrameContext::kSurfelGiMaxSurfels) * FrameContext::kSurfelGiRecordSize;
+
+	auto cmd = VulkanUtils::beginSingleTimeCommands(vulkan.logicalDevice, frames.commandPool);
+	std::vector<vk::BufferMemoryBarrier2> barriers;
+	barriers.reserve(frames.surfelGiRecordBuffers.size());
+	for (auto &buffer : frames.surfelGiRecordBuffers)
+	{
+		if (!buffer.valid())
+		{
+			continue;
+		}
+		cmd.fillBuffer(*buffer, 0, recordBufferSize, 0u);
+		barriers.push_back(vk::BufferMemoryBarrier2{
+		    .srcStageMask  = vk::PipelineStageFlagBits2::eTransfer,
+		    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+		    .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+		    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+		    .buffer        = *buffer,
+		    .offset        = 0,
+		    .size          = recordBufferSize});
+	}
+	if (!barriers.empty())
+	{
+		vk::DependencyInfo dependency{
+		    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
+		    .pBufferMemoryBarriers    = barriers.data()};
+		cmd.pipelineBarrier2(dependency);
+	}
+	VulkanUtils::endSingleTimeCommands(vulkan.logicalDevice, vulkan.queue, frames.commandPool, cmd);
 }
 
 void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row)
