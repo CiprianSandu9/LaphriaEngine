@@ -1799,6 +1799,22 @@ bool testPathTracerReservoirGiMeasurementContract()
 		return false;
 	}
 
+	const std::array<const char *, 6> reservoirAuditRows{
+	    "Reservoir Audit / Single Frame 1C Current",
+	    "Reservoir Audit / Single Frame 1C No Probe Scale",
+	    "Reservoir Audit / Single Frame 2C Current",
+	    "Reservoir Audit / Single Frame 2C RIS",
+	    "Reservoir Audit / Temporal Static",
+	    "Reservoir Audit / Temporal Spatial Static"};
+	for (const char *row : reservoirAuditRows)
+	{
+		if (!containsText(engineCore, row))
+		{
+			std::cerr << "missing reservoir audit sweep row: " << row << "\n";
+			return false;
+		}
+	}
+
 	const char *requiredRaygenSymbols[] = {
 	    "RESERVOIR_GI_RECORD_SIZE = 160",
 	    "RESERVOIR_GI_RECORD_PRIMARY_POSITION_OFFSET = 0",
@@ -2776,7 +2792,13 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow);",
 	    "ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);",
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow);",
-	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);"};
+	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);",
+	    "ptExperimentRows.push_back(reservoirAuditSingleFrame1cCurrentRow);",
+	    "ptExperimentRows.push_back(reservoirAuditSingleFrame1cNoProbeScaleRow);",
+	    "ptExperimentRows.push_back(reservoirAuditSingleFrame2cCurrentRow);",
+	    "ptExperimentRows.push_back(reservoirAuditSingleFrame2cRisRow);",
+	    "ptExperimentRows.push_back(reservoirAuditTemporalStaticRow);",
+	    "ptExperimentRows.push_back(reservoirAuditTemporalSpatialStaticRow);"};
 	const std::size_t expectedSponzaAuditRowScheduleCount =
 	    sizeof(requiredSponzaAuditRowSchedule) / sizeof(requiredSponzaAuditRowSchedule[0]);
 	const char *sponzaAuditPushBackNeedle = "ptExperimentRows.push_back(";

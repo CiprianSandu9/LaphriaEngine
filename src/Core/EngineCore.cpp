@@ -2871,12 +2871,55 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow.name =
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Env First Two Cache Continuation");
 		reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow.reservoirGiCandidateEvaluationMode = 3;
+		auto reservoirAuditSingleFrame1cCurrentRow = reservoirMixedTemporalSpatialBudget2SunReceiverRow;
+		reservoirAuditSingleFrame1cCurrentRow.name =
+		    makeScenarioRowName(scenario, "Reservoir Audit / Single Frame 1C Current");
+		reservoirAuditSingleFrame1cCurrentRow.reservoirGiMode =
+		    UISystem::PathTracerReservoirGiMode::SingleFrame;
+		reservoirAuditSingleFrame1cCurrentRow.reservoirGiCandidateCount = 1;
+		reservoirAuditSingleFrame1cCurrentRow.reservoirGiUseCandidateRis = false;
+		reservoirAuditSingleFrame1cCurrentRow.reservoirGiTemporalBudgetDivisor = 1;
+		reservoirAuditSingleFrame1cCurrentRow.reservoirGiSpatialBudgetDivisor = 1;
+		reservoirAuditSingleFrame1cCurrentRow.reservoirGiEstimatorAuditMode =
+		    UISystem::PathTracerReservoirGiEstimatorAuditMode::Current;
+		auto reservoirAuditSingleFrame1cNoProbeScaleRow = reservoirAuditSingleFrame1cCurrentRow;
+		reservoirAuditSingleFrame1cNoProbeScaleRow.name =
+		    makeScenarioRowName(scenario, "Reservoir Audit / Single Frame 1C No Probe Scale");
+		reservoirAuditSingleFrame1cNoProbeScaleRow.reservoirGiEstimatorAuditMode =
+		    UISystem::PathTracerReservoirGiEstimatorAuditMode::NoProbeScale;
+		auto reservoirAuditSingleFrame2cCurrentRow = reservoirAuditSingleFrame1cCurrentRow;
+		reservoirAuditSingleFrame2cCurrentRow.name =
+		    makeScenarioRowName(scenario, "Reservoir Audit / Single Frame 2C Current");
+		reservoirAuditSingleFrame2cCurrentRow.reservoirGiCandidateCount = 2;
+		auto reservoirAuditSingleFrame2cRisRow = reservoirAuditSingleFrame2cCurrentRow;
+		reservoirAuditSingleFrame2cRisRow.name =
+		    makeScenarioRowName(scenario, "Reservoir Audit / Single Frame 2C RIS");
+		reservoirAuditSingleFrame2cRisRow.reservoirGiUseCandidateRis = true;
+		auto reservoirAuditTemporalStaticRow = reservoirAuditSingleFrame1cCurrentRow;
+		reservoirAuditTemporalStaticRow.name =
+		    makeScenarioRowName(scenario, "Reservoir Audit / Temporal Static");
+		reservoirAuditTemporalStaticRow.reservoirGiMode =
+		    UISystem::PathTracerReservoirGiMode::Temporal;
+		reservoirAuditTemporalStaticRow.reservoirGiTemporalBudgetDivisor = 1;
+		auto reservoirAuditTemporalSpatialStaticRow = reservoirAuditTemporalStaticRow;
+		reservoirAuditTemporalSpatialStaticRow.name =
+		    makeScenarioRowName(scenario, "Reservoir Audit / Temporal Spatial Static");
+		reservoirAuditTemporalSpatialStaticRow.reservoirGiMode =
+		    UISystem::PathTracerReservoirGiMode::TemporalSpatial;
+		reservoirAuditTemporalSpatialStaticRow.reservoirGiSpatialNeighborCount = 2;
+		reservoirAuditTemporalSpatialStaticRow.reservoirGiSpatialBudgetDivisor = 1;
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow);
 		ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);
+		ptExperimentRows.push_back(reservoirAuditSingleFrame1cCurrentRow);
+		ptExperimentRows.push_back(reservoirAuditSingleFrame1cNoProbeScaleRow);
+		ptExperimentRows.push_back(reservoirAuditSingleFrame2cCurrentRow);
+		ptExperimentRows.push_back(reservoirAuditSingleFrame2cRisRow);
+		ptExperimentRows.push_back(reservoirAuditTemporalStaticRow);
+		ptExperimentRows.push_back(reservoirAuditTemporalSpatialStaticRow);
 	}
 
 	ptExperimentSweepActive     = !ptExperimentRows.empty();
