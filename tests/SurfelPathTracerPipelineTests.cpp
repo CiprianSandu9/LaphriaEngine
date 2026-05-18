@@ -68,6 +68,24 @@ bool appearsBefore(std::string_view haystack, std::string_view first, std::strin
 	return true;
 }
 
+bool occursAtLeast(std::string_view haystack, std::string_view needle, size_t expectedCount)
+{
+	size_t count = 0;
+	size_t offset = 0;
+	while ((offset = haystack.find(needle, offset)) != std::string_view::npos)
+	{
+		++count;
+		offset += needle.size();
+	}
+	if (count < expectedCount)
+	{
+		std::cerr << "SurfelPathTracer contract expected at least " << expectedCount
+		          << " occurrences of: " << needle << '\n';
+		return false;
+	}
+	return true;
+}
+
 bool testSurfelPathTracerPipelineContractFiles()
 {
 	const std::filesystem::path root = sourceRoot();
@@ -141,6 +159,8 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "flattenCameraRelativeCellCoord",
 	    "coord.x >= -halfDim",
 	    "coord.x < upperDim",
+	    "for (int z = -1; z <= 1; ++z)",
+	    "isSurfelIntersectCell(surfel",
 	    "needsPersistentReset",
 	    "~SurfelPathTracerResources",
 	    "SurfelPathTracerResources(const SurfelPathTracerResources &) = delete",
@@ -332,8 +352,25 @@ bool testSurfelPathTracerPipelineContractFiles()
 	};
 
 	const bool ok = containsAllNeedles(combined, needles);
+	const std::string updateShader = readTextFile(root / "src" / "shaders" / "SurfelPathTracerUpdate.slang", filesOk);
+	const std::string cellToSurfelShader =
+	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerCellToSurfel.slang", filesOk);
+	const std::string passesCpp = readTextFile(root / "src" / "Core" / "SurfelPathTracerPasses.cpp", filesOk);
+	const bool task5Ok =
+	    containsAllNeedles(updateShader,
+	                       {"[[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;",
+	                        "for (int z = -1; z <= 1; ++z)",
+	                        "!isSurfelIntersectCell(surfel, cellCoord, ubo.cameraPos.xyz, push.cellSize)",
+	                        "cellCounterBuffer.InterlockedAdd(cellCountOffset, 1u);"}) &&
+	    containsAllNeedles(cellToSurfelShader,
+	                       {"[[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;",
+	                        "for (int z = -1; z <= 1; ++z)",
+	                        "!isSurfelIntersectCell(surfel, cellCoord, ubo.cameraPos.xyz, push.cellSize)",
+	                        "cellToSurfelBuffer[cellInfo.surfelOffset + cellSlot] = surfelIndex;",
+	                        "counters.InterlockedAdd(SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET, 1u);"}) &&
+	    occursAtLeast(passesCpp, "const std::array descriptorSets = {imageSet, globalSet};", 4);
 
-	return filesOk && ok;
+	return filesOk && ok && task5Ok;
 }
 
 bool testSurfelPathTracerCellAddressBounds()

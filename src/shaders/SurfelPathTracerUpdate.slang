@@ -4,13 +4,13 @@
 [[vk::binding(5, 0)]] RWStructuredBuffer<SurfelPathTracerSurfel> surfelBuffer;
 [[vk::binding(10, 0)]] RWStructuredBuffer<uint> rayBuffer;
 [[vk::binding(12, 0)]] RWByteAddressBuffer cellCounterBuffer;
+[[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 
 struct UpdatePushConstants {
     uint maxSurfels;
     float cellSize;
     uint cellDimension;
     uint maxRays;
-    float4 cameraPosition;
 };
 
 [[vk::push_constant]] UpdatePushConstants push;
@@ -30,18 +30,31 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     surfel.shortMeanAndLife.w = min(surfel.shortMeanAndLife.w + 1.0f, float(SURFEL_PT_MAX_LIFE));
 
-    uint cellIndex = cameraRelativeCellIndexForPosition(surfel.position,
-                                                        push.cameraPosition.xyz,
-                                                        push.cellSize,
-                                                        push.cellDimension);
-    if (cellIndex == SURFEL_PT_INVALID_INDEX) {
+    int3 centerCoord = cameraRelativeCellCoord(surfel.position, ubo.cameraPos.xyz, push.cellSize);
+    bool countedCell = false;
+    for (int z = -1; z <= 1; ++z)
+    for (int y = -1; y <= 1; ++y)
+    for (int x = -1; x <= 1; ++x)
+    {
+        int3 cellCoord = centerCoord + int3(x, y, z);
+        if (!isCellCoordValid(cellCoord, push.cellDimension) ||
+            !isSurfelIntersectCell(surfel, cellCoord, ubo.cameraPos.xyz, push.cellSize))
+        {
+            continue;
+        }
+
+        uint cellIndex = flattenCameraRelativeCellCoord(cellCoord, push.cellDimension);
+        uint cellCountOffset = (1u + cellIndex) * 4u;
+        cellCounterBuffer.InterlockedAdd(cellCountOffset, 1u);
+        countedCell = true;
+    }
+
+    if (!countedCell) {
         surfel.rayOffset = 0u;
         surfel.rayCount = 0u;
         surfelBuffer[surfelIndex] = surfel;
         return;
     }
-    uint cellCountOffset = (1u + cellIndex) * 4u;
-    cellCounterBuffer.InterlockedAdd(cellCountOffset, 1u);
 
     if (surfel.rayCount > 0u && push.maxRays > 0u) {
         uint rayOffset = 0u;

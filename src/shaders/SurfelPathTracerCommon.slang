@@ -141,6 +141,20 @@ uint cameraRelativeCellIndexForPosition(float3 position, float3 cameraPosition, 
     return flattenCameraRelativeCellCoord(coord, cellDimension);
 }
 
+bool isSurfelIntersectCell(SurfelPathTracerSurfel surfel, int3 cellCoord, float3 cameraPosition, float cellSize)
+{
+    if (surfel.flags == 0u || surfel.radius <= 0.0 || !isFinite3(surfel.position))
+    {
+        return false;
+    }
+
+    float safeCellSize = max(cellSize, 0.0001);
+    float3 cellCenter = float3(cellCoord) * safeCellSize + cameraPosition;
+    float3 halfExtent = float3(safeCellSize * 0.5);
+    float3 closest = clamp(surfel.position, cellCenter - halfExtent, cellCenter + halfExtent);
+    return length(closest - surfel.position) <= surfel.radius;
+}
+
 float luminance(float3 value) {
     return dot(value, float3(0.2126, 0.7152, 0.0722));
 }

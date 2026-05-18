@@ -2210,11 +2210,11 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		surfelPathTracerPasses.recordUpdatePass(commandBuffer,
 		                                        pipelines.surfelPathTracerPipelines,
 		                                        *surfelPathTracerStorageDescriptorSets[fi],
+		                                        *descriptorSets[fi],
 		                                        surfelPathTracerResources.maxSurfelsCapacity(),
 		                                        surfelPathTracerResources.maxRaysPerFrameCapacity(),
 		                                        surfelSettings.cellSize,
-		                                        surfelPathTracerResources.cellDimensionCapacity(),
-		                                        camera.position);
+		                                        surfelPathTracerResources.cellDimensionCapacity());
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		surfelPathTracerPasses.recordCellInfoPass(commandBuffer,
 		                                          pipelines.surfelPathTracerPipelines,
@@ -2225,11 +2225,11 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		surfelPathTracerPasses.recordCellToSurfelPass(commandBuffer,
 		                                              pipelines.surfelPathTracerPipelines,
 		                                              *surfelPathTracerStorageDescriptorSets[fi],
+		                                              *descriptorSets[fi],
 		                                              surfelPathTracerResources.maxSurfelsCapacity(),
 		                                              surfelSettings.cellSize,
 		                                              surfelPathTracerResources.cellDimensionCapacity(),
-		                                              surfelPathTracerResources.perCellSurfelLimitCapacity(),
-		                                              camera.position);
+		                                              surfelPathTracerResources.perCellSurfelLimitCapacity());
 		surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
 		surfelPathTracerPasses.recordSurfelRayTracePass(commandBuffer,
 		                                                pipelines.surfelPathTracerPipelines,
