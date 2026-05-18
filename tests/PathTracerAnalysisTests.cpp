@@ -185,6 +185,8 @@ bool requireBrightSurfelReservoirEvaluationSweepContracts(const std::string &ray
 		return false;
 
 	const char *shadowRequired[] = {
+	    "makeScenarioRowName",
+	    "row.name = makeScenarioRowName(scenario, name);",
 	    "MixedCosineSunReceiverBrightSurfel",
 	    "Bright Surfel Evaluation / Baseline Sun Receiver",
 	    "Bright Surfel Evaluation / Baseline Static Audit",
@@ -196,8 +198,12 @@ bool requireBrightSurfelReservoirEvaluationSweepContracts(const std::string &ray
 		if (!containsText(shadowSweep, required))
 			return false;
 	}
+	if (containsText(shadowSweep, "row.name = name;"))
+		return false;
 
 	const char *proposalRequired[] = {
+	    "makeScenarioRowName",
+	    "row.name = makeScenarioRowName(scenario, name);",
 	    "MixedCosineSunReceiverBrightSurfel",
 	    "Bright Surfel Evaluation / Baseline Static Audit",
 	    "Bright Surfel Evaluation / Proposal Enabled",
@@ -208,6 +214,8 @@ bool requireBrightSurfelReservoirEvaluationSweepContracts(const std::string &ray
 		if (!containsText(proposalSweep, required))
 			return false;
 	}
+	if (containsText(proposalSweep, "row.name = name;"))
+		return false;
 	if (containsText(proposalSweep, "reservoirGiBrightSurfelShadowOnly = true"))
 		return false;
 

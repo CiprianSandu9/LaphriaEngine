@@ -2461,6 +2461,9 @@ void EngineCore::startPathTracerBrightSurfelShadowEvaluationSweep()
 	vulkan.logicalDevice.waitIdle();
 	clearPathTracerExperimentState();
 
+	auto makeScenarioRowName = [](const SponzaScenarioPreset &scenario, const char *variant) {
+		return std::string("Sponza / ") + scenario.name + " / " + variant;
+	};
 	auto applyScenarioPreset = [](PathTracerExperimentRow &row,
 	                              const SponzaScenarioPreset &scenario) {
 		row.scenarioName = scenario.name;
@@ -2472,7 +2475,7 @@ void EngineCore::startPathTracerBrightSurfelShadowEvaluationSweep()
 
 	auto makeBaselineRow = [&](const SponzaScenarioPreset &scenario, const char *name) {
 		PathTracerExperimentRow row{};
-		row.name = name;
+		row.name = makeScenarioRowName(scenario, name);
 		applyScenarioPreset(row, scenario);
 		row.probeMode = UISystem::FirstHitProbeSamplingMode::CandidateRis;
 		row.blackEnvironment = false;
@@ -2552,6 +2555,9 @@ void EngineCore::startPathTracerBrightSurfelProposalEvaluationSweep()
 	vulkan.logicalDevice.waitIdle();
 	clearPathTracerExperimentState();
 
+	auto makeScenarioRowName = [](const SponzaScenarioPreset &scenario, const char *variant) {
+		return std::string("Sponza / ") + scenario.name + " / " + variant;
+	};
 	auto applyScenarioPreset = [](PathTracerExperimentRow &row,
 	                              const SponzaScenarioPreset &scenario) {
 		row.scenarioName = scenario.name;
@@ -2563,7 +2569,7 @@ void EngineCore::startPathTracerBrightSurfelProposalEvaluationSweep()
 
 	auto makeBaselineRow = [&](const SponzaScenarioPreset &scenario, const char *name) {
 		PathTracerExperimentRow row{};
-		row.name = name;
+		row.name = makeScenarioRowName(scenario, name);
 		applyScenarioPreset(row, scenario);
 		row.probeMode = UISystem::FirstHitProbeSamplingMode::CandidateRis;
 		row.blackEnvironment = false;
