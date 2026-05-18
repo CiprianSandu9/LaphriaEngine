@@ -765,7 +765,7 @@ void FrameContext::createSurfelGiBuffers(const VulkanDevice &dev, const Swapchai
 
             VulkanUtils::VmaBuffer cellSlotBuffer{};
             VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, cellToSurfelBufferSize,
-                                      vk::BufferUsageFlagBits::eStorageBuffer,
+                                      vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
                                       vk::MemoryPropertyFlagBits::eDeviceLocal,
                                       cellSlotBuffer);
             surfelGiCellSlotBuffers.push_back(std::move(cellSlotBuffer));
@@ -796,7 +796,7 @@ void FrameContext::createSurfelGiBuffers(const VulkanDevice &dev, const Swapchai
         auto cmd = VulkanUtils::beginSingleTimeCommands(dev.logicalDevice, commandPool);
         if (createFixedBuffers) {
             std::vector<vk::BufferMemoryBarrier2> recordInitBarriers;
-            recordInitBarriers.reserve(surfelGiRecordBuffers.size());
+            recordInitBarriers.reserve(surfelGiRecordBuffers.size() + surfelGiCellSlotBuffers.size());
             for (auto &buffer : surfelGiRecordBuffers) {
                 cmd.fillBuffer(*buffer, 0, recordBufferSize, 0u);
                 recordInitBarriers.push_back(vk::BufferMemoryBarrier2{
@@ -807,6 +807,17 @@ void FrameContext::createSurfelGiBuffers(const VulkanDevice &dev, const Swapchai
                     .buffer = *buffer,
                     .offset = 0,
                     .size = recordBufferSize});
+            }
+            for (auto &buffer : surfelGiCellSlotBuffers) {
+                cmd.fillBuffer(*buffer, 0, cellToSurfelBufferSize, 0xffffffffu);
+                recordInitBarriers.push_back(vk::BufferMemoryBarrier2{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+                    .buffer = *buffer,
+                    .offset = 0,
+                    .size = cellToSurfelBufferSize});
             }
             vk::DependencyInfo dependency{
                 .bufferMemoryBarrierCount = static_cast<uint32_t>(recordInitBarriers.size()),

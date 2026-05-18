@@ -317,6 +317,10 @@ bool requireCompactSurfelCellIndexListBuffers(const std::string &frameContextSou
 	return containsText(createSurfelBuffers, "kSurfelGiCellToSurfelCapacity") &&
 	       containsText(createSurfelBuffers, "kSurfelGiCellToSurfelIndexSize") &&
 	       !containsText(createSurfelBuffers, "kSurfelGiCellSlotCount * kSurfelGiCellSlotSize") &&
+	       containsText(createSurfelBuffers,
+	                    "cellToSurfelBufferSize,\n                                      vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst") &&
+	       containsText(createSurfelBuffers,
+	                    "cmd.fillBuffer(*buffer, 0, cellToSurfelBufferSize, 0xffffffffu)") &&
 	       containsText(engineCore,
 	                    "FrameContext::kSurfelGiCellToSurfelCapacity * FrameContext::kSurfelGiCellToSurfelIndexSize");
 }
