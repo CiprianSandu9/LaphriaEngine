@@ -387,6 +387,65 @@ bool requireIndexedBrightSurfelDiagnosticPlumbing(const std::string &engineAuxil
 	return true;
 }
 
+bool requireReservoirAuditCounterAbi(const std::string &raygen)
+{
+	struct ReservoirAuditCounterOffset
+	{
+		const char *name;
+		std::size_t cpuOffset;
+		std::uint32_t expectedOffset;
+		const char *shaderDeclaration;
+	};
+
+	const ReservoirAuditCounterOffset offsets[] = {
+	    {"reservoirGiAuditCurrentLumaScaledSum",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditCurrentLumaScaledSum),
+	     404u,
+	     "static const uint reservoirGiAuditCurrentLumaScaledSumOffset = 404u"},
+	    {"reservoirGiAuditReferenceLumaScaledSum",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditReferenceLumaScaledSum),
+	     408u,
+	     "static const uint reservoirGiAuditReferenceLumaScaledSumOffset = 408u"},
+	    {"reservoirGiAuditRelativeErrorScaledSum",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditRelativeErrorScaledSum),
+	     412u,
+	     "static const uint reservoirGiAuditRelativeErrorScaledSumOffset = 412u"},
+	    {"reservoirGiAuditProbeScaleScaledSum",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditProbeScaleScaledSum),
+	     416u,
+	     "static const uint reservoirGiAuditProbeScaleOffset = 416u"},
+	    {"reservoirGiAuditSampleCount",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditSampleCount),
+	     420u,
+	     "static const uint reservoirGiAuditSampleCountOffset = 420u"}};
+
+	for (const auto &offset : offsets)
+	{
+		if (offset.cpuOffset != offset.expectedOffset)
+		{
+			std::cerr << "reservoir audit CPU counter offset mismatch for "
+			          << offset.name << ": expected " << offset.expectedOffset
+			          << " got " << offset.cpuOffset << "\n";
+			return false;
+		}
+		if (!containsText(raygen, offset.shaderDeclaration))
+		{
+			std::cerr << "reservoir audit shader offset mismatch for "
+			          << offset.name << ": expected declaration "
+			          << offset.shaderDeclaration << "\n";
+			return false;
+		}
+	}
+
+	if (!containsText(raygen, "static const uint reservoirGiAuditProbeScaleScaledSumOffset = reservoirGiAuditProbeScaleOffset"))
+	{
+		std::cerr << "reservoir audit probe-scale alias must target the compact probe-scale counter offset\n";
+		return false;
+	}
+
+	return true;
+}
+
 bool requireStandaloneSurfelComputeRemoved(const std::string &cmakeLists,
                                            const std::string &pipelineHeader,
                                            const std::string &pipelineSource,
@@ -726,6 +785,11 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    containsText(raygen, "ReservoirEstimatorAuditNoProbeScale ? 1.0 : reservoirProbeScale"))
 	{
 		std::cerr << "reservoir estimator audit must record the unscaled estimator and legacy probe scale separately\n";
+		return false;
+	}
+
+	if (!requireReservoirAuditCounterAbi(raygen))
+	{
 		return false;
 	}
 
