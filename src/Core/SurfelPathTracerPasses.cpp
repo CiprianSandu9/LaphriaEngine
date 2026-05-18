@@ -24,9 +24,9 @@ struct SurfelUpdatePushConstants
 	uint32_t cellDimension = 1;
 	uint32_t maxRays = 0;
 	uint32_t lockSurfels = 0;
-	uint32_t pad0 = 0;
-	uint32_t pad1 = 0;
-	uint32_t pad2 = 0;
+	uint32_t minRaysPerSurfel = 1;
+	uint32_t maxRaysPerSurfel = 1;
+	float varianceSensitivity = 1.0f;
 };
 
 struct SurfelCellInfoPushConstants
@@ -232,6 +232,9 @@ void SurfelPathTracerPasses::recordUpdatePass(const vk::raii::CommandBuffer &com
                                               uint32_t maxRays,
                                               float cellSize,
                                               uint32_t cellDimension,
+                                              uint32_t minRaysPerSurfel,
+                                              uint32_t maxRaysPerSurfel,
+                                              float varianceSensitivity,
                                               bool lockSurfels) const
 {
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.updatePipeline);
@@ -247,7 +250,10 @@ void SurfelPathTracerPasses::recordUpdatePass(const vk::raii::CommandBuffer &com
 	    .cellSize = std::max(cellSize, 0.0001f),
 	    .cellDimension = std::max(cellDimension, 1u),
 	    .maxRays = std::max(maxRays, 1u),
-	    .lockSurfels = lockSurfels ? 1u : 0u};
+	    .lockSurfels = lockSurfels ? 1u : 0u,
+	    .minRaysPerSurfel = std::max(minRaysPerSurfel, 1u),
+	    .maxRaysPerSurfel = std::max(maxRaysPerSurfel, std::max(minRaysPerSurfel, 1u)),
+	    .varianceSensitivity = std::max(varianceSensitivity, 0.0f)};
 	commandBuffer.pushConstants<SurfelUpdatePushConstants>(*pipelines.computePipelineLayout,
 	                                                       vk::ShaderStageFlagBits::eCompute,
 	                                                       0,

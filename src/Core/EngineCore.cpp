@@ -2223,6 +2223,9 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                        surfelPathTracerResources.maxRaysPerFrameCapacity(),
 		                                        surfelSettings.cellSize,
 		                                        surfelPathTracerResources.cellDimensionCapacity(),
+		                                        surfelSettings.minRaysPerSurfel,
+		                                        surfelSettings.maxRaysPerSurfel,
+		                                        surfelSettings.varianceSensitivity,
 		                                        surfelSettings.lockSurfels);
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		surfelPathTracerPasses.recordCellInfoPass(commandBuffer,
@@ -2246,7 +2249,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                                *surfelPathTracerRtDescriptorSets[fi],
 		                                                *surfelPathTracerStorageDescriptorSets[fi],
 		                                                *descriptorSets[fi],
-		                                                surfelPathTracerResources.maxSurfelsCapacity());
+		                                                surfelPathTracerResources.maxRaysPerFrameCapacity());
 		surfelPathTracerPasses.recordStorageBarrierRtToCompute(commandBuffer);
 		surfelPathTracerPasses.recordIntegratePass(commandBuffer,
 		                                           pipelines.surfelPathTracerPipelines,

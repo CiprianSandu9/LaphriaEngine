@@ -246,6 +246,26 @@ bool shouldRecycleSurfel(SurfelPathTracerSurfel surfel, uint frameIndex, float d
     return stale && (distant || pressure);
 }
 
+uint adaptiveRayCountForSurfel(SurfelPathTracerSurfel surfel,
+                               uint minRays,
+                               uint maxRays,
+                               float varianceSensitivity,
+                               uint currentFrame)
+{
+    uint safeMinRays = max(minRays, 1u);
+    uint safeMaxRays = max(maxRays, safeMinRays);
+    float variance = length(max(surfel.varianceAndInconsistency.xyz, float3(0.0)));
+    uint ageSinceSeen = currentFrame >= surfel.lastSeenFrame ? currentFrame - surfel.lastSeenFrame : 0u;
+    float ageBoost = ageSinceSeen < 20u ? 1.0 : 0.0;
+    float varianceT = saturate(variance * varianceSensitivity + ageBoost);
+    uint count = uint(round(lerp(float(safeMinRays), float(safeMaxRays), varianceT)));
+    if (surfel.sleepState == SURFEL_PT_SLEEP_SLEEPING)
+    {
+        count = max(safeMinRays, count / 4u);
+    }
+    return clamp(count, safeMinRays, safeMaxRays);
+}
+
 float surfelRadius(float distanceToCamera, float targetArea, float minRadius, float maxRadius)
 {
     float radius = max(distanceToCamera * sqrt(max(targetArea, 1.0)) * 0.0007, minRadius);

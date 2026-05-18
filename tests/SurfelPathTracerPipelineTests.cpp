@@ -480,8 +480,40 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "const uint64_t tilesPerRow = std::max<uint64_t>(atlasWidth / atlasTileSize, 1u)",
 	                        "const uint64_t requiredHeight = requiredRows * atlasTileSize",
 	                        "SurfelPathTracer irradiance atlas is too small for maxSurfels"});
+	bool task9Ok =
+	    containsAllNeedles(commonShader,
+	                       {"uint adaptiveRayCountForSurfel(SurfelPathTracerSurfel surfel",
+	                        "uint minRays",
+	                        "uint maxRays",
+	                        "float varianceSensitivity",
+	                        "uint ageSinceSeen = currentFrame >= surfel.lastSeenFrame ? currentFrame - surfel.lastSeenFrame : 0u;",
+	                        "surfel.sleepState == SURFEL_PT_SLEEP_SLEEPING",
+	                        "return clamp(count, safeMinRays, safeMaxRays);"}) &&
+	    containsAllNeedles(updateShader,
+	                       {"uint minRaysPerSurfel;",
+	                        "uint maxRaysPerSurfel;",
+	                        "float varianceSensitivity;",
+	                        "uint rayRequestCount = adaptiveRayCountForSurfel(surfel",
+	                        "push.minRaysPerSurfel",
+	                        "push.maxRaysPerSurfel",
+	                        "push.varianceSensitivity",
+	                        "surfel.sleepState = SURFEL_PT_SLEEP_SLEEPING;",
+	                        "surfel.sleepState = SURFEL_PT_SLEEP_AWAKE;",
+	                        "counters.InterlockedAdd(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET, rayRequestCount, rayOffset)",
+	                        "if (writableRayCount < rayRequestCount)"}) &&
+	    containsAllNeedles(passesCpp,
+	                       {"minRaysPerSurfel",
+	                        "maxRaysPerSurfel",
+	                        "varianceSensitivity"}) &&
+	    containsAllNeedles(integrateShader,
+	                       {"surfel.varianceAndInconsistency = float4(variance.xxx, surfel.varianceAndInconsistency.w);"}) &&
+	    containsAllNeedles(engineCore,
+	                       {"surfelSettings.minRaysPerSurfel",
+	                        "surfelSettings.maxRaysPerSurfel",
+	                        "surfelSettings.varianceSensitivity",
+	                        "surfelPathTracerResources.maxRaysPerFrameCapacity())"});
 
-	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok;
+	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok;
 }
 
 bool testSurfelPathTracerCellAddressBounds()

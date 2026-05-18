@@ -112,6 +112,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     surfel.meanAndVariance = float4(longMean, variance);
     surfel.shortMeanAndLife = float4(shortMean, surfel.shortMeanAndLife.w);
+    surfel.varianceAndInconsistency = float4(variance.xxx, surfel.varianceAndInconsistency.w);
     surfel.radiance = longMean;
     surfel.rayCount = 1u;
     surfelBuffer[surfelIndex] = surfel;

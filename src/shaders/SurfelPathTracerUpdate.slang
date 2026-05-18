@@ -13,9 +13,9 @@ struct UpdatePushConstants {
     uint cellDimension;
     uint maxRays;
     uint lockSurfels;
-    uint pad0;
-    uint pad1;
-    uint pad2;
+    uint minRaysPerSurfel;
+    uint maxRaysPerSurfel;
+    float varianceSensitivity;
 };
 
 [[vk::push_constant]] UpdatePushConstants push;
@@ -103,6 +103,16 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     surfel.shortMeanAndLife.w = min(surfel.shortMeanAndLife.w + 1.0f, float(SURFEL_PT_MAX_LIFE));
+    uint ageSinceSeen = frameIndex >= surfel.lastSeenFrame ? frameIndex - surfel.lastSeenFrame : 0u;
+    float varianceMagnitude = length(max(surfel.varianceAndInconsistency.xyz, float3(0.0)));
+    if (ageSinceSeen > 60u && varianceMagnitude < 0.05)
+    {
+        surfel.sleepState = SURFEL_PT_SLEEP_SLEEPING;
+    }
+    else if (ageSinceSeen < 20u || varianceMagnitude > 0.2)
+    {
+        surfel.sleepState = SURFEL_PT_SLEEP_AWAKE;
+    }
 
     int3 centerCoord = cameraRelativeCellCoord(surfel.position, ubo.cameraPos.xyz, push.cellSize);
     bool countedCell = false;
@@ -130,11 +140,16 @@ void main(uint3 tid : SV_DispatchThreadID) {
         return;
     }
 
-    if (surfel.rayCount > 0u && push.maxRays > 0u) {
+    uint rayRequestCount = adaptiveRayCountForSurfel(surfel,
+                                                     push.minRaysPerSurfel,
+                                                     push.maxRaysPerSurfel,
+                                                     push.varianceSensitivity,
+                                                     frameIndex);
+    if (rayRequestCount > 0u && push.maxRays > 0u) {
         uint rayOffset = 0u;
-        counters.InterlockedAdd(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET, surfel.rayCount, rayOffset);
-        uint writableRayCount = rayOffset < push.maxRays ? min(surfel.rayCount, push.maxRays - rayOffset) : 0u;
-        if (writableRayCount < surfel.rayCount) {
+        counters.InterlockedAdd(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET, rayRequestCount, rayOffset);
+        uint writableRayCount = rayOffset < push.maxRays ? min(rayRequestCount, push.maxRays - rayOffset) : 0u;
+        if (writableRayCount < rayRequestCount) {
             counters.InterlockedMin(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET, push.maxRays);
         }
 
