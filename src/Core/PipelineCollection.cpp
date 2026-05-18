@@ -957,6 +957,32 @@ void PipelineCollection::createSurfelGiGeneratePipeline(const VulkanDevice &dev)
 	surfelGiGeneratePipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
 }
 
+void PipelineCollection::createSurfelGiCountCellsPipeline(const VulkanDevice &dev)
+{
+	vk::raii::ShaderModule shaderModule = createShaderModule(dev, readFile("Shaders/SurfelCountCells.slang.spv"));
+	vk::PipelineShaderStageCreateInfo computeShaderStageInfo{
+	    .stage  = vk::ShaderStageFlagBits::eCompute,
+	    .module = *shaderModule,
+	    .pName  = "surfelCountCellsMain"};
+	vk::ComputePipelineCreateInfo pipelineInfo{
+	    .stage  = computeShaderStageInfo,
+	    .layout = *surfelGiPipelineLayout};
+	surfelGiCountCellsPipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
+}
+
+void PipelineCollection::createSurfelGiAllocateCellsPipeline(const VulkanDevice &dev)
+{
+	vk::raii::ShaderModule shaderModule = createShaderModule(dev, readFile("Shaders/SurfelAllocateCells.slang.spv"));
+	vk::PipelineShaderStageCreateInfo computeShaderStageInfo{
+	    .stage  = vk::ShaderStageFlagBits::eCompute,
+	    .module = *shaderModule,
+	    .pName  = "surfelAllocateCellsMain"};
+	vk::ComputePipelineCreateInfo pipelineInfo{
+	    .stage  = computeShaderStageInfo,
+	    .layout = *surfelGiPipelineLayout};
+	surfelGiAllocateCellsPipeline = vk::raii::Pipeline(dev.logicalDevice, nullptr, pipelineInfo);
+}
+
 void PipelineCollection::createSurfelGiIntegratePipeline(const VulkanDevice &dev)
 {
 	vk::raii::ShaderModule shaderModule = createShaderModule(dev, readFile("Shaders/SurfelIntegrate.slang.spv"));

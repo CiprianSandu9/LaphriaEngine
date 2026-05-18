@@ -27,6 +27,8 @@ class PipelineCollection
 	void createDenoiserPipelines(const VulkanDevice &dev);
 	void createSurfelGiClearPipeline(const VulkanDevice &dev);
 	void createSurfelGiGeneratePipeline(const VulkanDevice &dev);
+	void createSurfelGiCountCellsPipeline(const VulkanDevice &dev);
+	void createSurfelGiAllocateCellsPipeline(const VulkanDevice &dev);
 	void createSurfelGiIntegratePipeline(const VulkanDevice &dev);
 	void createSurfelGiBuildCellsPipeline(const VulkanDevice &dev);
 	void createSurfelGiEvaluatePipeline(const VulkanDevice &dev);
@@ -58,6 +60,8 @@ class PipelineCollection
 	vk::raii::Pipeline atrousPipeline{nullptr};
 	vk::raii::Pipeline surfelGiClearPipeline{nullptr};
 	vk::raii::Pipeline surfelGiGeneratePipeline{nullptr};
+	vk::raii::Pipeline surfelGiCountCellsPipeline{nullptr};
+	vk::raii::Pipeline surfelGiAllocateCellsPipeline{nullptr};
 	vk::raii::Pipeline surfelGiIntegratePipeline{nullptr};
 	vk::raii::Pipeline surfelGiBuildCellsPipeline{nullptr};
 	vk::raii::Pipeline surfelGiEvaluatePipeline{nullptr};

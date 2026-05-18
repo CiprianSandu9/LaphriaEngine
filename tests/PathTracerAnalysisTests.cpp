@@ -1194,6 +1194,35 @@ bool testPathTracerReservoirGiMeasurementContract()
 		return false;
 	}
 
+	const std::string recordRayTracingSource =
+	    extractFunctionBody(engineCore, "void EngineCore::recordRayTracingCommandBuffer(");
+	const char *requiredCompactSurfelGridPassOrder[] = {
+	    "recordSurfelGiCountCellsPass(commandBuffer, fi);",
+	    "recordSurfelGiAllocateCellsPass(commandBuffer, fi);",
+	    "recordSurfelGiBuildCellsPass(commandBuffer, fi);"};
+	bool hasCompactSurfelGridCountAndAllocatePasses =
+	    containsText(cmakeLists, "SurfelCountCells.slang|surfelCountCellsMain") &&
+	    containsText(cmakeLists, "SurfelAllocateCells.slang|surfelAllocateCellsMain") &&
+	    containsText(engineHeader, "recordSurfelGiCountCellsPass") &&
+	    containsText(engineHeader, "recordSurfelGiAllocateCellsPass");
+	std::size_t compactSurfelGridPassSearchPos = 0u;
+	for (const char *passCall : requiredCompactSurfelGridPassOrder)
+	{
+		const std::size_t passPos =
+		    recordRayTracingSource.find(passCall, compactSurfelGridPassSearchPos);
+		if (passPos == std::string::npos)
+		{
+			hasCompactSurfelGridCountAndAllocatePasses = false;
+			break;
+		}
+		compactSurfelGridPassSearchPos = passPos + std::string(passCall).size();
+	}
+	if (!hasCompactSurfelGridCountAndAllocatePasses)
+	{
+		std::cerr << "compact surfel grid must record count, allocate, then fill passes\n";
+		return false;
+	}
+
 	if (!requireSurfelEvaluatePassContracts(cmakeLists, pipelineHeader, pipelineSource,
 	                                        engineHeader, engineCore, denoiser, surfelEvaluate))
 	{
@@ -1278,8 +1307,6 @@ bool testPathTracerReservoirGiMeasurementContract()
 		return false;
 	}
 
-	const std::string recordRayTracingSource =
-	    extractFunctionBody(engineCore, "void EngineCore::recordRayTracingCommandBuffer(");
 	if (!containsText(recordRayTracingSource, "const bool     surfelGiDebugAovSelected") ||
 	    !containsText(recordRayTracingSource, "PathTracerDebugAov::SurfelGiOccupancy") ||
 	    !containsText(recordRayTracingSource, "PathTracerDebugAov::SurfelGiGather"))
@@ -1290,8 +1317,10 @@ bool testPathTracerReservoirGiMeasurementContract()
 	const char *requiredSurfelPassOrder[] = {
 	    "recordSurfelGiClearPass(commandBuffer, fi);",
 	    "recordSurfelGiGeneratePass(commandBuffer, fi);",
-	    "recordSurfelGiIntegratePass(commandBuffer, fi);",
+	    "recordSurfelGiCountCellsPass(commandBuffer, fi);",
+	    "recordSurfelGiAllocateCellsPass(commandBuffer, fi);",
 	    "recordSurfelGiBuildCellsPass(commandBuffer, fi);",
+	    "recordSurfelGiIntegratePass(commandBuffer, fi);",
 	    "recordSurfelGiEvaluatePass(commandBuffer, fi);"};
 	std::size_t surfelPassSearchPos = recordRayTracingSource.find(requiredSurfelPassOrder[0]);
 	if (surfelPassSearchPos == std::string::npos)

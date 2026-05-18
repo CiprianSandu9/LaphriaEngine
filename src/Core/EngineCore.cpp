@@ -489,6 +489,8 @@ void EngineCore::initVulkan()
 	pipelines.createDenoiserPipelines(vulkan);
 	pipelines.createSurfelGiClearPipeline(vulkan);
 	pipelines.createSurfelGiGeneratePipeline(vulkan);
+	pipelines.createSurfelGiCountCellsPipeline(vulkan);
+	pipelines.createSurfelGiAllocateCellsPipeline(vulkan);
 	pipelines.createSurfelGiIntegratePipeline(vulkan);
 	pipelines.createSurfelGiBuildCellsPipeline(vulkan);
 	pipelines.createSurfelGiEvaluatePipeline(vulkan);
@@ -1607,6 +1609,88 @@ void EngineCore::recordSurfelGiGeneratePass(const vk::raii::CommandBuffer &comma
 	commandBuffer.pipelineBarrier2(dependency);
 }
 
+void EngineCore::recordSurfelGiCountCellsPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
+{
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiCountCellsPipeline);
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+	                                 *pipelines.surfelGiPipelineLayout, 0,
+	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
+
+	constexpr uint32_t groups = (FrameContext::kSurfelGiMaxSurfels + 127u) / 128u;
+	commandBuffer.dispatch(groups, 1, 1);
+
+	std::array<vk::BufferMemoryBarrier2, 3> barriers = {
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
+	        .buffer        = *frames.surfelGiRecordBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = FrameContext::kSurfelGiMaxSurfels * FrameContext::kSurfelGiRecordSize},
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.surfelGiCellBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = FrameContext::kSurfelGiCellCount * FrameContext::kSurfelGiCellSize},
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.ptAnalysisCounterBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = sizeof(Laphria::PathTracerAnalysisCounters)}};
+	vk::DependencyInfo dependency{
+	    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
+	    .pBufferMemoryBarriers    = barriers.data()};
+	commandBuffer.pipelineBarrier2(dependency);
+}
+
+void EngineCore::recordSurfelGiAllocateCellsPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
+{
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiAllocateCellsPipeline);
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+	                                 *pipelines.surfelGiPipelineLayout, 0,
+	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
+
+	constexpr uint32_t groups = (FrameContext::kSurfelGiCellCount + 127u) / 128u;
+	commandBuffer.dispatch(groups, 1, 1);
+
+	std::array<vk::BufferMemoryBarrier2, 3> barriers = {
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.surfelGiCellBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = FrameContext::kSurfelGiCellCount * FrameContext::kSurfelGiCellSize},
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.surfelGiCounterBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = FrameContext::kSurfelGiCounterSize},
+	    vk::BufferMemoryBarrier2{
+	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	        .buffer        = *frames.ptAnalysisCounterBuffers[frameIndex],
+	        .offset        = 0,
+	        .size          = sizeof(Laphria::PathTracerAnalysisCounters)}};
+	vk::DependencyInfo dependency{
+	    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
+	    .pBufferMemoryBarriers    = barriers.data()};
+	commandBuffer.pipelineBarrier2(dependency);
+}
+
 void EngineCore::recordSurfelGiIntegratePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
 {
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiIntegratePipeline);
@@ -1836,8 +1920,10 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	{
 		recordSurfelGiClearPass(commandBuffer, fi);
 		recordSurfelGiGeneratePass(commandBuffer, fi);
-		recordSurfelGiIntegratePass(commandBuffer, fi);
+		recordSurfelGiCountCellsPass(commandBuffer, fi);
+		recordSurfelGiAllocateCellsPass(commandBuffer, fi);
 		recordSurfelGiBuildCellsPass(commandBuffer, fi);
+		recordSurfelGiIntegratePass(commandBuffer, fi);
 		recordSurfelGiEvaluatePass(commandBuffer, fi);
 	}
 
