@@ -1149,7 +1149,7 @@ void EngineCore::createSurfelGiDescriptorSets()
 		    vk::DescriptorBufferInfo{
 		        .buffer = *frames.surfelGiCellSlotBuffers[i],
 		        .offset = 0,
-		        .range  = FrameContext::kSurfelGiCellCount * FrameContext::kSurfelGiCellSlotCount * FrameContext::kSurfelGiCellSlotSize},
+		        .range  = FrameContext::kSurfelGiCellToSurfelCapacity * FrameContext::kSurfelGiCellToSurfelIndexSize},
 		    vk::DescriptorBufferInfo{
 		        .buffer = *frames.surfelGiCounterBuffers[i],
 		        .offset = 0,
@@ -1533,7 +1533,7 @@ void EngineCore::recordSurfelGiClearPass(const vk::raii::CommandBuffer &commandB
 	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
 	        .buffer        = *frames.surfelGiCellSlotBuffers[frameIndex],
 	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiCellCount * FrameContext::kSurfelGiCellSlotCount * FrameContext::kSurfelGiCellSlotSize},
+	        .size          = FrameContext::kSurfelGiCellToSurfelCapacity * FrameContext::kSurfelGiCellToSurfelIndexSize},
 	    vk::BufferMemoryBarrier2{
 	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
 	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
@@ -1666,7 +1666,7 @@ void EngineCore::recordSurfelGiBuildCellsPass(const vk::raii::CommandBuffer &com
 	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
 	        .buffer        = *frames.surfelGiCellSlotBuffers[frameIndex],
 	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiCellCount * FrameContext::kSurfelGiCellSlotCount * FrameContext::kSurfelGiCellSlotSize},
+	        .size          = FrameContext::kSurfelGiCellToSurfelCapacity * FrameContext::kSurfelGiCellToSurfelIndexSize},
 	    vk::BufferMemoryBarrier2{
 	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
 	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,

@@ -743,9 +743,8 @@ void FrameContext::createSurfelGiBuffers(const VulkanDevice &dev, const Swapchai
         static_cast<vk::DeviceSize>(kSurfelGiMaxSurfels) * kSurfelGiRecordSize;
     constexpr vk::DeviceSize cellBufferSize =
         static_cast<vk::DeviceSize>(kSurfelGiCellCount) * kSurfelGiCellSize;
-    constexpr vk::DeviceSize cellSlotBufferSize =
-        static_cast<vk::DeviceSize>(kSurfelGiCellCount) *
-        kSurfelGiCellSlotCount * kSurfelGiCellSlotSize;
+    constexpr vk::DeviceSize cellToSurfelBufferSize =
+        static_cast<vk::DeviceSize>(kSurfelGiCellToSurfelCapacity) * kSurfelGiCellToSurfelIndexSize;
     constexpr vk::DeviceSize counterBufferSize = kSurfelGiCounterSize;
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
@@ -765,7 +764,7 @@ void FrameContext::createSurfelGiBuffers(const VulkanDevice &dev, const Swapchai
             surfelGiCellBuffers.push_back(std::move(cellBuffer));
 
             VulkanUtils::VmaBuffer cellSlotBuffer{};
-            VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, cellSlotBufferSize,
+            VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, cellToSurfelBufferSize,
                                       vk::BufferUsageFlagBits::eStorageBuffer,
                                       vk::MemoryPropertyFlagBits::eDeviceLocal,
                                       cellSlotBuffer);

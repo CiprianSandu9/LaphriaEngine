@@ -306,6 +306,21 @@ bool requirePersistentSurfelFrameResources(const std::string &frameContextHeader
 	return true;
 }
 
+bool requireCompactSurfelCellIndexListBuffers(const std::string &frameContextSource,
+                                              const std::string &engineCore)
+{
+	const std::string createSurfelBuffers =
+	    extractFunctionBody(frameContextSource, "void FrameContext::createSurfelGiBuffers(");
+	if (createSurfelBuffers.empty())
+		return false;
+
+	return containsText(createSurfelBuffers, "kSurfelGiCellToSurfelCapacity") &&
+	       containsText(createSurfelBuffers, "kSurfelGiCellToSurfelIndexSize") &&
+	       !containsText(createSurfelBuffers, "kSurfelGiCellSlotCount * kSurfelGiCellSlotSize") &&
+	       containsText(engineCore,
+	                    "FrameContext::kSurfelGiCellToSurfelCapacity * FrameContext::kSurfelGiCellToSurfelIndexSize");
+}
+
 bool requireSurfelClearPassContracts(const std::string &pipelineHeader,
                                      const std::string &pipelineSource,
                                      const std::string &engineHeader,
@@ -1124,6 +1139,11 @@ bool testPathTracerReservoirGiMeasurementContract()
 	if (!requirePersistentSurfelFrameResources(frameContextHeader, frameContextSource))
 	{
 		std::cerr << "persistent surfel GI frame resource contract is incomplete\n";
+		return false;
+	}
+	if (!requireCompactSurfelCellIndexListBuffers(frameContextSource, engineCore))
+	{
+		std::cerr << "compact surfel grid buffers must allocate a global cell-to-surfel index list\n";
 		return false;
 	}
 
