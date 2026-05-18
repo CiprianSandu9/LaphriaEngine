@@ -195,6 +195,7 @@ static const uint PT_FLAGS_ENVIRONMENT_BOUNCE_SHIFT = 21u;
 static const uint PT_FLAGS_ENVIRONMENT_BOUNCE_MASK = 0x3u;
 static const uint PT_FLAGS_RESERVOIR_ESTIMATOR_AUDIT_SHIFT = 23u;
 static const uint PT_FLAGS_RESERVOIR_ESTIMATOR_AUDIT_MASK = 0x3u;
+static const uint PT_FLAGS_RESERVOIR_BRIGHT_SURFEL_SHADOW_ONLY_BIT = 1u << 25;
 static const int ReservoirEstimatorAuditOff = 0;
 static const int ReservoirEstimatorAuditCurrent = 1;
 static const int ReservoirEstimatorAuditNoProbeScale = 2;
@@ -2781,6 +2782,7 @@ bool evaluateBrightReceiverSurfelReservoirGiCandidate(float3 hitPos,
                                                       uint2 launchID,
                                                       uint2 launchSize,
                                                       inout uint rngState,
+                                                      bool allowSelection,
                                                       out ReservoirGiRecord candidateRecord)
 {
     candidateRecord.primaryPosition = hitPos;
@@ -2857,6 +2859,10 @@ bool evaluateBrightReceiverSurfelReservoirGiCandidate(float3 hitPos,
         !targetEvaluation.validLight ||
         targetEvaluation.targetWeight <= RESERVOIR_GI_BRIGHT_SURFEL_CANDIDATE_MIN_TARGET_WEIGHT) {
         ptAnalysisCounters.InterlockedAdd(reservoirGiBrightSurfelRejectTargetOffset, 1u);
+        return false;
+    }
+
+    if (!allowSelection) {
         return false;
     }
 
@@ -3335,6 +3341,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
                                                                  int reservoirGiSpatialBudgetDivisor,
                                                                  int reservoirGiEstimatorAuditMode,
                                                                  bool reservoirGiDetailedDiagnostics,
+                                                                 bool reservoirGiBrightSurfelShadowOnly,
                                                                  uint2 launchID,
                                                                  uint2 launchSize,
                                                                  inout uint rngState)
@@ -3388,11 +3395,10 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     if (usesReservoirGiReceiverCache) {
         updateReservoirGiReceiverCacheHeader(launchID, ubo.frameCount);
     }
-    const bool enableBrightSurfelProposal = false;
-    bool useBrightReceiverSurfel =
-        enableBrightSurfelProposal &&
+    const bool useBrightSurfelProposal =
         reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_BRIGHT_SURFEL;
-    if (useBrightReceiverSurfel) {
+    bool allowBrightSurfelSelection = useBrightSurfelProposal && !reservoirGiBrightSurfelShadowOnly;
+    if (useBrightSurfelProposal) {
         updateReservoirGiBrightSurfelHeader(launchID, ubo.frameCount);
     }
 
@@ -3439,7 +3445,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
                             RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_GUIDED :
                             (useReceiverCacheReconnect ?
                              RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_GUIDED :
-                             (useBrightReceiverSurfel ?
+                             (useBrightSurfelProposal ?
                               RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_GUIDED :
                               reservoirGiProposalMode));
 
@@ -3553,7 +3559,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
             continue;
         }
         candidatePositiveWeightCount += 1u;
-        if (useBrightReceiverSurfel && shouldTrainBrightReceiverSurfel(launchID, launchSize)) {
+        if (useBrightSurfelProposal && shouldTrainBrightReceiverSurfel(launchID, launchSize)) {
             tryStoreBrightSurfelTrainingCandidate(launchID, launchSize, localRecord);
         }
         if (reservoirGiDetailedDiagnostics) {
@@ -3584,11 +3590,12 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
         }
     }
 
-    if (useBrightReceiverSurfel) {
+    if (useBrightSurfelProposal) {
         ReservoirGiRecord surfelRecord;
         if (evaluateBrightReceiverSurfelReservoirGiCandidate(hitPos, N, V, payload,
                                                              launchID, launchSize,
                                                              rngState,
+                                                             allowBrightSurfelSelection,
                                                              surfelRecord)) {
             combineReservoirGiCandidate(surfelRecord,
                                         surfelRecord.targetWeight,
@@ -3853,7 +3860,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
         storeReservoirGiReceiverCacheRecord(launchID, launchSize, record);
     }
     if (acceptedReservoir &&
-        useBrightReceiverSurfel &&
+        useBrightSurfelProposal &&
         selectedSource == RESERVOIR_GI_SOURCE_LOCAL &&
         record.targetWeight >= RESERVOIR_GI_BRIGHT_SURFEL_MIN_TARGET_WEIGHT &&
         pathTracerLuminance(max(record.suffixRadiance, float3(0.0, 0.0, 0.0))) >= RESERVOIR_GI_BRIGHT_SURFEL_MIN_LUMA) {
@@ -3978,6 +3985,8 @@ void main() {
                                           PT_FLAGS_ENVIRONMENT_BOUNCE_MASK);
     int    reservoirGiEstimatorAuditMode = int((packedPathTracerFlags >> PT_FLAGS_RESERVOIR_ESTIMATOR_AUDIT_SHIFT) &
                                                PT_FLAGS_RESERVOIR_ESTIMATOR_AUDIT_MASK);
+    bool   reservoirGiBrightSurfelShadowOnly =
+        (packedPathTracerFlags & PT_FLAGS_RESERVOIR_BRIGHT_SURFEL_SHADOW_ONLY_BIT) != 0u;
     int    firstHitDiffuseSampleCount =
         clamp(int((packedPathTracerFlags >> PT_FLAGS_FIRST_HIT_DIFFUSE_SAMPLES_SHIFT) &
                   PT_FLAGS_FIRST_HIT_DIFFUSE_SAMPLES_MASK),
@@ -4093,6 +4102,7 @@ void main() {
                                                                       reservoirGiSpatialBudgetDivisor,
                                                                       reservoirGiEstimatorAuditMode,
                                                                       reservoirGiDetailedDiagnostics,
+                                                                      reservoirGiBrightSurfelShadowOnly,
                                                                       launchID, launchSize, rngState);
                 firstHitBounceUsesReservoirGi = true;
             } else if (firstHitProbeSamplingMode == FIRST_HIT_PROBE_SAMPLING_CANDIDATE_SUN_BOUNCE) {

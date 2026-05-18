@@ -1175,6 +1175,7 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::SliderInt("Reservoir Spatial Neighbors", &pathTracerSettings.reservoirGiSpatialNeighborCount, 1, 8);
         ImGui::Checkbox("Reservoir GI Candidate RIS", &pathTracerSettings.reservoirGiUseCandidateRis);
         ImGui::Checkbox("Detailed Reservoir Diagnostics", &pathTracerSettings.reservoirGiDetailedDiagnostics);
+        ImGui::Checkbox("Bright Surfel Shadow Only", &pathTracerSettings.reservoirGiBrightSurfelShadowOnly);
         const char *reservoirAuditModes[] = {
             "Off",
             "Current",
@@ -1414,6 +1415,16 @@ void UISystem::drawPathTracerDebugLab() {
         if (ImGui::Button("Run Sponza GI Perf Sweep")) {
             pathTracerAnalysisSettings.loadSponzaGiValidationPreset = true;
             pathTracerAnalysisSettings.runSponzaGiPerfSweep = true;
+            pathTracerAnalysisSettings.enableAnalysisMode = true;
+        }
+        if (ImGui::Button("Run Bright Surfel Shadow Sweep")) {
+            pathTracerAnalysisSettings.loadSponzaGiValidationPreset = true;
+            pathTracerAnalysisSettings.runBrightSurfelShadowEvaluationSweep = true;
+            pathTracerAnalysisSettings.enableAnalysisMode = true;
+        }
+        if (ImGui::Button("Run Bright Surfel Proposal Sweep")) {
+            pathTracerAnalysisSettings.loadSponzaGiValidationPreset = true;
+            pathTracerAnalysisSettings.runBrightSurfelProposalEvaluationSweep = true;
             pathTracerAnalysisSettings.enableAnalysisMode = true;
         }
         ImGui::SliderInt("Sponza Sweep Warmup", &pathTracerAnalysisSettings.sponzaGiSweepWarmupFrames, 1, 60);

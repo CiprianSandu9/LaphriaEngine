@@ -138,8 +138,11 @@ bool brightSurfelCombineUsesTargetWeight(const std::string &raygen)
 	return containsText(combineSnippet, "surfelRecord.targetWeight");
 }
 
-bool requireBrightSurfelProposalDisabledForSweeps(const std::string &raygen,
-                                                  const std::string &engineCore)
+bool requireBrightSurfelReservoirEvaluationSweepContracts(const std::string &raygen,
+                                                          const std::string &engineCore,
+                                                          const std::string &engineHeader,
+                                                          const std::string &uiHeader,
+                                                          const std::string &uiSource)
 {
 	if (!containsText(raygen, "static const int RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_BRIGHT_SURFEL"))
 		return false;
@@ -149,16 +152,71 @@ bool requireBrightSurfelProposalDisabledForSweeps(const std::string &raygen,
 	if (reservoirMain.empty())
 		return false;
 
-	if (!containsText(reservoirMain, "const bool enableBrightSurfelProposal = false"))
+	if (containsText(raygen, "const bool enableBrightSurfelProposal = false"))
 		return false;
 
-	if (!containsText(reservoirMain,
-	                  "enableBrightSurfelProposal &&\n"
-	                  "        reservoirGiProposalMode == RESERVOIR_GI_PROPOSAL_MIXED_COSINE_SUN_RECEIVER_BRIGHT_SURFEL"))
+	if (!containsText(reservoirMain, "allowBrightSurfelSelection") ||
+	    !containsText(reservoirMain, "useBrightSurfelProposal && !reservoirGiBrightSurfelShadowOnly"))
 		return false;
 
-	if (containsText(engineCore, "reservoirMixedTemporalSpatialBudget2SunReceiverBrightSurfelRow") ||
-	    containsText(engineCore, "reservoirMixedSingleFrameSunReceiverBrightSurfelRow"))
+	const std::string sponzaSweep =
+	    extractFunctionBody(engineCore, "void EngineCore::startPathTracerSponzaGiPerfSweep()");
+	if (sponzaSweep.empty() ||
+	    containsText(sponzaSweep, "MixedCosineSunReceiverBrightSurfel"))
+		return false;
+
+	const std::string uiDefault =
+	    extractFunctionBody(uiHeader, "struct PathTracerSettings");
+	if (uiDefault.empty() ||
+	    containsText(uiDefault, "reservoirGiProposalMode = PathTracerReservoirGiProposalMode::MixedCosineSunReceiverBrightSurfel"))
+		return false;
+
+	if (!containsText(engineHeader, "startPathTracerBrightSurfelShadowEvaluationSweep()") ||
+	    !containsText(engineHeader, "startPathTracerBrightSurfelProposalEvaluationSweep()") ||
+	    !containsText(engineCore, "void EngineCore::startPathTracerBrightSurfelShadowEvaluationSweep()") ||
+	    !containsText(engineCore, "void EngineCore::startPathTracerBrightSurfelProposalEvaluationSweep()"))
+		return false;
+
+	const std::string shadowSweep =
+	    extractFunctionBody(engineCore, "void EngineCore::startPathTracerBrightSurfelShadowEvaluationSweep()");
+	const std::string proposalSweep =
+	    extractFunctionBody(engineCore, "void EngineCore::startPathTracerBrightSurfelProposalEvaluationSweep()");
+	if (shadowSweep.empty() || proposalSweep.empty())
+		return false;
+
+	const char *shadowRequired[] = {
+	    "MixedCosineSunReceiverBrightSurfel",
+	    "Bright Surfel Evaluation / Baseline Sun Receiver",
+	    "Bright Surfel Evaluation / Baseline Static Audit",
+	    "Bright Surfel Evaluation / Shadow Diagnostics",
+	    "reservoirGiBrightSurfelShadowOnly = true",
+	    "PathTracerReservoirGiEstimatorAuditMode::Current"};
+	for (const char *required : shadowRequired)
+	{
+		if (!containsText(shadowSweep, required))
+			return false;
+	}
+
+	const char *proposalRequired[] = {
+	    "MixedCosineSunReceiverBrightSurfel",
+	    "Bright Surfel Evaluation / Baseline Static Audit",
+	    "Bright Surfel Evaluation / Proposal Enabled",
+	    "Bright Surfel Evaluation / Proposal Enabled Static Audit",
+	    "PathTracerReservoirGiEstimatorAuditMode::Current"};
+	for (const char *required : proposalRequired)
+	{
+		if (!containsText(proposalSweep, required))
+			return false;
+	}
+	if (containsText(proposalSweep, "reservoirGiBrightSurfelShadowOnly = true"))
+		return false;
+
+	if (!containsText(uiHeader, "runBrightSurfelShadowEvaluationSweep") ||
+	    !containsText(uiHeader, "runBrightSurfelProposalEvaluationSweep") ||
+	    !containsText(uiSource, "Run Bright Surfel Shadow Sweep") ||
+	    !containsText(uiSource, "Run Bright Surfel Proposal Sweep") ||
+	    !containsText(engineCore, "analysis.runBrightSurfelShadowEvaluationSweep") ||
+	    !containsText(engineCore, "analysis.runBrightSurfelProposalEvaluationSweep"))
 		return false;
 
 	return true;
@@ -738,9 +796,10 @@ bool testPathTracerReservoirGiMeasurementContract()
 		return false;
 	}
 
-	if (!requireBrightSurfelProposalDisabledForSweeps(raygen, engineCore))
+	if (!requireBrightSurfelReservoirEvaluationSweepContracts(raygen, engineCore, engineHeader,
+	                                                          uiHeader, uiSource))
 	{
-		std::cerr << "Bright surfel reservoir proposal must be disabled for sweeps before persistent surfel cache work\n";
+		std::cerr << "Bright surfel reservoir proposal must be isolated to explicit evaluation sweeps\n";
 		return false;
 	}
 

@@ -77,6 +77,7 @@ constexpr uint32_t    kPtFlagsEnvironmentBounceShift         = 21u;
 constexpr uint32_t    kPtFlagsEnvironmentBounceMask          = 0x3u;
 constexpr uint32_t    kPtFlagsReservoirEstimatorAuditShift   = 23u;
 constexpr uint32_t    kPtFlagsReservoirEstimatorAuditMask    = 0x3u;
+constexpr uint32_t    kPtFlagsReservoirBrightSurfelShadowOnlyBit = 1u << 25u;
 constexpr uint32_t    RESERVOIR_GI_RECEIVER_CACHE_CURRENT_BINDING = 14u;
 constexpr uint32_t    RESERVOIR_GI_RECEIVER_CACHE_HISTORY_BINDING = 15u;
 constexpr uint32_t    RESERVOIR_GI_BRIGHT_SURFEL_CURRENT_BINDING = 16u;
@@ -187,6 +188,7 @@ uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
 	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.environmentNeeBounceMode, 0, 2)),
 	                          kPtFlagsEnvironmentBounceShift,
 	                          kPtFlagsEnvironmentBounceMask) |
+	       (settings.reservoirGiBrightSurfelShadowOnly ? kPtFlagsReservoirBrightSurfelShadowOnlyBit : 0u) |
 	       packPathTracerBits(static_cast<uint32_t>(
 	                              std::clamp(static_cast<int>(settings.reservoirGiEstimatorAuditMode), 0, 2)),
 	                          kPtFlagsReservoirEstimatorAuditShift,
@@ -530,6 +532,14 @@ void EngineCore::mainLoop()
 		if (ui.pathTracerAnalysisSettings.runSponzaGiPerfSweep)
 		{
 			startPathTracerSponzaGiPerfSweep();
+		}
+		if (ui.pathTracerAnalysisSettings.runBrightSurfelShadowEvaluationSweep)
+		{
+			startPathTracerBrightSurfelShadowEvaluationSweep();
+		}
+		if (ui.pathTracerAnalysisSettings.runBrightSurfelProposalEvaluationSweep)
+		{
+			startPathTracerBrightSurfelProposalEvaluationSweep();
 		}
 		if (ui.pathTracerAnalysisSettings.applySponzaValidationView)
 		{
@@ -2314,6 +2324,8 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 {
 	auto &analysis                 = ui.pathTracerAnalysisSettings;
 	analysis.runSponzaGiPerfSweep  = false;
+	analysis.runBrightSurfelShadowEvaluationSweep = false;
+	analysis.runBrightSurfelProposalEvaluationSweep = false;
 	analysis.enableAnalysisMode    = true;
 	analysis.lockBenchmarkScene    = true;
 	analysis.benchmarkActive       = false;
@@ -2434,6 +2446,195 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 	}
 }
 
+void EngineCore::startPathTracerBrightSurfelShadowEvaluationSweep()
+{
+	auto &analysis = ui.pathTracerAnalysisSettings;
+	analysis.runSponzaGiPerfSweep = false;
+	analysis.runBrightSurfelShadowEvaluationSweep = false;
+	analysis.runBrightSurfelProposalEvaluationSweep = false;
+	analysis.enableAnalysisMode = true;
+	analysis.lockBenchmarkScene = true;
+	analysis.benchmarkActive = false;
+	analysis.runBaselineSweep = false;
+	analysis.applyDebugLightPreset = false;
+	ui.renderMode = RenderMode::PathTracer;
+	vulkan.logicalDevice.waitIdle();
+	clearPathTracerExperimentState();
+
+	auto applyScenarioPreset = [](PathTracerExperimentRow &row,
+	                              const SponzaScenarioPreset &scenario) {
+		row.scenarioName = scenario.name;
+		row.cameraPosition = scenario.cameraPosition;
+		row.cameraPitch = scenario.cameraPitch;
+		row.cameraYaw = scenario.cameraYaw;
+		row.lightDirection = scenario.lightDirection;
+	};
+
+	auto makeBaselineRow = [&](const SponzaScenarioPreset &scenario, const char *name) {
+		PathTracerExperimentRow row{};
+		row.name = name;
+		applyScenarioPreset(row, scenario);
+		row.probeMode = UISystem::FirstHitProbeSamplingMode::CandidateRis;
+		row.blackEnvironment = false;
+		row.applyDebugLightPreset = false;
+		row.reservoirGiMode = UISystem::PathTracerReservoirGiMode::SingleFrame;
+		row.reservoirGiProposalMode =
+		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
+		row.firstHitDiffuseSamples = 2;
+		row.firstHitCandidateCount = 4;
+		row.reservoirGiCandidateCount = 1;
+		row.reservoirGiUseCandidateRis = false;
+		row.reservoirGiTemporalBudgetDivisor = 1;
+		row.reservoirGiSpatialBudgetDivisor = 1;
+		row.environmentNeeBounceMode = 0;
+		row.pathTracerMaxBounces = 8;
+		row.directSunBounceMode = 1;
+		row.reservoirGiCandidateEvaluationMode = 2;
+		row.debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor;
+		return row;
+	};
+
+	ptExperimentRows.clear();
+	for (const auto &scenario : sponzaScenarioPresets())
+	{
+		auto baselineSunReceiver =
+		    makeBaselineRow(scenario, "Bright Surfel Evaluation / Baseline Sun Receiver");
+		auto baselineStaticAudit =
+		    makeBaselineRow(scenario, "Bright Surfel Evaluation / Baseline Static Audit");
+		baselineStaticAudit.reservoirGiMode =
+		    UISystem::PathTracerReservoirGiMode::TemporalSpatial;
+		baselineStaticAudit.reservoirGiSpatialNeighborCount = 2;
+		baselineStaticAudit.reservoirGiEstimatorAuditMode =
+		    UISystem::PathTracerReservoirGiEstimatorAuditMode::Current;
+
+		auto shadowDiagnostics =
+		    makeBaselineRow(scenario, "Bright Surfel Evaluation / Shadow Diagnostics");
+		shadowDiagnostics.reservoirGiProposalMode =
+		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverBrightSurfel;
+		shadowDiagnostics.reservoirGiBrightSurfelShadowOnly = true;
+		shadowDiagnostics.reservoirGiEstimatorAuditMode =
+		    UISystem::PathTracerReservoirGiEstimatorAuditMode::Current;
+
+		ptExperimentRows.push_back(baselineSunReceiver);
+		ptExperimentRows.push_back(baselineStaticAudit);
+		ptExperimentRows.push_back(shadowDiagnostics);
+	}
+
+	ptExperimentSweepActive     = !ptExperimentRows.empty();
+	ptExperimentRowIndex        = 0;
+	ptExperimentWarmupFrames    = std::max(1, analysis.sponzaGiSweepWarmupFrames);
+	ptExperimentSampleFrames    = std::max(1, analysis.sponzaGiSweepSampleFrames);
+	ptExperimentWarmupRemaining = ptExperimentWarmupFrames;
+	ptExperimentSampleRemaining = ptExperimentSampleFrames;
+	ptExperimentAccum           = {};
+	ptExperimentCompletionLog   = "PT Experiment Sweep: bright surfel shadow evaluation sweep complete";
+
+	if (ptExperimentSweepActive)
+	{
+		LOGI("PT Experiment Sweep: starting bright surfel shadow evaluation sweep (%zu rows, warmup=%d, samples=%d)",
+		     ptExperimentRows.size(), ptExperimentWarmupRemaining, ptExperimentSampleRemaining);
+		applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
+	}
+}
+
+void EngineCore::startPathTracerBrightSurfelProposalEvaluationSweep()
+{
+	auto &analysis = ui.pathTracerAnalysisSettings;
+	analysis.runSponzaGiPerfSweep = false;
+	analysis.runBrightSurfelShadowEvaluationSweep = false;
+	analysis.runBrightSurfelProposalEvaluationSweep = false;
+	analysis.enableAnalysisMode = true;
+	analysis.lockBenchmarkScene = true;
+	analysis.benchmarkActive = false;
+	analysis.runBaselineSweep = false;
+	analysis.applyDebugLightPreset = false;
+	ui.renderMode = RenderMode::PathTracer;
+	vulkan.logicalDevice.waitIdle();
+	clearPathTracerExperimentState();
+
+	auto applyScenarioPreset = [](PathTracerExperimentRow &row,
+	                              const SponzaScenarioPreset &scenario) {
+		row.scenarioName = scenario.name;
+		row.cameraPosition = scenario.cameraPosition;
+		row.cameraPitch = scenario.cameraPitch;
+		row.cameraYaw = scenario.cameraYaw;
+		row.lightDirection = scenario.lightDirection;
+	};
+
+	auto makeBaselineRow = [&](const SponzaScenarioPreset &scenario, const char *name) {
+		PathTracerExperimentRow row{};
+		row.name = name;
+		applyScenarioPreset(row, scenario);
+		row.probeMode = UISystem::FirstHitProbeSamplingMode::CandidateRis;
+		row.blackEnvironment = false;
+		row.applyDebugLightPreset = false;
+		row.reservoirGiMode = UISystem::PathTracerReservoirGiMode::SingleFrame;
+		row.reservoirGiProposalMode =
+		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
+		row.firstHitDiffuseSamples = 2;
+		row.firstHitCandidateCount = 4;
+		row.reservoirGiCandidateCount = 1;
+		row.reservoirGiUseCandidateRis = false;
+		row.reservoirGiTemporalBudgetDivisor = 1;
+		row.reservoirGiSpatialBudgetDivisor = 1;
+		row.environmentNeeBounceMode = 0;
+		row.pathTracerMaxBounces = 8;
+		row.directSunBounceMode = 1;
+		row.reservoirGiCandidateEvaluationMode = 2;
+		row.debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor;
+		return row;
+	};
+
+	ptExperimentRows.clear();
+	for (const auto &scenario : sponzaScenarioPresets())
+	{
+		auto baselineStaticAudit =
+		    makeBaselineRow(scenario, "Bright Surfel Evaluation / Baseline Static Audit");
+		baselineStaticAudit.reservoirGiMode =
+		    UISystem::PathTracerReservoirGiMode::TemporalSpatial;
+		baselineStaticAudit.reservoirGiSpatialNeighborCount = 2;
+		baselineStaticAudit.reservoirGiEstimatorAuditMode =
+		    UISystem::PathTracerReservoirGiEstimatorAuditMode::Current;
+
+		auto proposalEnabled =
+		    makeBaselineRow(scenario, "Bright Surfel Evaluation / Proposal Enabled");
+		proposalEnabled.reservoirGiProposalMode =
+		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverBrightSurfel;
+
+		auto proposalEnabledStaticAudit =
+		    makeBaselineRow(scenario, "Bright Surfel Evaluation / Proposal Enabled Static Audit");
+		proposalEnabledStaticAudit.reservoirGiMode =
+		    UISystem::PathTracerReservoirGiMode::TemporalSpatial;
+		proposalEnabledStaticAudit.reservoirGiProposalMode =
+		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverBrightSurfel;
+		proposalEnabledStaticAudit.reservoirGiSpatialNeighborCount = 2;
+		proposalEnabledStaticAudit.reservoirGiTemporalBudgetDivisor = 1;
+		proposalEnabledStaticAudit.reservoirGiSpatialBudgetDivisor = 1;
+		proposalEnabledStaticAudit.reservoirGiEstimatorAuditMode =
+		    UISystem::PathTracerReservoirGiEstimatorAuditMode::Current;
+
+		ptExperimentRows.push_back(baselineStaticAudit);
+		ptExperimentRows.push_back(proposalEnabled);
+		ptExperimentRows.push_back(proposalEnabledStaticAudit);
+	}
+
+	ptExperimentSweepActive     = !ptExperimentRows.empty();
+	ptExperimentRowIndex        = 0;
+	ptExperimentWarmupFrames    = std::max(1, analysis.sponzaGiSweepWarmupFrames);
+	ptExperimentSampleFrames    = std::max(1, analysis.sponzaGiSweepSampleFrames);
+	ptExperimentWarmupRemaining = ptExperimentWarmupFrames;
+	ptExperimentSampleRemaining = ptExperimentSampleFrames;
+	ptExperimentAccum           = {};
+	ptExperimentCompletionLog   = "PT Experiment Sweep: bright surfel proposal evaluation sweep complete";
+
+	if (ptExperimentSweepActive)
+	{
+		LOGI("PT Experiment Sweep: starting bright surfel proposal evaluation sweep (%zu rows, warmup=%d, samples=%d)",
+		     ptExperimentRows.size(), ptExperimentWarmupRemaining, ptExperimentSampleRemaining);
+		applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
+	}
+}
+
 void EngineCore::clearPathTracerExperimentState()
 {
 	for (void *mapped : frames.reservoirGiCurrentMapped)
@@ -2479,6 +2680,7 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
 	settings.reservoirGiTemporalBudgetDivisor   = row.reservoirGiTemporalBudgetDivisor;
 	settings.reservoirGiSpatialBudgetDivisor    = row.reservoirGiSpatialBudgetDivisor;
 	settings.reservoirGiEstimatorAuditMode      = row.reservoirGiEstimatorAuditMode;
+	settings.reservoirGiBrightSurfelShadowOnly  = row.reservoirGiBrightSurfelShadowOnly;
 	settings.reservoirGiDetailedDiagnostics = false;
 	settings.pathTracerMaxBounces               = row.pathTracerMaxBounces;
 	settings.directSunBounceMode                = row.directSunBounceMode;

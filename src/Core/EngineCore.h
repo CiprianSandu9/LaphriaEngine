@@ -116,6 +116,7 @@ class EngineCore
 		int reservoirGiSpatialBudgetDivisor = 1;
 		UISystem::PathTracerReservoirGiEstimatorAuditMode reservoirGiEstimatorAuditMode =
 		    UISystem::PathTracerReservoirGiEstimatorAuditMode::Off;
+		bool reservoirGiBrightSurfelShadowOnly = false;
 		int environmentNeeBounceMode = 0;
 		int pathTracerMaxBounces = 8;
 		// 0 = all bounces, 1 = first bounce only, 2 = first 2 bounces.
@@ -303,6 +304,8 @@ class EngineCore
 	void resetPathTracerAnalysisCounters(uint32_t frameSlot);
 	void collectPathTracerAnalysisCounters(uint32_t frameSlot);
 	void startPathTracerSponzaGiPerfSweep();
+	void startPathTracerBrightSurfelShadowEvaluationSweep();
+	void startPathTracerBrightSurfelProposalEvaluationSweep();
 	void clearPathTracerExperimentState();
 	void applySponzaValidationPreset(UISystem::PathTracerSponzaValidationView view);
 	void updatePathTracerExperimentSweep();

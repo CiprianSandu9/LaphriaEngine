@@ -139,6 +139,7 @@ public:
         int                   reservoirGiSpatialNeighborCount = 4;
         bool                  reservoirGiUseCandidateRis = true;
         bool                  reservoirGiDetailedDiagnostics = true;
+        bool                  reservoirGiBrightSurfelShadowOnly = false;
         PathTracerReservoirGiEstimatorAuditMode reservoirGiEstimatorAuditMode =
             PathTracerReservoirGiEstimatorAuditMode::Off;
         int                   reservoirGiTemporalBudgetDivisor = 1;
@@ -294,6 +295,8 @@ public:
         bool                         benchmarkActive = false;
         bool                         runBaselineSweep = false;
         bool                         runSponzaGiPerfSweep = false;
+        bool                         runBrightSurfelShadowEvaluationSweep = false;
+        bool                         runBrightSurfelProposalEvaluationSweep = false;
         bool                         loadIndirectBounceTestScene = false;
         bool                         loadSponzaGiValidationPreset = false;
         PathTracerSponzaValidationView sponzaValidationView = PathTracerSponzaValidationView::DarkCourtyard;
