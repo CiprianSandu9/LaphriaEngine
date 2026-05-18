@@ -15,6 +15,8 @@
 #include "PipelineCollection.h"
 #include "PathTracerAnalysis.h"
 #include "ResourceManager.h"
+#include "SurfelPathTracerPasses.h"
+#include "SurfelPathTracerResources.h"
 #include "SwapchainManager.h"
 #include "EngineHost.h"
 #include "UISystem.h"
@@ -40,6 +42,8 @@ class EngineCore
 	SwapchainManager   swapchain;
 	PipelineCollection pipelines;
 	FrameContext       frames;
+	Laphria::SurfelPathTracerResources surfelPathTracerResources;
+	Laphria::SurfelPathTracerPasses    surfelPathTracerPasses;
 
 	// Global UBO sets
 	vk::raii::DescriptorPool             descriptorPool{nullptr};
@@ -55,6 +59,15 @@ class EngineCore
 
 	// Ray Tracing Resources
 	std::vector<vk::raii::DescriptorSet> rtDescriptorSets;
+
+	// Surfel Path Tracer Resources
+	vk::raii::DescriptorPool             surfelPathTracerSkyDescriptorPool{nullptr};
+	std::vector<vk::raii::DescriptorSet> surfelPathTracerSkyDescriptorSets;
+	vk::raii::DescriptorPool             surfelPathTracerStorageDescriptorPool{nullptr};
+	std::vector<vk::raii::DescriptorSet> surfelPathTracerStorageDescriptorSets;
+	vk::raii::DescriptorPool             surfelPathTracerRtDescriptorPool{nullptr};
+	std::vector<vk::raii::DescriptorSet> surfelPathTracerRtDescriptorSets;
+	mutable bool                         surfelPathTracerPersistentImageLayoutsInitialized = false;
 
 	// Denoiser Resources (one set per frame in flight)
 	vk::raii::DescriptorPool             denoiserDescriptorPool{nullptr};
@@ -288,12 +301,17 @@ class EngineCore
 	void createComputeDescriptorSets();
 
 	void createRayTracingDescriptorSets();
+	void createSurfelPathTracerSkyDescriptorSets();
+	void createSurfelPathTracerStorageDescriptorSets();
+	void createSurfelPathTracerRtDescriptorSets();
 	void createDenoiserDescriptorSets();
 
 	void recordComputeCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordSkinningPass(const vk::raii::CommandBuffer &commandBuffer) const;
 	void recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
+	void transitionPersistentSurfelImagesToGeneral(uint32_t frameIndex) const;
+	void recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 
 	void createDescriptorPool();
 

@@ -507,6 +507,11 @@ void EngineCore::initVulkan()
 	createPhysicsDescriptorSets();
 	createRayTracingDescriptorSets();
 	createDenoiserDescriptorSets();
+	surfelPathTracerResources.init(vulkan, swapchain, ui.surfelPathTracerSettings);
+	surfelPathTracerPersistentImageLayoutsInitialized = false;
+	createSurfelPathTracerSkyDescriptorSets();
+	createSurfelPathTracerStorageDescriptorSets();
+	createSurfelPathTracerRtDescriptorSets();
 	createTimestampQueryPool();
 }
 
@@ -672,6 +677,14 @@ void EngineCore::updatePerformanceWindowTitle(float deltaTimeSeconds)
 
 void EngineCore::cleanupSwapChain()
 {
+	surfelPathTracerSkyDescriptorSets.clear();
+	surfelPathTracerSkyDescriptorPool = nullptr;
+	surfelPathTracerStorageDescriptorSets.clear();
+	surfelPathTracerStorageDescriptorPool = nullptr;
+	surfelPathTracerRtDescriptorSets.clear();
+	surfelPathTracerRtDescriptorPool = nullptr;
+	surfelPathTracerResources.cleanupSwapchainResources();
+	surfelPathTracerPersistentImageLayoutsInitialized = false;
 	swapchain.cleanup();
 	frames.cleanupSwapChainDependents();
 }
@@ -719,6 +732,11 @@ void EngineCore::recreateSwapChain()
 	createComputeDescriptorSets();
 	createRayTracingDescriptorSets();
 	createDenoiserDescriptorSets();
+	surfelPathTracerResources.recreateSwapchainResources(vulkan, swapchain);
+	surfelPathTracerPersistentImageLayoutsInitialized = false;
+	createSurfelPathTracerSkyDescriptorSets();
+	createSurfelPathTracerStorageDescriptorSets();
+	createSurfelPathTracerRtDescriptorSets();
 	ptForceHistoryReset = true;
 }
 
@@ -1032,6 +1050,73 @@ void EngineCore::createRayTracingDescriptorSets()
 		}
 
 		vulkan.logicalDevice.updateDescriptorSets(descriptorWrites, {});
+	}
+}
+
+void EngineCore::createSurfelPathTracerSkyDescriptorSets()
+{
+	surfelPathTracerSkyDescriptorSets.clear();
+	if (*surfelPathTracerSkyDescriptorPool)
+	{
+		surfelPathTracerSkyDescriptorPool = nullptr;
+	}
+
+	if (!surfelPathTracerResources.initialized())
+	{
+		return;
+	}
+	if (surfelPathTracerResources.outputImageViews.size() < MAX_FRAMES_IN_FLIGHT)
+	{
+		throw std::runtime_error("Surfel path tracer sky descriptors require one output image view per frame");
+	}
+
+	vk::DescriptorPoolSize poolSize{vk::DescriptorType::eStorageImage, MAX_FRAMES_IN_FLIGHT};
+	vk::DescriptorPoolCreateInfo poolInfo{
+	    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+	    .maxSets       = MAX_FRAMES_IN_FLIGHT,
+	    .poolSizeCount = 1,
+	    .pPoolSizes    = &poolSize};
+	surfelPathTracerSkyDescriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
+
+	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
+	                                             *pipelines.surfelPathTracerPipelines.skyDescriptorSetLayout);
+	vk::DescriptorSetAllocateInfo allocInfo{
+	    .descriptorPool     = *surfelPathTracerSkyDescriptorPool,
+	    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+	    .pSetLayouts        = layouts.data()};
+	surfelPathTracerSkyDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
+
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+	{
+		vk::DescriptorImageInfo outputInfo{
+		    .imageView   = *surfelPathTracerResources.outputImageViews[i],
+		    .imageLayout = vk::ImageLayout::eGeneral};
+		vk::WriteDescriptorSet outputWrite{
+		    .dstSet          = *surfelPathTracerSkyDescriptorSets[i],
+		    .dstBinding      = 0,
+		    .dstArrayElement = 0,
+		    .descriptorCount = 1,
+		    .descriptorType  = vk::DescriptorType::eStorageImage,
+		    .pImageInfo      = &outputInfo};
+		vulkan.logicalDevice.updateDescriptorSets(outputWrite, {});
+	}
+}
+
+void EngineCore::createSurfelPathTracerStorageDescriptorSets()
+{
+	surfelPathTracerStorageDescriptorSets.clear();
+	if (*surfelPathTracerStorageDescriptorPool)
+	{
+		surfelPathTracerStorageDescriptorPool = nullptr;
+	}
+}
+
+void EngineCore::createSurfelPathTracerRtDescriptorSets()
+{
+	surfelPathTracerRtDescriptorSets.clear();
+	if (*surfelPathTracerRtDescriptorPool)
+	{
+		surfelPathTracerRtDescriptorPool = nullptr;
 	}
 }
 
@@ -1698,6 +1783,106 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	                        vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eColorAttachmentOptimal,
 	                        vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
 	                        vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+	                        vk::ImageAspectFlagBits::eColor);
+}
+
+void EngineCore::transitionPersistentSurfelImagesToGeneral(uint32_t frameIndex) const
+{
+	(void)frameIndex;
+
+	auto transitionImageSet = [&](const std::vector<VulkanUtils::VmaImage> &images) {
+		for (const auto &image : images)
+		{
+			transition_image_layout(*image,
+			                        vk::ImageLayout::eUndefined,
+			                        vk::ImageLayout::eGeneral,
+			                        {},
+			                        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+			                        vk::PipelineStageFlagBits2::eTopOfPipe,
+			                        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+			                        vk::ImageAspectFlagBits::eColor);
+		}
+	};
+
+	transitionImageSet(surfelPathTracerResources.gBufferNormalImages);
+	transitionImageSet(surfelPathTracerResources.gBufferDepthImages);
+	transitionImageSet(surfelPathTracerResources.gBufferMotionMaterialImages);
+	transitionImageSet(surfelPathTracerResources.reflectionImages);
+	transitionImageSet(surfelPathTracerResources.filteredReflectionImages);
+	transitionImageSet(surfelPathTracerResources.lightingImages);
+	transitionImageSet(surfelPathTracerResources.taaHistoryImages);
+	transitionImageSet(surfelPathTracerResources.irradianceAtlasImages);
+	transitionImageSet(surfelPathTracerResources.surfelDepthAtlasImages);
+}
+
+void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
+{
+	const uint32_t fi = frames.frameIndex;
+	if (!surfelPathTracerResources.initialized())
+	{
+		throw std::runtime_error("Surfel path tracer resources are not initialized");
+	}
+	if (fi >= surfelPathTracerResources.outputImages.size() ||
+	    fi >= surfelPathTracerSkyDescriptorSets.size() ||
+	    fi >= descriptorSets.size())
+	{
+		throw std::runtime_error("Surfel path tracer frame resources are incomplete");
+	}
+
+	if (!surfelPathTracerPersistentImageLayoutsInitialized)
+	{
+		transitionPersistentSurfelImagesToGeneral(fi);
+		surfelPathTracerPersistentImageLayoutsInitialized = true;
+	}
+
+	transition_image_layout(*surfelPathTracerResources.outputImages[fi],
+	                        vk::ImageLayout::eUndefined,
+	                        vk::ImageLayout::eGeneral,
+	                        {},
+	                        vk::AccessFlagBits2::eShaderWrite,
+	                        vk::PipelineStageFlagBits2::eTopOfPipe,
+	                        vk::PipelineStageFlagBits2::eComputeShader,
+	                        vk::ImageAspectFlagBits::eColor);
+
+	surfelPathTracerPasses.recordSkyPass(commandBuffer,
+	                                     pipelines.surfelPathTracerPipelines,
+	                                     surfelPathTracerResources,
+	                                     *surfelPathTracerSkyDescriptorSets[fi],
+	                                     *descriptorSets[fi],
+	                                     fi,
+	                                     swapchain.extent);
+
+	transition_image_layout(*surfelPathTracerResources.outputImages[fi],
+	                        vk::ImageLayout::eGeneral,
+	                        vk::ImageLayout::eTransferSrcOptimal,
+	                        vk::AccessFlagBits2::eShaderWrite,
+	                        vk::AccessFlagBits2::eTransferRead,
+	                        vk::PipelineStageFlagBits2::eComputeShader,
+	                        vk::PipelineStageFlagBits2::eTransfer,
+	                        vk::ImageAspectFlagBits::eColor);
+
+	transition_image_layout(swapchain.images[imageIndex],
+	                        vk::ImageLayout::eUndefined,
+	                        vk::ImageLayout::eTransferDstOptimal,
+	                        {},
+	                        vk::AccessFlagBits2::eTransferWrite,
+	                        vk::PipelineStageFlagBits2::eTopOfPipe,
+	                        vk::PipelineStageFlagBits2::eTransfer,
+	                        vk::ImageAspectFlagBits::eColor);
+
+	surfelPathTracerPasses.recordFinalBlit(commandBuffer,
+	                                       surfelPathTracerResources,
+	                                       swapchain.images[imageIndex],
+	                                       fi,
+	                                       swapchain.extent);
+
+	transition_image_layout(swapchain.images[imageIndex],
+	                        vk::ImageLayout::eTransferDstOptimal,
+	                        vk::ImageLayout::eColorAttachmentOptimal,
+	                        vk::AccessFlagBits2::eTransferWrite,
+	                        vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
+	                        vk::PipelineStageFlagBits2::eTransfer,
+	                        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
 	                        vk::ImageAspectFlagBits::eColor);
 }
 
@@ -3901,6 +4086,10 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 	{
 		recordClassicRTCommandBuffer(commandBuffer, imageIndex);
 	}
+	else if (ui.renderMode == RenderMode::SurfelPathTracer)
+	{
+		recordSurfelPathTracerCommandBuffer(commandBuffer, imageIndex);
+	}
 
 	transition_image_layout(
 	    *frames.depthImages[imageIndex],
@@ -4036,6 +4225,12 @@ void EngineCore::drawFrame()
 		// Renderer switches can otherwise overlap in-flight GPU work that uses different
 		// pipeline/resource access patterns (especially PT denoiser scratch buffers).
 		vulkan.logicalDevice.waitIdle();
+		if (ui.renderMode == RenderMode::SurfelPathTracer ||
+		    lastSubmittedRenderMode == RenderMode::SurfelPathTracer)
+		{
+			// Task 7's prepare pass consumes this to reset persistent surfel state.
+			ui.surfelPathTracerSettings.resetSurfels = true;
+		}
 		ptForceHistoryReset     = true;
 		lastSubmittedRenderMode = ui.renderMode;
 	}

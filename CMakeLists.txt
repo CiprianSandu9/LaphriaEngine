@@ -126,6 +126,8 @@ set(LAPHRIA_ENGINE_SOURCES
         src/Core/StbImageImpl.cpp
         src/Core/SurfelPathTracerPipelines.cpp
         src/Core/SurfelPathTracerPipelines.h
+        src/Core/SurfelPathTracerPasses.cpp
+        src/Core/SurfelPathTracerPasses.h
         src/Core/SurfelPathTracerResources.cpp
         src/Core/SurfelPathTracerResources.h
         src/Core/SwapchainManager.cpp
