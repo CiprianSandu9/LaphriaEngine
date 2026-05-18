@@ -222,3 +222,9 @@ ctest --test-dir build -C Debug --output-on-failure
 5. Investigate Dark Courtyard separately, starting with why `Env First Two` helps it more than Sun Receiver in the luma proxy.
 6. Revisit direct sun NEE beyond bounce 0 as a separate experiment.
 7. Consider a proposal that targets known bright receiver regions more explicitly, but only after visual validation confirms the current Sun Receiver behavior.
+
+## Reservoir Estimator Audit Gate
+
+The current ReSTIR GI reservoir should be treated as plausible but not yet proven. Before surfels become a lighting contributor or a trusted proposal source, the estimator must pass the audit gates in `docs/architecture/reservoir-gi-estimator-contract.md`.
+
+In particular, the current `candidateCount / (candidateCount + 1)` reservoir output scale and the local non-RIS `candidateCount` division are audit targets, not assumed-correct normalization.
