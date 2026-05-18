@@ -1316,6 +1316,11 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::Text("Surfel GI Cell Insert Attempts: %u", pathTracerPerfStats.surfelGiCellInsertAttempts);
         ImGui::Text("Surfel GI Cell Inserted: %u", pathTracerPerfStats.surfelGiCellInserted);
         ImGui::Text("Surfel GI Cell Overflow: %u", pathTracerPerfStats.surfelGiCellOverflow);
+        ImGui::Text("Surfel GI cell total memberships: %u", pathTracerPerfStats.surfelGiCellTotalMemberships);
+        ImGui::Text("Surfel GI cell allocated memberships: %u", pathTracerPerfStats.surfelGiCellAllocatedMemberships);
+        ImGui::Text("Surfel GI cell allocation overflow: %u", pathTracerPerfStats.surfelGiCellAllocationOverflow);
+        ImGui::Text("Surfel GI non-empty cells: %u", pathTracerPerfStats.surfelGiCellNonEmpty);
+        ImGui::Text("Surfel GI max cell population: %u", pathTracerPerfStats.surfelGiCellMaxPopulation);
         ImGui::Text("Surfel GI Eval Attempts: %u", pathTracerPerfStats.surfelGiEvalAttempts);
         ImGui::Text("Surfel GI Eval Candidates: %u", pathTracerPerfStats.surfelGiEvalCandidates);
         ImGui::Text("Surfel GI Eval Accepted: %u", pathTracerPerfStats.surfelGiEvalAccepted);

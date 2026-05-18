@@ -240,7 +240,7 @@ bool requirePersistentSurfelFrameResources(const std::string &frameContextHeader
 	const char *headerSymbols[] = {
 	    "kSurfelGiMaxSurfels",
 	    "kSurfelGiGridDim",
-	    "kSurfelGiCellSlotCount",
+	    "kSurfelGiCellToSurfelCapacity",
 	    "surfelGiRecordBuffers",
 	    "surfelGiCellBuffers",
 	    "surfelGiCellSlotBuffers",
@@ -610,22 +610,34 @@ bool requireSurfelGiSlotCapacityAlignment(const std::string &frameContextHeader,
                                           const std::string &surfelCommon,
                                           const std::string &surfelEvaluate)
 {
-	const auto shaderSlotCount = extractUnsignedAssignment(surfelCommon, "SURFEL_GI_CELL_SLOT_COUNT");
+	const auto shaderMaxCellMemberships =
+	    extractUnsignedAssignment(surfelCommon, "SURFEL_GI_MAX_CELL_MEMBERSHIPS_PER_SURFEL");
 	const auto shaderMaxCandidates =
 	    extractUnsignedAssignment(surfelCommon, "SURFEL_GI_MAX_EVAL_CANDIDATES");
-	const auto frameSlotCount = extractUnsignedAssignment(frameContextHeader, "kSurfelGiCellSlotCount");
+	const auto frameMaxCellMemberships =
+	    extractUnsignedAssignment(frameContextHeader, "kSurfelGiMaxCellMembershipsPerSurfel");
 	const auto sliderRange = extractSurfelEvalCandidateSliderRange(uiSource);
-	if (!shaderSlotCount || !shaderMaxCandidates || !frameSlotCount || !sliderRange)
+	if (!shaderMaxCellMemberships || !shaderMaxCandidates ||
+	    !frameMaxCellMemberships || !sliderRange)
 	{
-		std::cerr << "missing surfel GI slot/candidate capacity declarations\n";
+		std::cerr << "missing compact surfel GI cell/candidate capacity declarations\n";
 		return false;
 	}
 
-	if (*shaderSlotCount != 16u || *shaderMaxCandidates != 16u ||
-	    *frameSlotCount != *shaderSlotCount || sliderRange->first != 1 ||
+	if (*shaderMaxCellMemberships != 27u ||
+	    *frameMaxCellMemberships != *shaderMaxCellMemberships ||
+	    *shaderMaxCandidates != 16u || sliderRange->first != 1 ||
 	    sliderRange->second != static_cast<int>(*shaderMaxCandidates))
 	{
-		std::cerr << "surfel GI slot storage, shader candidate max, and UI range must align at 1..16\n";
+		std::cerr << "compact surfel GI cell storage, shader candidate max, and UI range must align\n";
+		return false;
+	}
+	if (!containsText(surfelCommon,
+	                  "SURFEL_GI_MAX_SURFELS * SURFEL_GI_MAX_CELL_MEMBERSHIPS_PER_SURFEL") ||
+	    !containsText(frameContextHeader,
+	                  "kSurfelGiMaxSurfels * kSurfelGiMaxCellMembershipsPerSurfel"))
+	{
+		std::cerr << "compact surfel GI cell membership capacity must be surfel-count derived\n";
 		return false;
 	}
 
@@ -638,8 +650,7 @@ bool requireSurfelGiSlotCapacityAlignment(const std::string &frameContextHeader,
 	}
 	return containsText(evaluateMain, "clamp(push.maxEvalCandidates, 1u, SURFEL_GI_MAX_EVAL_CANDIDATES)") &&
 	       containsText(evaluateMain, "min(count, configuredCandidateCount)") &&
-	       containsText(evaluateMain, "slot < boundedCandidateCount") &&
-	       containsText(evaluateMain, "cellIndex * SURFEL_GI_CELL_SLOT_COUNT + slot");
+	       containsText(evaluateMain, "slot < boundedCandidateCount");
 }
 
 bool requireIndexedBrightSurfelShaderContracts(const std::string &raygen)
@@ -1156,6 +1167,33 @@ bool testPathTracerReservoirGiMeasurementContract()
 	}
 	if (!requireSurfelGiSlotCapacityAlignment(frameContextHeader, uiSource, surfelCommon, surfelEvaluate))
 	{
+		return false;
+	}
+	const char *requiredCompactSurfelGridSymbols[] = {
+	    "SURFEL_GI_CELL_TO_SURFEL_CAPACITY",
+	    "surfelGiCellTotalMembershipsOffset",
+	    "surfelGiCellAllocatedMembershipsOffset",
+	    "surfelGiCellAllocationOverflowOffset",
+	    "surfelGiCellNonEmptyOffset",
+	    "surfelGiCellMaxPopulationOffset",
+	    "uint offset",
+	    "uint writeCursor"};
+	for (const char *symbol : requiredCompactSurfelGridSymbols)
+	{
+		if (!containsText(surfelCommon, symbol) &&
+		    !containsText(frameContextHeader, symbol) &&
+		    !containsText(engineAuxiliaryHeader, symbol) &&
+		    !containsText(uiHeader, symbol) &&
+		    !containsText(uiSource, symbol))
+		{
+			std::cerr << "missing compact surfel GI grid symbol: " << symbol << "\n";
+			return false;
+		}
+	}
+	if (containsText(surfelCommon, "SURFEL_GI_CELL_SLOT_COUNT") ||
+	    containsText(frameContextHeader, "kSurfelGiCellSlotCount"))
+	{
+		std::cerr << "compact surfel GI grid contract must not expose fixed per-cell slot constants\n";
 		return false;
 	}
 

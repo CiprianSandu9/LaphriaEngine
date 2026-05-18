@@ -6,7 +6,9 @@
 static const uint SURFEL_GI_MAX_SURFELS = 32768u;
 static const uint SURFEL_GI_GRID_DIM = 32u;
 static const uint SURFEL_GI_CELL_COUNT = SURFEL_GI_GRID_DIM * SURFEL_GI_GRID_DIM * SURFEL_GI_GRID_DIM;
-static const uint SURFEL_GI_CELL_SLOT_COUNT = 16u;
+static const uint SURFEL_GI_MAX_CELL_MEMBERSHIPS_PER_SURFEL = 27u;
+static const uint SURFEL_GI_CELL_TO_SURFEL_CAPACITY =
+    SURFEL_GI_MAX_SURFELS * SURFEL_GI_MAX_CELL_MEMBERSHIPS_PER_SURFEL;
 static const uint SURFEL_GI_MAX_EVAL_CANDIDATES = 16u;
 static const float SURFEL_GI_CELL_SIZE = 1.5f;
 static const float SURFEL_GI_MIN_RADIUS = 0.25f;
@@ -24,6 +26,11 @@ static const uint surfelGiEvalAttemptsOffset = 436u;
 static const uint surfelGiEvalCellEmptyOffset = 440u;
 static const uint surfelGiEvalCandidatesOffset = 444u;
 static const uint surfelGiEvalAcceptedOffset = 448u;
+static const uint surfelGiCellTotalMembershipsOffset = 452u;
+static const uint surfelGiCellAllocatedMembershipsOffset = 456u;
+static const uint surfelGiCellAllocationOverflowOffset = 460u;
+static const uint surfelGiCellNonEmptyOffset = 464u;
+static const uint surfelGiCellMaxPopulationOffset = 468u;
 
 struct SurfelGiRecord
 {
@@ -39,9 +46,9 @@ struct SurfelGiRecord
 struct SurfelGiCell
 {
     uint count;
+    uint offset;
+    uint writeCursor;
     uint overflow;
-    uint pad0;
-    uint pad1;
 };
 
 uint flattenSurfelGiCell(int3 cell)

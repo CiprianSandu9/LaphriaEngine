@@ -274,6 +274,11 @@ public:
         uint32_t surfelGiCellInsertAttempts = 0;
         uint32_t surfelGiCellInserted = 0;
         uint32_t surfelGiCellOverflow = 0;
+        uint32_t surfelGiCellTotalMemberships = 0;
+        uint32_t surfelGiCellAllocatedMemberships = 0;
+        uint32_t surfelGiCellAllocationOverflow = 0;
+        uint32_t surfelGiCellNonEmpty = 0;
+        uint32_t surfelGiCellMaxPopulation = 0;
         uint32_t surfelGiEvalAttempts = 0;
         uint32_t surfelGiEvalCandidates = 0;
         uint32_t surfelGiEvalAccepted = 0;
