@@ -227,4 +227,4 @@ ctest --test-dir build -C Debug --output-on-failure
 
 The current ReSTIR GI reservoir should be treated as plausible but not yet proven. Before surfels become a lighting contributor or a trusted proposal source, the estimator must pass the audit gates in `docs/architecture/reservoir-gi-estimator-contract.md`.
 
-In particular, the current `candidateCount / (candidateCount + 1)` reservoir output scale and the local non-RIS `candidateCount` division are audit targets, not assumed-correct normalization.
+In particular, the old `candidateCount / (candidateCount + 1)` reservoir output scale was removed after audit rows showed artificial estimator darkening. The remaining local non-RIS `candidateCount` division is still an audit target, not assumed-correct normalization.

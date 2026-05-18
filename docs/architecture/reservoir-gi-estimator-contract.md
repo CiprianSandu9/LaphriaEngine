@@ -21,7 +21,7 @@ Reference sources:
 
 - `Raygen.slang` stores pre-shaded `ReservoirGiRecord::contribution`, not only secondary radiance plus final reservoir weight.
 - Non-RIS local candidates are divided by `candidateCount`.
-- All returned reservoir contribution is additionally multiplied by `candidateCount / (candidateCount + 1)`.
+- The old `candidateCount / (candidateCount + 1)` reservoir output damping was removed after audit rows showed it was artificial estimator darkening.
 - Temporal/spatial reuse reconnects samples, but stored `targetWeight`, `selectedWeight`, `weightSum`, and `confidenceM` need a single written semantic contract.
 
 ## Audit Acceptance Gates

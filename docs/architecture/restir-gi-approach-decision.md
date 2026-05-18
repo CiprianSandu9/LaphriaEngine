@@ -142,3 +142,9 @@ Kill if:
 - It causes visible temporal lag or instability.
 
 If killed, move to sparse receiver/radiance cache.
+
+## 2026-05-18 Surfel Cleanup Update
+
+The standalone compute `Surfel*.slang` GI prototype is no longer the basis for the sparse receiver/radiance cache direction. It was removed from the active plan to avoid confusing a parallel surfel-lighting experiment with a reservoir-owned proposal/cache system.
+
+The remaining bright-surfel reservoir proposal in `Raygen.slang` will be evaluated separately. It should be kept only if it behaves like useful receiver evidence for reservoir candidate generation and preserves the reservoir estimator audit contract.
