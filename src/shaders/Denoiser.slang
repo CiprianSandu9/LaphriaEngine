@@ -10,7 +10,6 @@
 [[vk::binding(10, 0)]] RWTexture2D<float4> finalOutput;        // final denoised output (last pass only)
 [[vk::binding(13, 0)]] RWTexture2D<float4> analysisReprojectionDebug;
 [[vk::binding(14, 0)]] RWByteAddressBuffer ptAnalysisCounters;
-[[vk::binding(15, 0)]] RWTexture2D<float4> surfelGiDebugView;
 
 struct DenoisePushConstants {
     int   stepSize;    // 1, 2, 4, 8, 16 for iterations 0-4
@@ -37,8 +36,6 @@ static const int DEBUG_AOV_PATH_SECONDARY_SUN     = 15;
 static const int DEBUG_AOV_PATH_BASELINE_CONTINUATION = 16;
 static const int DEBUG_AOV_PATH_RESERVOIR_GI_CONTRIBUTION = 17;
 static const int DEBUG_AOV_PATH_RESERVOIR_GI_ACCEPTED_LUMA = 18;
-static const int DEBUG_AOV_SURFEL_GI_OCCUPANCY = 25;
-static const int DEBUG_AOV_SURFEL_GI_GATHER = 26;
 
 float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
@@ -77,12 +74,6 @@ float3 selectPathTracerDebugAovOutput(uint2 pixel, float3 linearColor)
                push.debugAov == DEBUG_AOV_PATH_BOUNCE_COUNT ||
                push.debugAov == DEBUG_AOV_PATH_SHADOW_VISIBILITY) {
         outColor = saturate(noisyColor[pixel].rgb);
-    } else if (push.debugAov == DEBUG_AOV_SURFEL_GI_OCCUPANCY) {
-        float occupancy = saturate(surfelGiDebugView[pixel].b);
-        outColor = float3(occupancy, occupancy, occupancy);
-    } else if (push.debugAov == DEBUG_AOV_SURFEL_GI_GATHER) {
-        float gatherAcceptedRatio = saturate(surfelGiDebugView[pixel].r);
-        outColor = float3(gatherAcceptedRatio, gatherAcceptedRatio, gatherAcceptedRatio);
     }
     return outColor;
 }

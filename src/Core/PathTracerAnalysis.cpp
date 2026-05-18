@@ -131,21 +131,6 @@ PathTracerHistoryClampResult computePathTracerHistoryClamp(const PathTracerHisto
 	    .halfRange = halfRange};
 }
 
-SurfelGiDiagnosticRatios computeSurfelGiDiagnosticRatios(const SurfelGiDiagnosticCounters &counters)
-{
-	const float generateAttempts = static_cast<float>(std::max(counters.generateAttempts, 1u));
-	const float cellInsertAttempts = static_cast<float>(std::max(counters.cellInsertAttempts, 1u));
-	const float evalAttempts = static_cast<float>(std::max(counters.evalAttempts, 1u));
-	const float evalCandidates = static_cast<float>(std::max(counters.evalCandidates, 1u));
-	return SurfelGiDiagnosticRatios{
-	    .generateAcceptRatio = static_cast<float>(counters.generated) / generateAttempts,
-	    .cellInsertRatio = static_cast<float>(counters.cellInserted) / cellInsertAttempts,
-	    .cellOverflowRatio = static_cast<float>(counters.cellOverflow) / cellInsertAttempts,
-	    .evalCandidateRatio = static_cast<float>(counters.evalCandidates) / evalAttempts,
-	    .evalAcceptedRatio = static_cast<float>(counters.evalAccepted) / evalCandidates,
-	    .evalCellEmptyRatio = static_cast<float>(counters.evalCellEmpty) / evalCandidates};
-}
-
 float computePowerHeuristic(float sampleCountA, float pdfA, float sampleCountB, float pdfB)
 {
 	const float a = std::max(sampleCountA, 0.0f) * std::max(pdfA, 0.0f);

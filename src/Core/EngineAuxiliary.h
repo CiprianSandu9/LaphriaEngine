@@ -145,14 +145,6 @@ struct DenoisePushConstants
 	int32_t debugAtrousIteration;
 };
 
-struct SurfelGiPushConstants
-{
-	uint32_t renderWidth = 1;
-	uint32_t renderHeight = 1;
-	uint32_t maxEvalCandidates = 0;
-	uint32_t _pad1 = 0;
-};
-
 struct PathTracerAnalysisCounters
 {
 	uint32_t pixelCount = 0;
@@ -256,25 +248,6 @@ struct PathTracerAnalysisCounters
 	uint32_t reservoirGiBrightSurfelSelectorRejectReceiverHemisphere = 0;
 	uint32_t reservoirGiBrightSurfelSelectorRejectSurfelHemisphere = 0;
 	uint32_t reservoirGiBrightSurfelSelectorRejectInvalidVector = 0;
-	uint32_t surfelGiClearDispatches = 0;
-	uint32_t surfelGiGenerateAttempts = 0;
-	uint32_t surfelGiGenerated = 0;
-	uint32_t surfelGiGenerateRejectInvalid = 0;
-	uint32_t surfelGiGenerateRejectCoverage = 0;
-	uint32_t surfelGiCellInsertAttempts = 0;
-	uint32_t surfelGiCellInserted = 0;
-	uint32_t surfelGiCellOverflow = 0;
-	uint32_t surfelGiEvalAttempts = 0;
-	uint32_t surfelGiEvalCellEmpty = 0;
-	uint32_t surfelGiEvalCandidates = 0;
-	uint32_t surfelGiEvalAccepted = 0;
-	uint32_t surfelGiCellTotalMemberships = 0;
-	uint32_t surfelGiCellAllocatedMemberships = 0;
-	uint32_t surfelGiCellAllocationOverflow = 0;
-	uint32_t surfelGiCellNonEmpty = 0;
-	uint32_t surfelGiCellMaxPopulation = 0;
-	uint32_t surfelGiEvalDenseCell = 0;
-	uint32_t surfelGiEvalDenseCellSkipped = 0;
 	uint32_t reservoirGiAuditCurrentLumaScaledSum = 0;
 	uint32_t reservoirGiAuditReferenceLumaScaledSum = 0;
 	uint32_t reservoirGiAuditRelativeErrorScaledSum = 0;

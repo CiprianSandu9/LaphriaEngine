@@ -33,13 +33,6 @@ set(SHADER_SOURCES
         "Raygen.slang|main"
         "Reprojection.slang|reprojectionMain"
         "Denoiser.slang|atrousMain"
-        "SurfelClear.slang|surfelClearMain"
-        "SurfelGenerate.slang|surfelGenerateMain"
-        "SurfelCountCells.slang|surfelCountCellsMain"
-        "SurfelAllocateCells.slang|surfelAllocateCellsMain"
-        "SurfelIntegrate.slang|surfelIntegrateMain"
-        "SurfelBuildCells.slang|surfelBuildCellsMain"
-        "SurfelEvaluate.slang|surfelEvaluateMain"
 )
 
 if (CMAKE_CONFIGURATION_TYPES)
@@ -49,9 +42,8 @@ else ()
 endif ()
 set(GENERATED_SPV_FILES "")
 
-set(SURFEL_SHADER_INCLUDE_DEPS
+set(SHADER_INCLUDE_DEPS
         "${SHADER_SOURCE_ROOT}/ShaderCommon.slang"
-        "${SHADER_SOURCE_ROOT}/SurfelCommon.slang"
 )
 
 foreach (SHADER_ENTRY ${SHADER_SOURCES})
@@ -76,7 +68,7 @@ foreach (SHADER_ENTRY ${SHADER_SOURCES})
             -emit-spirv-directly ${ENTRY_POINTS}
             -o ${SHADER_OUTPUT} -fvk-use-entrypoint-name
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            DEPENDS ${SHADER_SOURCE} ${SURFEL_SHADER_INCLUDE_DEPS}
+            DEPENDS ${SHADER_SOURCE} ${SHADER_INCLUDE_DEPS}
             COMMENT "Compiling Slang shader: ${SHADER_NAME}"
             VERBATIM
     )

@@ -1128,9 +1128,7 @@ void UISystem::drawPathTracerDebugLab() {
             "Reservoir GI Candidate Positive Weight",
             "Reservoir GI Selected Weight",
             "Reservoir GI Local No Light",
-            "Reservoir GI Selected Source",
-            "Surfel GI Occupancy",
-            "Surfel GI Gather"};
+            "Reservoir GI Selected Source"};
         int debugAovIdx = static_cast<int>(pathTracerAnalysisSettings.debugAov);
         if (ImGui::Combo("Debug AOV", &debugAovIdx, debugAovs, IM_ARRAYSIZE(debugAovs))) {
             pathTracerAnalysisSettings.debugAov = static_cast<PathTracerDebugAov>(debugAovIdx);
@@ -1189,15 +1187,10 @@ void UISystem::drawPathTracerDebugLab() {
         }
         ImGui::SliderInt("Temporal Reuse Budget Divisor", &pathTracerSettings.reservoirGiTemporalBudgetDivisor, 1, 4);
         ImGui::SliderInt("Spatial Reuse Budget Divisor", &pathTracerSettings.reservoirGiSpatialBudgetDivisor, 1, 4);
-        ImGui::Checkbox("Surfel GI Cache", &pathTracerSettings.enableSurfelGi);
-        ImGui::Checkbox("Surfel GI Debug", &pathTracerSettings.surfelGiDebug);
-        ImGui::SliderInt("Surfel Eval Candidates", &pathTracerSettings.surfelGiMaxEvalCandidates, 1, 16);
         pathTracerSettings.reservoirGiTemporalBudgetDivisor =
             std::clamp(pathTracerSettings.reservoirGiTemporalBudgetDivisor, 1, 4);
         pathTracerSettings.reservoirGiSpatialBudgetDivisor =
             std::clamp(pathTracerSettings.reservoirGiSpatialBudgetDivisor, 1, 4);
-        pathTracerSettings.surfelGiMaxEvalCandidates =
-            std::clamp(pathTracerSettings.surfelGiMaxEvalCandidates, 1, 16);
         ImGui::Text("Reservoir GI Candidates: %u", pathTracerPerfStats.reservoirGiCandidates);
         ImGui::Text("Reservoir GI Accepted: %u", pathTracerPerfStats.reservoirGiAccepted);
         ImGui::Text("Reservoir Candidate Surface Hits: %u (%.2f%%)",
@@ -1324,24 +1317,6 @@ void UISystem::drawPathTracerDebugLab() {
                     pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectSurfelHemisphere);
         ImGui::Text("Reservoir GI Bright Surfel Selector Reject Invalid Vector: %u",
                     pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectInvalidVector);
-        ImGui::Text("Surfel GI Generate Attempts: %u", pathTracerPerfStats.surfelGiGenerateAttempts);
-        ImGui::Text("Surfel GI Generated: %u", pathTracerPerfStats.surfelGiGenerated);
-        ImGui::Text("Surfel GI Generate Reject Invalid: %u", pathTracerPerfStats.surfelGiGenerateRejectInvalid);
-        ImGui::Text("Surfel GI Generate Reject Coverage: %u", pathTracerPerfStats.surfelGiGenerateRejectCoverage);
-        ImGui::Text("Surfel GI Cell Insert Attempts: %u", pathTracerPerfStats.surfelGiCellInsertAttempts);
-        ImGui::Text("Surfel GI Cell Inserted: %u", pathTracerPerfStats.surfelGiCellInserted);
-        ImGui::Text("Surfel GI Cell Overflow: %u", pathTracerPerfStats.surfelGiCellOverflow);
-        ImGui::Text("Surfel GI cell total memberships: %u", pathTracerPerfStats.surfelGiCellTotalMemberships);
-        ImGui::Text("Surfel GI cell allocated memberships: %u", pathTracerPerfStats.surfelGiCellAllocatedMemberships);
-        ImGui::Text("Surfel GI cell allocation overflow: %u", pathTracerPerfStats.surfelGiCellAllocationOverflow);
-        ImGui::Text("Surfel GI non-empty cells: %u", pathTracerPerfStats.surfelGiCellNonEmpty);
-        ImGui::Text("Surfel GI max cell population: %u", pathTracerPerfStats.surfelGiCellMaxPopulation);
-        ImGui::Text("Surfel GI dense cells: %u", pathTracerPerfStats.surfelGiEvalDenseCell);
-        ImGui::Text("Surfel GI dense cells skipped: %u", pathTracerPerfStats.surfelGiEvalDenseCellSkipped);
-        ImGui::Text("Surfel GI Eval Attempts: %u", pathTracerPerfStats.surfelGiEvalAttempts);
-        ImGui::Text("Surfel GI Eval Candidates: %u", pathTracerPerfStats.surfelGiEvalCandidates);
-        ImGui::Text("Surfel GI Eval Accepted: %u", pathTracerPerfStats.surfelGiEvalAccepted);
-        ImGui::Text("Surfel GI Eval Empty Cells: %u", pathTracerPerfStats.surfelGiEvalCellEmpty);
         ImGui::Text("Reservoir GI Temporal: accepted %u | rejected %u",
                     pathTracerPerfStats.reservoirGiTemporalAccepted,
                     pathTracerPerfStats.reservoirGiTemporalRejected);

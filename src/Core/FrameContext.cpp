@@ -42,15 +42,9 @@ FrameContext::~FrameContext()
 	destroyImagesAndReleaseAllocations(historyMoments);
 	destroyImagesAndReleaseAllocations(atrousTemp);
 	destroyImagesAndReleaseAllocations(ptReprojectionDebug);
-	surfelGiDebugImageViews.clear();
-	destroyImagesAndReleaseAllocations(surfelGiDebugImages);
 
 	destroyBuffersAndReleaseAllocations(uniformBuffers);
 	destroyBuffersAndReleaseAllocations(ptAnalysisCounterBuffers);
-	destroyBuffersAndReleaseAllocations(surfelGiRecordBuffers);
-	destroyBuffersAndReleaseAllocations(surfelGiCellBuffers);
-	destroyBuffersAndReleaseAllocations(surfelGiCellSlotBuffers);
-	destroyBuffersAndReleaseAllocations(surfelGiCounterBuffers);
 	destroyBuffersAndReleaseAllocations(reservoirGiCurrentBuffers);
 	destroyBuffersAndReleaseAllocations(reservoirGiReceiverCacheBuffers);
 	destroyBuffersAndReleaseAllocations(reservoirGiBrightSurfelBuffers);
@@ -74,7 +68,6 @@ void FrameContext::init(VulkanDevice &dev, SwapchainManager &swapchain) {
     createReservoirGiReceiverCacheBuffers(dev);
     createReservoirGiBrightSurfelBuffers(dev);
     createPathTracerAnalysisBuffers(dev);
-    createSurfelGiBuffers(dev, swapchain);
     // Shadow resources are extent-independent and live for the engine's full lifetime.
     createShadowResources(dev);
 
@@ -94,8 +87,6 @@ void FrameContext::cleanupSwapChainDependents() {
     destroyImagesAndReleaseAllocations(historyMoments);
     destroyImagesAndReleaseAllocations(atrousTemp);
     destroyImagesAndReleaseAllocations(ptReprojectionDebug);
-    surfelGiDebugImageViews.clear();
-    destroyImagesAndReleaseAllocations(surfelGiDebugImages);
     destroyBuffersAndReleaseAllocations(reservoirGiCurrentBuffers);
     destroyBuffersAndReleaseAllocations(reservoirGiReceiverCacheBuffers);
     destroyBuffersAndReleaseAllocations(reservoirGiBrightSurfelBuffers);
@@ -124,7 +115,6 @@ void FrameContext::cleanupSwapChainDependents() {
     atrousTemp.clear();
     ptReprojectionDebugViews.clear();
     ptReprojectionDebug.clear();
-    surfelGiDebugImages.clear();
     reservoirGiCurrentBuffers.clear();
     reservoirGiCurrentMapped.clear();
     reservoirGiCurrentBufferSize = kReservoirGiHeaderSize;
@@ -149,7 +139,6 @@ void FrameContext::recreate(VulkanDevice &dev, SwapchainManager &swapchain) {
     createReservoirGiCurrentBuffers(dev, swapchain);
     createReservoirGiReceiverCacheBuffers(dev);
     createReservoirGiBrightSurfelBuffers(dev);
-    createSurfelGiBuffers(dev, swapchain);
 }
 
 void FrameContext::createCommandPool(const VulkanDevice &dev) {
@@ -704,131 +693,6 @@ void FrameContext::createPathTracerAnalysisBuffers(const VulkanDevice &dev)
         ptAnalysisCounterMapped.push_back(buffer.memory.mapMemory(0, counterBufferSize));
         std::memset(ptAnalysisCounterMapped.back(), 0, static_cast<size_t>(counterBufferSize));
         ptAnalysisCounterBuffers.push_back(std::move(buffer));
-    }
-}
-
-void FrameContext::createSurfelGiBuffers(const VulkanDevice &dev, const SwapchainManager &swapchain)
-{
-    const bool createFixedBuffers =
-        surfelGiRecordBuffers.size() != MAX_FRAMES_IN_FLIGHT ||
-        surfelGiCellBuffers.size() != MAX_FRAMES_IN_FLIGHT ||
-        surfelGiCellSlotBuffers.size() != MAX_FRAMES_IN_FLIGHT ||
-        surfelGiCounterBuffers.size() != MAX_FRAMES_IN_FLIGHT;
-
-    if (createFixedBuffers) {
-        destroyBuffersAndReleaseAllocations(surfelGiRecordBuffers);
-        destroyBuffersAndReleaseAllocations(surfelGiCellBuffers);
-        destroyBuffersAndReleaseAllocations(surfelGiCellSlotBuffers);
-        destroyBuffersAndReleaseAllocations(surfelGiCounterBuffers);
-        surfelGiRecordBuffers.clear();
-        surfelGiCellBuffers.clear();
-        surfelGiCellSlotBuffers.clear();
-        surfelGiCounterBuffers.clear();
-    }
-
-    surfelGiDebugImageViews.clear();
-    destroyImagesAndReleaseAllocations(surfelGiDebugImages);
-    surfelGiDebugImages.clear();
-
-    if (createFixedBuffers) {
-        surfelGiRecordBuffers.reserve(MAX_FRAMES_IN_FLIGHT);
-        surfelGiCellBuffers.reserve(MAX_FRAMES_IN_FLIGHT);
-        surfelGiCellSlotBuffers.reserve(MAX_FRAMES_IN_FLIGHT);
-        surfelGiCounterBuffers.reserve(MAX_FRAMES_IN_FLIGHT);
-    }
-    surfelGiDebugImages.reserve(MAX_FRAMES_IN_FLIGHT);
-    surfelGiDebugImageViews.reserve(MAX_FRAMES_IN_FLIGHT);
-
-    constexpr vk::DeviceSize recordBufferSize =
-        static_cast<vk::DeviceSize>(kSurfelGiMaxSurfels) * kSurfelGiRecordSize;
-    constexpr vk::DeviceSize cellBufferSize =
-        static_cast<vk::DeviceSize>(kSurfelGiCellCount) * kSurfelGiCellSize;
-    constexpr vk::DeviceSize cellToSurfelBufferSize =
-        static_cast<vk::DeviceSize>(kSurfelGiCellToSurfelCapacity) * kSurfelGiCellToSurfelIndexSize;
-    constexpr vk::DeviceSize counterBufferSize = kSurfelGiCounterSize;
-
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        if (createFixedBuffers) {
-            VulkanUtils::VmaBuffer recordBuffer{};
-            VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, recordBufferSize,
-                                      vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-                                      vk::MemoryPropertyFlagBits::eDeviceLocal,
-                                      recordBuffer);
-            surfelGiRecordBuffers.push_back(std::move(recordBuffer));
-
-            VulkanUtils::VmaBuffer cellBuffer{};
-            VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, cellBufferSize,
-                                      vk::BufferUsageFlagBits::eStorageBuffer,
-                                      vk::MemoryPropertyFlagBits::eDeviceLocal,
-                                      cellBuffer);
-            surfelGiCellBuffers.push_back(std::move(cellBuffer));
-
-            VulkanUtils::VmaBuffer cellSlotBuffer{};
-            VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, cellToSurfelBufferSize,
-                                      vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-                                      vk::MemoryPropertyFlagBits::eDeviceLocal,
-                                      cellSlotBuffer);
-            surfelGiCellSlotBuffers.push_back(std::move(cellSlotBuffer));
-
-            VulkanUtils::VmaBuffer counterBuffer{};
-            VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, counterBufferSize,
-                                      vk::BufferUsageFlagBits::eStorageBuffer,
-                                      vk::MemoryPropertyFlagBits::eDeviceLocal,
-                                      counterBuffer);
-            surfelGiCounterBuffers.push_back(std::move(counterBuffer));
-        }
-
-        VulkanUtils::VmaImage debugImage{};
-        VulkanUtils::createImage(dev.logicalDevice, dev.physicalDevice,
-                                 swapchain.extent.width, swapchain.extent.height,
-                                 vk::Format::eR16G16B16A16Sfloat, vk::ImageTiling::eOptimal,
-                                 vk::ImageUsageFlagBits::eStorage,
-                                 vk::MemoryPropertyFlagBits::eDeviceLocal,
-                                 debugImage);
-        surfelGiDebugImages.push_back(std::move(debugImage));
-        surfelGiDebugImageViews.push_back(VulkanUtils::createImageView(dev.logicalDevice,
-                                                                       *surfelGiDebugImages.back(),
-                                                                       vk::Format::eR16G16B16A16Sfloat,
-                                                                       vk::ImageAspectFlagBits::eColor));
-    }
-
-    {
-        auto cmd = VulkanUtils::beginSingleTimeCommands(dev.logicalDevice, commandPool);
-        if (createFixedBuffers) {
-            std::vector<vk::BufferMemoryBarrier2> recordInitBarriers;
-            recordInitBarriers.reserve(surfelGiRecordBuffers.size() + surfelGiCellSlotBuffers.size());
-            for (auto &buffer : surfelGiRecordBuffers) {
-                cmd.fillBuffer(*buffer, 0, recordBufferSize, 0u);
-                recordInitBarriers.push_back(vk::BufferMemoryBarrier2{
-                    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
-                    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-                    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-                    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-                    .buffer = *buffer,
-                    .offset = 0,
-                    .size = recordBufferSize});
-            }
-            for (auto &buffer : surfelGiCellSlotBuffers) {
-                cmd.fillBuffer(*buffer, 0, cellToSurfelBufferSize, 0xffffffffu);
-                recordInitBarriers.push_back(vk::BufferMemoryBarrier2{
-                    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
-                    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-                    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-                    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-                    .buffer = *buffer,
-                    .offset = 0,
-                    .size = cellToSurfelBufferSize});
-            }
-            vk::DependencyInfo dependency{
-                .bufferMemoryBarrierCount = static_cast<uint32_t>(recordInitBarriers.size()),
-                .pBufferMemoryBarriers = recordInitBarriers.data()};
-            cmd.pipelineBarrier2(dependency);
-        }
-        for (auto &img : surfelGiDebugImages) {
-            VulkanUtils::recordImageLayoutTransition(cmd, *img,
-                                                     vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
-        }
-        VulkanUtils::endSingleTimeCommands(dev.logicalDevice, dev.queue, commandPool, cmd);
     }
 }
 

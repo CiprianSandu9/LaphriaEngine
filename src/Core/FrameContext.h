@@ -96,24 +96,6 @@ class FrameContext
 	std::vector<Laphria::VulkanUtils::VmaBuffer> ptAnalysisCounterBuffers;
 	std::vector<void *>                          ptAnalysisCounterMapped;
 
-	static constexpr uint32_t       kSurfelGiMaxSurfels = 32768;
-	static constexpr uint32_t       kSurfelGiGridDim = 64;
-	static constexpr uint32_t       kSurfelGiCellCount = kSurfelGiGridDim * kSurfelGiGridDim * kSurfelGiGridDim;
-	static constexpr uint32_t       kSurfelGiMaxCellMembershipsPerSurfel = 27;
-	static constexpr uint32_t       kSurfelGiCellToSurfelCapacity =
-	    kSurfelGiMaxSurfels * kSurfelGiMaxCellMembershipsPerSurfel;
-	static constexpr vk::DeviceSize kSurfelGiRecordSize = 64;
-	static constexpr vk::DeviceSize kSurfelGiCellSize = 16;
-	static constexpr vk::DeviceSize kSurfelGiCellToSurfelIndexSize = 4;
-	static constexpr vk::DeviceSize kSurfelGiCounterSize = 64;
-
-	std::vector<Laphria::VulkanUtils::VmaBuffer> surfelGiRecordBuffers;
-	std::vector<Laphria::VulkanUtils::VmaBuffer> surfelGiCellBuffers;
-	std::vector<Laphria::VulkanUtils::VmaBuffer> surfelGiCellSlotBuffers;
-	std::vector<Laphria::VulkanUtils::VmaBuffer> surfelGiCounterBuffers;
-	std::vector<Laphria::VulkanUtils::VmaImage>  surfelGiDebugImages;
-	std::vector<vk::raii::ImageView>             surfelGiDebugImageViews;
-
 	static constexpr vk::DeviceSize kReservoirGiHeaderSize = 16;
 	static constexpr vk::DeviceSize kReservoirGiRecordSize = 160;
 	static constexpr uint32_t       kReservoirGiCurrentCapacity = 262144;
@@ -169,7 +151,6 @@ class FrameContext
 	void createReservoirGiCurrentBuffers(const VulkanDevice &dev, const SwapchainManager &swapchain);
 	void createReservoirGiReceiverCacheBuffers(const VulkanDevice &dev);
 	void createReservoirGiBrightSurfelBuffers(const VulkanDevice &dev);
-	void createSurfelGiBuffers(const VulkanDevice &dev, const SwapchainManager &swapchain);
 
 	void createUniformBuffers(const VulkanDevice &dev);
 	void createTLASResources(VulkanDevice &dev);

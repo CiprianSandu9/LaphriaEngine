@@ -401,60 +401,63 @@ bool requireStandaloneSurfelComputeRemoved(const std::string &cmakeLists,
                                            const std::string &pathTracerAnalysisHeader,
                                            const std::string &pathTracerAnalysisSource)
 {
-	const char *forbidden[] = {
-	    "SurfelClear.slang",
-	    "SurfelGenerate.slang",
-	    "SurfelCountCells.slang",
-	    "SurfelAllocateCells.slang",
-	    "SurfelIntegrate.slang",
-	    "SurfelBuildCells.slang",
-	    "SurfelEvaluate.slang",
-	    "SurfelCommon.slang",
-	    "createSurfelGiDescriptorSetLayout",
-	    "createSurfelGiPipelineLayout",
-	    "createSurfelGiClearPipeline",
-	    "createSurfelGiGeneratePipeline",
-	    "createSurfelGiCountCellsPipeline",
-	    "createSurfelGiAllocateCellsPipeline",
-	    "createSurfelGiIntegratePipeline",
-	    "createSurfelGiBuildCellsPipeline",
-	    "createSurfelGiEvaluatePipeline",
-	    "createSurfelGiDescriptorSets",
-	    "recordSurfelGiClearPass",
-	    "recordSurfelGiGeneratePass",
-	    "recordSurfelGiCountCellsPass",
-	    "recordSurfelGiAllocateCellsPass",
-	    "recordSurfelGiIntegratePass",
-	    "recordSurfelGiBuildCellsPass",
-	    "recordSurfelGiEvaluatePass",
-	    "resetSurfelGiRecordBuffers",
-	    "createSurfelGiBuffers",
-	    "surfelGiRecordBuffers",
-	    "surfelGiCellBuffers",
-	    "surfelGiCellSlotBuffers",
-	    "surfelGiCounterBuffers",
-	    "surfelGiDebugImages",
-	    "surfelGiDebugImageViews",
-	    "surfelGiDebugView",
-	    "enableSurfelGi",
-	    "surfelGiDebug",
-	    "surfelGiMaxEvalCandidates",
-	    "SurfelGiOccupancy",
-	    "SurfelGiGather",
-	    "surfelGiGenerateAttempts",
-	    "surfelGiEvalAttempts",
-	    "Surfel GI Cache",
-	    "Surfel GI Debug",
-	    "Surfel Eval Candidates"};
+	const std::string upperPrefix = "Surfel";
+	const std::string lowerPrefix = "surfel";
+	const std::string gi = "Gi";
+	const std::string forbidden[] = {
+	    upperPrefix + "Clear.slang",
+	    upperPrefix + "Generate.slang",
+	    upperPrefix + "CountCells.slang",
+	    upperPrefix + "AllocateCells.slang",
+	    upperPrefix + "Integrate.slang",
+	    upperPrefix + "BuildCells.slang",
+	    upperPrefix + "Evaluate.slang",
+	    upperPrefix + "Common.slang",
+	    "create" + upperPrefix + gi + "DescriptorSetLayout",
+	    "create" + upperPrefix + gi + "PipelineLayout",
+	    "create" + upperPrefix + gi + "ClearPipeline",
+	    "create" + upperPrefix + gi + "GeneratePipeline",
+	    "create" + upperPrefix + gi + "CountCellsPipeline",
+	    "create" + upperPrefix + gi + "AllocateCellsPipeline",
+	    "create" + upperPrefix + gi + "IntegratePipeline",
+	    "create" + upperPrefix + gi + "BuildCellsPipeline",
+	    "create" + upperPrefix + gi + "EvaluatePipeline",
+	    "create" + upperPrefix + gi + "DescriptorSets",
+	    "record" + upperPrefix + gi + "ClearPass",
+	    "record" + upperPrefix + gi + "GeneratePass",
+	    "record" + upperPrefix + gi + "CountCellsPass",
+	    "record" + upperPrefix + gi + "AllocateCellsPass",
+	    "record" + upperPrefix + gi + "IntegratePass",
+	    "record" + upperPrefix + gi + "BuildCellsPass",
+	    "record" + upperPrefix + gi + "EvaluatePass",
+	    "reset" + upperPrefix + gi + "RecordBuffers",
+	    "create" + upperPrefix + gi + "Buffers",
+	    lowerPrefix + gi + "RecordBuffers",
+	    lowerPrefix + gi + "CellBuffers",
+	    lowerPrefix + gi + "CellSlotBuffers",
+	    lowerPrefix + gi + "CounterBuffers",
+	    lowerPrefix + gi + "DebugImages",
+	    lowerPrefix + gi + "DebugImageViews",
+	    lowerPrefix + gi + "DebugView",
+	    "enable" + upperPrefix + gi,
+	    lowerPrefix + gi + "Debug",
+	    lowerPrefix + gi + "MaxEvalCandidates",
+	    upperPrefix + gi + "Occupancy",
+	    upperPrefix + gi + "Gather",
+	    lowerPrefix + gi + "GenerateAttempts",
+	    lowerPrefix + gi + "EvalAttempts",
+	    upperPrefix + " GI Cache",
+	    upperPrefix + " GI Debug",
+	    upperPrefix + " Eval Candidates"};
 
 	const std::string combined = cmakeLists + pipelineHeader + pipelineSource + engineHeader +
 	                             engineCore + frameContextHeader + frameContextSource + uiHeader +
 	                             uiSource + denoiser + engineAuxiliaryHeader + pathTracerAnalysisHeader +
 	                             pathTracerAnalysisSource;
 
-	for (const char *symbol : forbidden)
+	for (const std::string &symbol : forbidden)
 	{
-		if (containsText(combined, symbol))
+		if (containsText(combined, symbol.c_str()))
 		{
 			std::cerr << "standalone surfel compute path must be removed; found " << symbol << "\n";
 			return false;

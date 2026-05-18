@@ -493,13 +493,6 @@ void EngineCore::initVulkan()
 	pipelines.createRayTracingPipeline(vulkan);
 	pipelines.createShaderBindingTable(vulkan);
 	pipelines.createDenoiserPipelines(vulkan);
-	pipelines.createSurfelGiClearPipeline(vulkan);
-	pipelines.createSurfelGiGeneratePipeline(vulkan);
-	pipelines.createSurfelGiCountCellsPipeline(vulkan);
-	pipelines.createSurfelGiAllocateCellsPipeline(vulkan);
-	pipelines.createSurfelGiIntegratePipeline(vulkan);
-	pipelines.createSurfelGiBuildCellsPipeline(vulkan);
-	pipelines.createSurfelGiEvaluatePipeline(vulkan);
 	pipelines.createClassicRTPipeline(vulkan);
 	pipelines.createClassicRTShaderBindingTable(vulkan);
 
@@ -509,7 +502,6 @@ void EngineCore::initVulkan()
 	createComputeDescriptorSets();
 	createPhysicsDescriptorSets();
 	createRayTracingDescriptorSets();
-	createSurfelGiDescriptorSets();
 	createDenoiserDescriptorSets();
 	createTimestampQueryPool();
 }
@@ -714,7 +706,6 @@ void EngineCore::recreateSwapChain()
 	// so all three must be rewritten after frames.recreate().
 	createComputeDescriptorSets();
 	createRayTracingDescriptorSets();
-	createSurfelGiDescriptorSets();
 	createDenoiserDescriptorSets();
 	ptForceHistoryReset = true;
 }
@@ -1043,7 +1034,7 @@ void EngineCore::createDenoiserDescriptorSets()
 	}
 
 	std::vector<vk::DescriptorPoolSize> poolSizes = {
-	    {vk::DescriptorType::eStorageImage, 15 * MAX_FRAMES_IN_FLIGHT},
+	    {vk::DescriptorType::eStorageImage, 14 * MAX_FRAMES_IN_FLIGHT},
 	    {vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT}};
 	vk::DescriptorPoolCreateInfo poolInfo{
 	    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
@@ -1065,7 +1056,7 @@ void EngineCore::createDenoiserDescriptorSets()
 		const size_t atrousBase = i * 2;
 
 		// Build image infos in binding order.
-		vk::DescriptorImageInfo infos[15] = {
+		vk::DescriptorImageInfo infos[14] = {
 		    {.imageView = *frames.rayTracingOutputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral},          // 0: noisy colour
 		    {.imageView = *frames.rtGBufferNormalsViews[i], .imageLayout = vk::ImageLayout::eGeneral},               // 1: current normals
 		    {.imageView = *frames.rtGBufferDepthViews[i], .imageLayout = vk::ImageLayout::eGeneral},                 // 2: current depth
@@ -1080,7 +1071,6 @@ void EngineCore::createDenoiserDescriptorSets()
 		    {.imageView = *frames.rtGBufferNormalsViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral},        // 11: previous-frame normals
 		    {.imageView = *frames.rtGBufferDepthViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral},          // 12: previous-frame depth
 		    {.imageView = *frames.ptReprojectionDebugViews[i], .imageLayout = vk::ImageLayout::eGeneral},            // 13: reprojection debug channels
-		    {.imageView = *frames.surfelGiDebugImageViews[i], .imageLayout = vk::ImageLayout::eGeneral},             // 15: surfel GI debug view
 		};
 
 		vk::DescriptorBufferInfo analysisCounterInfo{
@@ -1089,7 +1079,7 @@ void EngineCore::createDenoiserDescriptorSets()
 		    .range  = sizeof(Laphria::PathTracerAnalysisCounters)};
 
 		std::vector<vk::WriteDescriptorSet> writes;
-		writes.reserve(16);
+		writes.reserve(15);
 		for (uint32_t b = 0; b < 14; ++b)
 		{
 			writes.push_back(vk::WriteDescriptorSet{
@@ -1107,85 +1097,6 @@ void EngineCore::createDenoiserDescriptorSets()
 		    .descriptorCount = 1,
 		    .descriptorType  = vk::DescriptorType::eStorageBuffer,
 		    .pBufferInfo     = &analysisCounterInfo});
-		writes.push_back(vk::WriteDescriptorSet{
-		    .dstSet          = *denoiserDescriptorSets[i],
-		    .dstBinding      = 15,
-		    .dstArrayElement = 0,
-		    .descriptorCount = 1,
-		    .descriptorType  = vk::DescriptorType::eStorageImage,
-		    .pImageInfo      = &infos[14]});
-		vulkan.logicalDevice.updateDescriptorSets(writes, {});
-	}
-}
-
-void EngineCore::createSurfelGiDescriptorSets()
-{
-	surfelGiDescriptorSets.clear();
-	if (*surfelGiDescriptorPool)
-	{
-		surfelGiDescriptorPool = nullptr;
-	}
-
-	std::array<vk::DescriptorPoolSize, 2> poolSizes = {
-	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT * 5},
-	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, MAX_FRAMES_IN_FLIGHT * 3}};
-	vk::DescriptorPoolCreateInfo poolInfo{
-	    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-	    .maxSets       = MAX_FRAMES_IN_FLIGHT,
-	    .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
-	    .pPoolSizes    = poolSizes.data()};
-	surfelGiDescriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
-
-	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *pipelines.surfelGiDescriptorSetLayout);
-	vk::DescriptorSetAllocateInfo        allocInfo{
-	           .descriptorPool     = *surfelGiDescriptorPool,
-	           .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
-	           .pSetLayouts        = layouts.data()};
-	surfelGiDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
-
-	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
-	{
-		std::array<vk::DescriptorBufferInfo, 5> bufferInfos = {
-		    vk::DescriptorBufferInfo{
-		        .buffer = *frames.surfelGiRecordBuffers[i],
-		        .offset = 0,
-		        .range  = FrameContext::kSurfelGiMaxSurfels * FrameContext::kSurfelGiRecordSize},
-		    vk::DescriptorBufferInfo{
-		        .buffer = *frames.surfelGiCellBuffers[i],
-		        .offset = 0,
-		        .range  = FrameContext::kSurfelGiCellCount * FrameContext::kSurfelGiCellSize},
-		    vk::DescriptorBufferInfo{
-		        .buffer = *frames.surfelGiCellSlotBuffers[i],
-		        .offset = 0,
-		        .range  = FrameContext::kSurfelGiCellToSurfelCapacity * FrameContext::kSurfelGiCellToSurfelIndexSize},
-		    vk::DescriptorBufferInfo{
-		        .buffer = *frames.surfelGiCounterBuffers[i],
-		        .offset = 0,
-		        .range  = FrameContext::kSurfelGiCounterSize},
-		    vk::DescriptorBufferInfo{
-		        .buffer = *frames.ptAnalysisCounterBuffers[i],
-		        .offset = 0,
-		        .range  = sizeof(Laphria::PathTracerAnalysisCounters)}};
-		std::array<vk::DescriptorImageInfo, 3> imageInfos = {
-		    vk::DescriptorImageInfo{
-		        .imageView   = *frames.surfelGiDebugImageViews[i],
-		        .imageLayout = vk::ImageLayout::eGeneral},
-		    vk::DescriptorImageInfo{
-		        .imageView   = *frames.rtGBufferNormalsViews[i],
-		        .imageLayout = vk::ImageLayout::eGeneral},
-		    vk::DescriptorImageInfo{
-		        .imageView   = *frames.rtGBufferDepthViews[i],
-		        .imageLayout = vk::ImageLayout::eGeneral}};
-
-		std::array<vk::WriteDescriptorSet, 8> writes = {
-		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &bufferInfos[0]},
-		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &bufferInfos[1]},
-		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &bufferInfos[2]},
-		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 3, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &bufferInfos[3]},
-		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 4, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &bufferInfos[4]},
-		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 5, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfos[0]},
-		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 6, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfos[1]},
-		    vk::WriteDescriptorSet{.dstSet = *surfelGiDescriptorSets[i], .dstBinding = 7, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfos[2]}};
 		vulkan.logicalDevice.updateDescriptorSets(writes, {});
 	}
 }
@@ -1505,326 +1416,6 @@ void EngineCore::recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &com
 	    vk::ImageAspectFlagBits::eColor);
 }
 
-void EngineCore::recordSurfelGiClearPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
-{
-	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiClearPipeline);
-	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-	                                 *pipelines.surfelGiPipelineLayout, 0,
-	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
-
-	constexpr uint32_t clearItems = std::max(
-	    FrameContext::kSurfelGiCellToSurfelCapacity,
-	    std::max(FrameContext::kSurfelGiCellCount, FrameContext::kSurfelGiMaxSurfels));
-	constexpr uint32_t groups = (clearItems + 127u) / 128u;
-	commandBuffer.dispatch(groups, 1, 1);
-
-	std::array<vk::BufferMemoryBarrier2, 5> barriers = {
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiRecordBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiMaxSurfels * FrameContext::kSurfelGiRecordSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiCellBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiCellCount * FrameContext::kSurfelGiCellSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiCellSlotBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiCellToSurfelCapacity * FrameContext::kSurfelGiCellToSurfelIndexSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiCounterBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiCounterSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.ptAnalysisCounterBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = sizeof(Laphria::PathTracerAnalysisCounters)}};
-	vk::DependencyInfo dependency{
-	    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
-	    .pBufferMemoryBarriers    = barriers.data()};
-	commandBuffer.pipelineBarrier2(dependency);
-}
-
-void EngineCore::recordSurfelGiGeneratePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
-{
-	const float    clampedScale   = std::clamp(ui.pathTracerSettings.resolutionScale, 0.5f, 1.0f);
-	const float    secondaryScale = ui.pathTracerSettings.reduceSecondaryEffects ? 0.90f : 1.0f;
-	const float    effectiveScale = std::clamp(clampedScale * secondaryScale, 0.5f, 1.0f);
-	const uint32_t rtWidth        = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.width) * effectiveScale));
-	const uint32_t rtHeight       = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.height) * effectiveScale));
-
-	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiGeneratePipeline);
-	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-	                                 *pipelines.surfelGiPipelineLayout, 0,
-	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
-	SurfelGiPushConstants pushConstants{
-	    .renderWidth  = rtWidth,
-	    .renderHeight = rtHeight};
-	commandBuffer.pushConstants<SurfelGiPushConstants>(*pipelines.surfelGiPipelineLayout,
-	                                                   vk::ShaderStageFlagBits::eCompute, 0,
-	                                                   pushConstants);
-	commandBuffer.dispatch((rtWidth + 7u) / 8u, (rtHeight + 7u) / 8u, 1);
-
-	std::array<vk::BufferMemoryBarrier2, 3> barriers = {
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiRecordBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiMaxSurfels * FrameContext::kSurfelGiRecordSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiCounterBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiCounterSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.ptAnalysisCounterBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = sizeof(Laphria::PathTracerAnalysisCounters)}};
-	vk::DependencyInfo dependency{
-	    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
-	    .pBufferMemoryBarriers    = barriers.data()};
-	commandBuffer.pipelineBarrier2(dependency);
-}
-
-void EngineCore::recordSurfelGiCountCellsPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
-{
-	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiCountCellsPipeline);
-	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-	                                 *pipelines.surfelGiPipelineLayout, 0,
-	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
-
-	constexpr uint32_t groups = (FrameContext::kSurfelGiMaxSurfels + 127u) / 128u;
-	commandBuffer.dispatch(groups, 1, 1);
-
-	std::array<vk::BufferMemoryBarrier2, 3> barriers = {
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
-	        .buffer        = *frames.surfelGiRecordBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiMaxSurfels * FrameContext::kSurfelGiRecordSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiCellBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiCellCount * FrameContext::kSurfelGiCellSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.ptAnalysisCounterBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = sizeof(Laphria::PathTracerAnalysisCounters)}};
-	vk::DependencyInfo dependency{
-	    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
-	    .pBufferMemoryBarriers    = barriers.data()};
-	commandBuffer.pipelineBarrier2(dependency);
-}
-
-void EngineCore::recordSurfelGiAllocateCellsPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
-{
-	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiAllocateCellsPipeline);
-	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-	                                 *pipelines.surfelGiPipelineLayout, 0,
-	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
-
-	constexpr uint32_t groups = (FrameContext::kSurfelGiCellCount + 127u) / 128u;
-	commandBuffer.dispatch(groups, 1, 1);
-
-	std::array<vk::BufferMemoryBarrier2, 3> barriers = {
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiCellBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiCellCount * FrameContext::kSurfelGiCellSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiCounterBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiCounterSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.ptAnalysisCounterBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = sizeof(Laphria::PathTracerAnalysisCounters)}};
-	vk::DependencyInfo dependency{
-	    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
-	    .pBufferMemoryBarriers    = barriers.data()};
-	commandBuffer.pipelineBarrier2(dependency);
-}
-
-void EngineCore::recordSurfelGiIntegratePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
-{
-	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiIntegratePipeline);
-	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-	                                 *pipelines.surfelGiPipelineLayout, 0,
-	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
-
-	constexpr uint32_t groups = (FrameContext::kSurfelGiMaxSurfels + 127u) / 128u;
-	commandBuffer.dispatch(groups, 1, 1);
-
-	std::array<vk::BufferMemoryBarrier2, 1> barriers = {
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiRecordBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiMaxSurfels * FrameContext::kSurfelGiRecordSize}};
-	vk::DependencyInfo dependency{
-	    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
-	    .pBufferMemoryBarriers    = barriers.data()};
-	commandBuffer.pipelineBarrier2(dependency);
-}
-
-void EngineCore::recordSurfelGiBuildCellsPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
-{
-	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiBuildCellsPipeline);
-	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-	                                 *pipelines.surfelGiPipelineLayout, 0,
-	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
-
-	constexpr uint32_t groups = (FrameContext::kSurfelGiMaxSurfels + 127u) / 128u;
-	commandBuffer.dispatch(groups, 1, 1);
-
-	std::array<vk::BufferMemoryBarrier2, 4> barriers = {
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiRecordBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiMaxSurfels * FrameContext::kSurfelGiRecordSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiCellBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiCellCount * FrameContext::kSurfelGiCellSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.surfelGiCellSlotBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiCellToSurfelCapacity * FrameContext::kSurfelGiCellToSurfelIndexSize},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	        .buffer        = *frames.ptAnalysisCounterBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = sizeof(Laphria::PathTracerAnalysisCounters)}};
-	vk::DependencyInfo dependency{
-	    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
-	    .pBufferMemoryBarriers    = barriers.data()};
-	commandBuffer.pipelineBarrier2(dependency);
-}
-
-void EngineCore::recordSurfelGiEvaluatePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const
-{
-	const float    clampedScale   = std::clamp(ui.pathTracerSettings.resolutionScale, 0.5f, 1.0f);
-	const float    secondaryScale = ui.pathTracerSettings.reduceSecondaryEffects ? 0.90f : 1.0f;
-	const float    effectiveScale = std::clamp(clampedScale * secondaryScale, 0.5f, 1.0f);
-	const uint32_t rtWidth        = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.width) * effectiveScale));
-	const uint32_t rtHeight       = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.height) * effectiveScale));
-
-	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.surfelGiEvaluatePipeline);
-	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-	                                 *pipelines.surfelGiPipelineLayout, 0,
-	                                 {*surfelGiDescriptorSets[frameIndex], *descriptorSets[frameIndex]}, nullptr);
-	SurfelGiPushConstants pushConstants{
-	    .renderWidth  = rtWidth,
-	    .renderHeight = rtHeight,
-	    .maxEvalCandidates = static_cast<uint32_t>(std::max(ui.pathTracerSettings.surfelGiMaxEvalCandidates, 0))};
-	commandBuffer.pushConstants<SurfelGiPushConstants>(*pipelines.surfelGiPipelineLayout,
-	                                                   vk::ShaderStageFlagBits::eCompute, 0,
-	                                                   pushConstants);
-	commandBuffer.dispatch((rtWidth + 7u) / 8u, (rtHeight + 7u) / 8u, 1);
-
-	std::array<vk::BufferMemoryBarrier2, 2> bufferBarriers = {
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eHost,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eHostRead,
-	        .buffer        = *frames.ptAnalysisCounterBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = sizeof(Laphria::PathTracerAnalysisCounters)},
-	    vk::BufferMemoryBarrier2{
-	        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
-	        .buffer        = *frames.surfelGiRecordBuffers[frameIndex],
-	        .offset        = 0,
-	        .size          = FrameContext::kSurfelGiMaxSurfels * FrameContext::kSurfelGiRecordSize}};
-
-	vk::DependencyInfo dependency{
-	    .bufferMemoryBarrierCount = static_cast<uint32_t>(bufferBarriers.size()),
-	    .pBufferMemoryBarriers    = bufferBarriers.data()};
-	commandBuffer.pipelineBarrier2(dependency);
-
-	transition_image_layout(*frames.surfelGiDebugImages[frameIndex],
-	                        vk::ImageLayout::eGeneral, vk::ImageLayout::eGeneral,
-	                        vk::AccessFlagBits2::eShaderWrite,
-	                        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
-	                        vk::PipelineStageFlagBits2::eComputeShader,
-	                        vk::PipelineStageFlagBits2::eComputeShader,
-	                        vk::ImageAspectFlagBits::eColor);
-}
-
 void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
 {
 	const uint32_t fi         = frames.frameIndex;
@@ -1841,10 +1432,6 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	const uint32_t gx                   = (rtWidth + 15) / 16;
 	const uint32_t gy                   = (rtHeight + 15) / 16;
 	const bool     analysisEnabled      = ui.pathTracerAnalysisSettings.enableAnalysisMode;
-	const bool     surfelGiDebugAovSelected =
-	    analysisEnabled &&
-	    (ui.pathTracerAnalysisSettings.debugAov == UISystem::PathTracerDebugAov::SurfelGiOccupancy ||
-	     ui.pathTracerAnalysisSettings.debugAov == UISystem::PathTracerDebugAov::SurfelGiGather);
 	const int      debugAov             = analysisEnabled ? static_cast<int>(ui.pathTracerAnalysisSettings.debugAov) : 0;
 	const int      debugAtrousIteration = analysisEnabled ? std::clamp(ui.pathTracerAnalysisSettings.debugAtrousIteration, 0, 4) : 0;
 	if (fi < frames.ptAnalysisCounterMapped.size() && frames.ptAnalysisCounterMapped[fi])
@@ -1933,19 +1520,6 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	    .bufferMemoryBarrierCount = 1,
 	    .pBufferMemoryBarriers    = &ptAnalysisRtToComputeBarrier};
 	commandBuffer.pipelineBarrier2(ptAnalysisRtToComputeDependency);
-
-	if (ui.pathTracerSettings.enableSurfelGi ||
-	    ui.pathTracerSettings.surfelGiDebug ||
-	    surfelGiDebugAovSelected)
-	{
-		recordSurfelGiClearPass(commandBuffer, fi);
-		recordSurfelGiGeneratePass(commandBuffer, fi);
-		recordSurfelGiCountCellsPass(commandBuffer, fi);
-		recordSurfelGiAllocateCellsPass(commandBuffer, fi);
-		recordSurfelGiBuildCellsPass(commandBuffer, fi);
-		recordSurfelGiIntegratePass(commandBuffer, fi);
-		recordSurfelGiEvaluatePass(commandBuffer, fi);
-	}
 
 	// 4. Reprojection pass.
 	if (ui.pathTracerSettings.enableReprojection)
@@ -2462,42 +2036,6 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    counters->reservoirGiBrightSurfelSelectorRejectSurfelHemisphere;
 	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectInvalidVector =
 	    counters->reservoirGiBrightSurfelSelectorRejectInvalidVector;
-	ui.pathTracerPerfStats.surfelGiGenerateAttempts =
-	    counters->surfelGiGenerateAttempts;
-	ui.pathTracerPerfStats.surfelGiGenerated =
-	    counters->surfelGiGenerated;
-	ui.pathTracerPerfStats.surfelGiGenerateRejectInvalid =
-	    counters->surfelGiGenerateRejectInvalid;
-	ui.pathTracerPerfStats.surfelGiGenerateRejectCoverage =
-	    counters->surfelGiGenerateRejectCoverage;
-	ui.pathTracerPerfStats.surfelGiCellInsertAttempts =
-	    counters->surfelGiCellInsertAttempts;
-	ui.pathTracerPerfStats.surfelGiCellInserted =
-	    counters->surfelGiCellInserted;
-	ui.pathTracerPerfStats.surfelGiCellOverflow =
-	    counters->surfelGiCellOverflow;
-	ui.pathTracerPerfStats.surfelGiCellTotalMemberships =
-	    counters->surfelGiCellTotalMemberships;
-	ui.pathTracerPerfStats.surfelGiCellAllocatedMemberships =
-	    counters->surfelGiCellAllocatedMemberships;
-	ui.pathTracerPerfStats.surfelGiCellAllocationOverflow =
-	    counters->surfelGiCellAllocationOverflow;
-	ui.pathTracerPerfStats.surfelGiCellNonEmpty =
-	    counters->surfelGiCellNonEmpty;
-	ui.pathTracerPerfStats.surfelGiCellMaxPopulation =
-	    counters->surfelGiCellMaxPopulation;
-	ui.pathTracerPerfStats.surfelGiEvalDenseCell =
-	    counters->surfelGiEvalDenseCell;
-	ui.pathTracerPerfStats.surfelGiEvalDenseCellSkipped =
-	    counters->surfelGiEvalDenseCellSkipped;
-	ui.pathTracerPerfStats.surfelGiEvalAttempts =
-	    counters->surfelGiEvalAttempts;
-	ui.pathTracerPerfStats.surfelGiEvalCandidates =
-	    counters->surfelGiEvalCandidates;
-	ui.pathTracerPerfStats.surfelGiEvalAccepted =
-	    counters->surfelGiEvalAccepted;
-	ui.pathTracerPerfStats.surfelGiEvalCellEmpty =
-	    counters->surfelGiEvalCellEmpty;
 	ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum =
 	    static_cast<float>(counters->reservoirGiLumaScaledSum) / 64.0f;
 	ui.pathTracerPerfStats.reservoirGiAcceptedAvgLuma =
@@ -2841,14 +2379,6 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver");
 		reservoirMixedTemporalSpatialBudget2SunReceiverRow.reservoirGiProposalMode =
 		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
-		auto reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow =
-		    reservoirMixedTemporalSpatialBudget2SunReceiverRow;
-		reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow.name =
-		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver Surfel Cache Debug");
-		reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow.reservoirGiProposalMode =
-		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
-		reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow.enableSurfelGi = true;
-		reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow.surfelGiDebug = true;
 		auto reservoirMixedSingleFrameSunReceiverRow =
 		    reservoirMixedTemporalSpatialBudget2SunReceiverRow;
 		reservoirMixedSingleFrameSunReceiverRow.name =
@@ -2910,7 +2440,6 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		reservoirAuditTemporalSpatialStaticRow.reservoirGiSpatialBudgetDivisor = 1;
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);
-		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow);
 		ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow);
 		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);
@@ -2962,46 +2491,6 @@ void EngineCore::clearPathTracerExperimentState()
 			std::memset(mapped, 0, static_cast<size_t>(frames.reservoirGiBrightSurfelBufferSize));
 		}
 	}
-	resetSurfelGiRecordBuffers();
-}
-
-void EngineCore::resetSurfelGiRecordBuffers()
-{
-	if (frames.surfelGiRecordBuffers.empty())
-	{
-		return;
-	}
-
-	constexpr vk::DeviceSize recordBufferSize =
-	    static_cast<vk::DeviceSize>(FrameContext::kSurfelGiMaxSurfels) * FrameContext::kSurfelGiRecordSize;
-
-	auto cmd = VulkanUtils::beginSingleTimeCommands(vulkan.logicalDevice, frames.commandPool);
-	std::vector<vk::BufferMemoryBarrier2> barriers;
-	barriers.reserve(frames.surfelGiRecordBuffers.size());
-	for (auto &buffer : frames.surfelGiRecordBuffers)
-	{
-		if (!buffer.valid())
-		{
-			continue;
-		}
-		cmd.fillBuffer(*buffer, 0, recordBufferSize, 0u);
-		barriers.push_back(vk::BufferMemoryBarrier2{
-		    .srcStageMask  = vk::PipelineStageFlagBits2::eTransfer,
-		    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-		    .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-		    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-		    .buffer        = *buffer,
-		    .offset        = 0,
-		    .size          = recordBufferSize});
-	}
-	if (!barriers.empty())
-	{
-		vk::DependencyInfo dependency{
-		    .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
-		    .pBufferMemoryBarriers    = barriers.data()};
-		cmd.pipelineBarrier2(dependency);
-	}
-	VulkanUtils::endSingleTimeCommands(vulkan.logicalDevice, vulkan.queue, frames.commandPool, cmd);
 }
 
 void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row)
@@ -3024,8 +2513,6 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
 	settings.reservoirGiTemporalBudgetDivisor   = row.reservoirGiTemporalBudgetDivisor;
 	settings.reservoirGiSpatialBudgetDivisor    = row.reservoirGiSpatialBudgetDivisor;
 	settings.reservoirGiEstimatorAuditMode      = row.reservoirGiEstimatorAuditMode;
-	settings.enableSurfelGi                     = row.enableSurfelGi;
-	settings.surfelGiDebug                      = row.surfelGiDebug;
 	settings.reservoirGiDetailedDiagnostics = false;
 	settings.pathTracerMaxBounces               = row.pathTracerMaxBounces;
 	settings.directSunBounceMode                = row.directSunBounceMode;
@@ -3101,16 +2588,6 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "brightSurfelSelectorRejectReceiverHemisphere=%.1f, "
 	     "brightSurfelSelectorRejectSurfelHemisphere=%.1f, "
 	     "brightSurfelSelectorRejectInvalidVector=%.1f, "
-	     "surfelGiGenerateAttempts=%.1f, surfelGiGenerated=%.1f, "
-	     "surfelGiGenerateRejectInvalid=%.1f, surfelGiGenerateRejectCoverage=%.1f, "
-	     "surfelGiCellInsertAttempts=%.1f, "
-	     "surfelGiCellInserted=%.1f, surfelGiCellOverflow=%.1f, "
-	     "surfelGiCellTotalMemberships=%.1f, surfelGiCellAllocatedMemberships=%.1f, "
-	     "surfelGiCellAllocationOverflow=%.1f, surfelGiCellNonEmpty=%.1f, "
-	     "surfelGiCellMaxPopulation=%.1f, "
-	     "surfelGiEvalDenseCell=%.1f, surfelGiEvalDenseCellSkipped=%.1f, "
-	     "surfelGiEvalAttempts=%.1f, surfelGiEvalCandidates=%.1f, "
-	     "surfelGiEvalAccepted=%.1f, surfelGiEvalCellEmpty=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
 	     row.name.c_str(),
 	     accum.sampleCount,
@@ -3208,24 +2685,6 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.brightSurfelSelectorRejectReceiverHemisphere * invSamples,
 	     accum.brightSurfelSelectorRejectSurfelHemisphere * invSamples,
 	     accum.brightSurfelSelectorRejectInvalidVector * invSamples,
-	     accum.surfelGiGenerateAttempts * invSamples,
-	     accum.surfelGiGenerated * invSamples,
-	     accum.surfelGiGenerateRejectInvalid * invSamples,
-	     accum.surfelGiGenerateRejectCoverage * invSamples,
-	     accum.surfelGiCellInsertAttempts * invSamples,
-	     accum.surfelGiCellInserted * invSamples,
-	     accum.surfelGiCellOverflow * invSamples,
-	     accum.surfelGiCellTotalMemberships * invSamples,
-	     accum.surfelGiCellAllocatedMemberships * invSamples,
-	     accum.surfelGiCellAllocationOverflow * invSamples,
-	     accum.surfelGiCellNonEmpty * invSamples,
-	     accum.surfelGiCellMaxPopulation * invSamples,
-	     accum.surfelGiEvalDenseCell * invSamples,
-	     accum.surfelGiEvalDenseCellSkipped * invSamples,
-	     accum.surfelGiEvalAttempts * invSamples,
-	     accum.surfelGiEvalCandidates * invSamples,
-	     accum.surfelGiEvalAccepted * invSamples,
-	     accum.surfelGiEvalCellEmpty * invSamples,
 	     accum.rayTraceMs * invSamples,
 	     accum.totalFrameMs * invSamples);
 }
@@ -3437,42 +2896,6 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectSurfelHemisphere);
 	ptExperimentAccum.brightSurfelSelectorRejectInvalidVector +=
 	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectInvalidVector);
-	ptExperimentAccum.surfelGiGenerateAttempts +=
-	    static_cast<double>(stats.surfelGiGenerateAttempts);
-	ptExperimentAccum.surfelGiGenerated +=
-	    static_cast<double>(stats.surfelGiGenerated);
-	ptExperimentAccum.surfelGiGenerateRejectInvalid +=
-	    static_cast<double>(stats.surfelGiGenerateRejectInvalid);
-	ptExperimentAccum.surfelGiGenerateRejectCoverage +=
-	    static_cast<double>(stats.surfelGiGenerateRejectCoverage);
-	ptExperimentAccum.surfelGiCellInsertAttempts +=
-	    static_cast<double>(stats.surfelGiCellInsertAttempts);
-	ptExperimentAccum.surfelGiCellInserted +=
-	    static_cast<double>(stats.surfelGiCellInserted);
-	ptExperimentAccum.surfelGiCellOverflow +=
-	    static_cast<double>(stats.surfelGiCellOverflow);
-	ptExperimentAccum.surfelGiCellTotalMemberships +=
-	    static_cast<double>(stats.surfelGiCellTotalMemberships);
-	ptExperimentAccum.surfelGiCellAllocatedMemberships +=
-	    static_cast<double>(stats.surfelGiCellAllocatedMemberships);
-	ptExperimentAccum.surfelGiCellAllocationOverflow +=
-	    static_cast<double>(stats.surfelGiCellAllocationOverflow);
-	ptExperimentAccum.surfelGiCellNonEmpty +=
-	    static_cast<double>(stats.surfelGiCellNonEmpty);
-	ptExperimentAccum.surfelGiCellMaxPopulation +=
-	    static_cast<double>(stats.surfelGiCellMaxPopulation);
-	ptExperimentAccum.surfelGiEvalDenseCell +=
-	    static_cast<double>(stats.surfelGiEvalDenseCell);
-	ptExperimentAccum.surfelGiEvalDenseCellSkipped +=
-	    static_cast<double>(stats.surfelGiEvalDenseCellSkipped);
-	ptExperimentAccum.surfelGiEvalAttempts +=
-	    static_cast<double>(stats.surfelGiEvalAttempts);
-	ptExperimentAccum.surfelGiEvalCandidates +=
-	    static_cast<double>(stats.surfelGiEvalCandidates);
-	ptExperimentAccum.surfelGiEvalAccepted +=
-	    static_cast<double>(stats.surfelGiEvalAccepted);
-	ptExperimentAccum.surfelGiEvalCellEmpty +=
-	    static_cast<double>(stats.surfelGiEvalCellEmpty);
 	ptExperimentAccum.rayTraceMs += stats.rayTraceMs;
 	ptExperimentAccum.totalFrameMs += stats.totalFrameMs;
 	++ptExperimentAccum.sampleCount;

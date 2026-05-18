@@ -60,9 +60,6 @@ class EngineCore
 	vk::raii::DescriptorPool             denoiserDescriptorPool{nullptr};
 	std::vector<vk::raii::DescriptorSet> denoiserDescriptorSets;
 
-	// Surfel GI Resources (one set per frame in flight)
-	vk::raii::DescriptorPool             surfelGiDescriptorPool{nullptr};
-	std::vector<vk::raii::DescriptorSet> surfelGiDescriptorSets;
 	vk::raii::QueryPool                  ptTimestampQueryPool{nullptr};
 	float                                timestampPeriodNs = 1.0f;
 	std::array<bool, MAX_FRAMES_IN_FLIGHT>       ptTimestampsValid{};
@@ -126,8 +123,6 @@ class EngineCore
 		int reservoirGiCandidateEvaluationMode = 2;
 		bool blackEnvironment = true;
 		bool applyDebugLightPreset = true;
-		bool enableSurfelGi = false;
-		bool surfelGiDebug = false;
 		int firstHitDiffuseSamples = 8;
 		int firstHitCandidateCount = 4;
 		UISystem::PathTracerDebugLightPreset lightPreset = UISystem::PathTracerDebugLightPreset::HardBounce;
@@ -232,24 +227,6 @@ class EngineCore
 		double brightSurfelSelectorRejectReceiverHemisphere = 0.0;
 		double brightSurfelSelectorRejectSurfelHemisphere = 0.0;
 		double brightSurfelSelectorRejectInvalidVector = 0.0;
-		double surfelGiGenerateAttempts = 0.0;
-		double surfelGiGenerated = 0.0;
-		double surfelGiGenerateRejectInvalid = 0.0;
-		double surfelGiGenerateRejectCoverage = 0.0;
-		double surfelGiCellInsertAttempts = 0.0;
-		double surfelGiCellInserted = 0.0;
-		double surfelGiCellOverflow = 0.0;
-		double surfelGiCellTotalMemberships = 0.0;
-		double surfelGiCellAllocatedMemberships = 0.0;
-		double surfelGiCellAllocationOverflow = 0.0;
-		double surfelGiCellNonEmpty = 0.0;
-		double surfelGiCellMaxPopulation = 0.0;
-		double surfelGiEvalDenseCell = 0.0;
-		double surfelGiEvalDenseCellSkipped = 0.0;
-		double surfelGiEvalAttempts = 0.0;
-		double surfelGiEvalCandidates = 0.0;
-		double surfelGiEvalAccepted = 0.0;
-		double surfelGiEvalCellEmpty = 0.0;
 		double rayTraceMs = 0.0;
 		double totalFrameMs = 0.0;
 	};
@@ -311,19 +288,11 @@ class EngineCore
 
 	void createRayTracingDescriptorSets();
 	void createDenoiserDescriptorSets();
-	void createSurfelGiDescriptorSets();
 
 	void recordComputeCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordSkinningPass(const vk::raii::CommandBuffer &commandBuffer) const;
 	void recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
-	void recordSurfelGiClearPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
-	void recordSurfelGiGeneratePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
-	void recordSurfelGiCountCellsPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
-	void recordSurfelGiAllocateCellsPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
-	void recordSurfelGiIntegratePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
-	void recordSurfelGiBuildCellsPass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
-	void recordSurfelGiEvaluatePass(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
 
 	void createDescriptorPool();
 
@@ -335,7 +304,6 @@ class EngineCore
 	void collectPathTracerAnalysisCounters(uint32_t frameSlot);
 	void startPathTracerSponzaGiPerfSweep();
 	void clearPathTracerExperimentState();
-	void resetSurfelGiRecordBuffers();
 	void applySponzaValidationPreset(UISystem::PathTracerSponzaValidationView view);
 	void updatePathTracerExperimentSweep();
 	void applyPathTracerExperimentRow(const PathTracerExperimentRow &row);
