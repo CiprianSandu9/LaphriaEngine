@@ -457,8 +457,31 @@ bool testSurfelPathTracerPipelineContractFiles()
 		std::cerr << "SurfelPathTracer Evaluate must only mark pending frees, not push dead surfels\n";
 		task7Ok = false;
 	}
+	bool task8Ok =
+	    containsAllNeedles(commonShader,
+	                       {"float2 dirToOctUv(float3 direction)",
+	                        "uint2 atlasTileBase(uint surfelIndex, uint atlasWidth)",
+	                        "uint2 atlasDirectionCoord(float3 localDirection)",
+	                        "SURFEL_PT_RAY_LOCAL_DIRECTION"}) &&
+	    containsAllNeedles(integrateShader,
+	                       {"float3 loadRayLocalDirection(uint rayIndex)",
+	                        "void writeAtlas(uint surfelIndex, float3 localDirection, float3 radiance, float depth, uint width, uint height)",
+	                        "uint2 coord = atlasTileBase(surfelIndex, width) + atlasDirectionCoord(localDirection)",
+	                        "irradianceAtlas.GetDimensions(atlasWidth, atlasHeight)",
+	                        "surfelDepthAtlas[coord] = depth",
+	                        "writeAtlas(surfelIndex, localDirection, rayRadiance, rayDepth, atlasWidth, atlasHeight)"}) &&
+	    containsAllNeedles(raygenShader,
+	                       {"worldToLocalDirection(rayDir, normal)",
+	                        "packRayLocalDirection(localRayDir)",
+	                        "rayBuffer[base + SURFEL_PT_RAY_LOCAL_DIRECTION]"}) &&
+	    containsAllNeedles(readTextFile(root / "src" / "Core" / "SurfelPathTracerResources.cpp", filesOk),
+	                       {"const uint64_t tileCount = static_cast<uint64_t>(settings_.maxSurfels)",
+	                        "const uint32_t atlasTileSize = std::max(settings_.atlasTileSize, 1u)",
+	                        "const uint64_t tilesPerRow = std::max<uint64_t>(atlasWidth / atlasTileSize, 1u)",
+	                        "const uint64_t requiredHeight = requiredRows * atlasTileSize",
+	                        "SurfelPathTracer irradiance atlas is too small for maxSurfels"});
 
-	return filesOk && ok && task5Ok && task6Ok && task7Ok;
+	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok;
 }
 
 bool testSurfelPathTracerCellAddressBounds()

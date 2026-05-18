@@ -6,6 +6,7 @@
 #include <cstring>
 #include <exception>
 #include <initializer_list>
+#include <stdexcept>
 
 using namespace Laphria;
 
@@ -288,6 +289,16 @@ void SurfelPathTracerResources::createExtentImages(const VulkanDevice &dev,
 
 	const uint32_t atlasWidth = std::clamp(settings_.irradianceAtlasWidth, 512u, 4096u);
 	const uint32_t atlasHeight = std::clamp(settings_.irradianceAtlasHeight, 512u, 4096u);
+	const uint32_t atlasTileSize = std::max(settings_.atlasTileSize, 1u);
+	const uint64_t tileCount = static_cast<uint64_t>(settings_.maxSurfels);
+	const uint64_t tilesPerRow = std::max<uint64_t>(atlasWidth / atlasTileSize, 1u);
+	const uint64_t requiredRows = (tileCount + tilesPerRow - 1u) / tilesPerRow;
+	const uint64_t requiredHeight = requiredRows * atlasTileSize;
+	if (requiredHeight > atlasHeight)
+	{
+		throw std::runtime_error("SurfelPathTracer irradiance atlas is too small for maxSurfels");
+	}
+
 	createStorageImageSet(dev, atlasWidth, atlasHeight, vk::Format::eR16G16B16A16Sfloat,
 	                      irradianceAtlasImages, irradianceAtlasViews);
 	createStorageImageSet(dev, atlasWidth, atlasHeight, vk::Format::eR32Sfloat,

@@ -26,18 +26,22 @@ float loadRayHitT(uint rayIndex) {
     return asfloat(rayBuffer[rayIndex * SURFEL_PT_RAY_RECORD_UINTS + SURFEL_PT_RAY_HIT_T]);
 }
 
-void writeAtlas(uint atlasOffset, float3 radiance, float depth) {
-    uint width = 0u;
-    uint height = 0u;
-    irradianceAtlas.GetDimensions(width, height);
+float3 loadRayLocalDirection(uint rayIndex) {
+    return unpackRayLocalDirection(rayBuffer[rayIndex * SURFEL_PT_RAY_RECORD_UINTS + SURFEL_PT_RAY_LOCAL_DIRECTION]);
+}
+
+void writeAtlas(uint surfelIndex, float3 localDirection, float3 radiance, float depth, uint width, uint height) {
     if (width == 0u || height == 0u) {
         return;
     }
 
-    uint texelCount = width * height;
-    uint wrappedOffset = atlasOffset % max(texelCount, 1u);
-    uint2 coord = uint2(wrappedOffset % width, wrappedOffset / width);
-    irradianceAtlas[coord] = float4(radiance, 1.0);
+    uint2 coord = atlasTileBase(surfelIndex, width) + atlasDirectionCoord(localDirection);
+    if (coord.x >= width || coord.y >= height) {
+        return;
+    }
+
+    float newLuma = luminance(radiance);
+    irradianceAtlas[coord] = float4(radiance, max(newLuma, 1e-5));
     surfelDepthAtlas[coord] = depth;
 }
 
@@ -64,6 +68,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 accumulatedRadiance = float3(0.0, 0.0, 0.0);
     float accumulatedDepth = 0.0;
     uint sampleCount = 0u;
+    uint atlasWidth = 0u;
+    uint atlasHeight = 0u;
+    irradianceAtlas.GetDimensions(atlasWidth, atlasHeight);
     for (uint ray = 0u; ray < surfel.rayCount; ++ray) {
         uint rayIndex = surfel.rayOffset + ray;
         if (rayIndex >= requestedRays) {
@@ -76,9 +83,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
             continue;
         }
 
-        accumulatedRadiance += loadRayRadiance(rayIndex);
-        accumulatedDepth += loadRayHitT(rayIndex);
+        float3 rayRadiance = loadRayRadiance(rayIndex);
+        float3 localDirection = loadRayLocalDirection(rayIndex);
+        float rayDepth = max(loadRayHitT(rayIndex), 0.0);
+        accumulatedRadiance += rayRadiance;
+        accumulatedDepth += rayDepth;
         sampleCount += 1u;
+        writeAtlas(surfelIndex, localDirection, rayRadiance, rayDepth, atlasWidth, atlasHeight);
     }
 
     if (sampleCount == 0u) {
@@ -104,6 +115,4 @@ void main(uint3 tid : SV_DispatchThreadID) {
     surfel.radiance = longMean;
     surfel.rayCount = 1u;
     surfelBuffer[surfelIndex] = surfel;
-
-    writeAtlas(surfel.irradianceAtlasOffset, longMean, accumulatedDepth * invSampleCount);
 }

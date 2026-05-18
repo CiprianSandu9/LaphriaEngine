@@ -323,7 +323,7 @@ public:
         uint32_t cellDimension = 64;
         uint32_t perCellSurfelLimit = 64;
         uint32_t irradianceAtlasWidth = 2048;
-        uint32_t irradianceAtlasHeight = 2048;
+        uint32_t irradianceAtlasHeight = 4096;
         uint32_t minRaysPerSurfel = 4;
         uint32_t maxRaysPerSurfel = 64;
         uint32_t rayBudgetScale = 16;

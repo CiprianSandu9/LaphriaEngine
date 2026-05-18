@@ -38,6 +38,7 @@ static const uint SURFEL_PT_RAY_RADIANCE_Z = 3u;
 static const uint SURFEL_PT_RAY_PDF = 4u;
 static const uint SURFEL_PT_RAY_HIT_T = 5u;
 static const uint SURFEL_PT_RAY_FLAGS = 6u;
+static const uint SURFEL_PT_RAY_LOCAL_DIRECTION = 7u;
 
 struct SurfelPathTracerSurfel {
     float3 position;
@@ -93,15 +94,80 @@ uint packNormalOctahedral(float3 normal) {
     return encoded.x | (encoded.y << 16u);
 }
 
-float3 unpackNormalOctahedral(uint packedNormal) {
-    uint2 encoded = uint2(packedNormal & 0xFFFFu, packedNormal >> 16u);
-    float2 oct = float2(encoded) / 65535.0 * 2.0 - 1.0;
-    float3 n = float3(oct.x, oct.y, 1.0 - abs(oct.x) - abs(oct.y));
+float2 dirToOctUv(float3 direction) {
+    float3 n = normalize(direction);
+    float invL1 = 1.0 / max(abs(n.x) + abs(n.y) + abs(n.z), 0.000001);
+    float2 uv = n.xy * invL1;
+    if (n.z < 0.0) {
+        float2 signNotZero = float2(uv.x >= 0.0 ? 1.0 : -1.0, uv.y >= 0.0 ? 1.0 : -1.0);
+        uv = (1.0 - abs(uv.yx)) * signNotZero;
+    }
+    return clamp(uv, float2(-1.0), float2(1.0));
+}
+
+float3 octUvToDir(float2 uv) {
+    float3 n = float3(uv.x, uv.y, 1.0 - abs(uv.x) - abs(uv.y));
     if (n.z < 0.0) {
         float2 signNotZero = float2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
         n.xy = (1.0 - abs(n.yx)) * signNotZero;
     }
     return normalize(n);
+}
+
+float3 unpackNormalOctahedral(uint packedNormal) {
+    uint2 encoded = uint2(packedNormal & 0xFFFFu, packedNormal >> 16u);
+    float2 oct = float2(encoded) / 65535.0 * 2.0 - 1.0;
+    return octUvToDir(oct);
+}
+
+uint packRayLocalDirection(float3 localDirection) {
+    float2 uv = dirToOctUv(localDirection);
+    uint2 encoded = uint2(round(saturate(uv * 0.5 + 0.5) * 65535.0));
+    return encoded.x | (encoded.y << 16u);
+}
+
+float3 unpackRayLocalDirection(uint packedDirection) {
+    uint2 encoded = uint2(packedDirection & 0xFFFFu, packedDirection >> 16u);
+    return octUvToDir(float2(encoded) / 65535.0 * 2.0 - 1.0);
+}
+
+void surfelTangentFrame(float3 normal, out float3 tangent, out float3 bitangent) {
+    float3 n = normalize(normal);
+    float3 up = abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0);
+    tangent = normalize(cross(up, n));
+    bitangent = cross(n, tangent);
+}
+
+float3 worldToLocalDirection(float3 worldDirection, float3 normal) {
+    float3 tangent;
+    float3 bitangent;
+    surfelTangentFrame(normal, tangent, bitangent);
+    return normalize(float3(dot(worldDirection, tangent),
+                            dot(worldDirection, bitangent),
+                            dot(worldDirection, normalize(normal))));
+}
+
+float3 localToWorldDirection(float3 localDirection, float3 normal) {
+    float3 tangent;
+    float3 bitangent;
+    surfelTangentFrame(normal, tangent, bitangent);
+    float3 n = normalize(normal);
+    return normalize(tangent * localDirection.x + bitangent * localDirection.y + n * localDirection.z);
+}
+
+uint2 atlasTileBase(uint surfelIndex, uint atlasWidth)
+{
+    uint tilesPerRow = max(atlasWidth / SURFEL_PT_ATLAS_TILE_SIZE, 1u);
+    uint tileX = surfelIndex % tilesPerRow;
+    uint tileY = surfelIndex / tilesPerRow;
+    return uint2(tileX, tileY) * SURFEL_PT_ATLAS_TILE_SIZE;
+}
+
+uint2 atlasDirectionCoord(float3 localDirection)
+{
+    float2 uv = dirToOctUv(localDirection);
+    int2 offset = int2(round(clamp(uv, float2(-1.0), float2(1.0)) * 2.5 + float2(2.5)));
+    return uint2(clamp(offset, int2(0), int2(5)));
 }
 
 bool isFinite3(float3 value) {

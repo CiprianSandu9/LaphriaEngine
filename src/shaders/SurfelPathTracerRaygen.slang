@@ -22,7 +22,7 @@ struct SurfelRayTracePushConstants {
 
 [[vk::binding(0, 2)]] ConstantBuffer<UniformBuffer> ubo;
 
-void storeRayRecord(uint rayIndex, uint surfelIndex, float3 radiance, float pdf, float hitT) {
+void storeRayRecord(uint rayIndex, uint surfelIndex, float3 radiance, float pdf, float hitT, float3 localRayDir) {
     uint base = rayIndex * SURFEL_PT_RAY_RECORD_UINTS;
     rayBuffer[base + SURFEL_PT_RAY_SURFEL_INDEX] = surfelIndex;
     rayBuffer[base + SURFEL_PT_RAY_RADIANCE_X] = asuint(radiance.x);
@@ -31,7 +31,7 @@ void storeRayRecord(uint rayIndex, uint surfelIndex, float3 radiance, float pdf,
     rayBuffer[base + SURFEL_PT_RAY_PDF] = asuint(pdf);
     rayBuffer[base + SURFEL_PT_RAY_HIT_T] = asuint(hitT);
     rayBuffer[base + SURFEL_PT_RAY_FLAGS] = 1u;
-    rayBuffer[base + 7u] = 0u;
+    rayBuffer[base + SURFEL_PT_RAY_LOCAL_DIRECTION] = packRayLocalDirection(localRayDir);
 }
 
 [shader("raygeneration")]
@@ -57,6 +57,7 @@ void main() {
     uint seed = pcgHash(rayIndex ^ (counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET) * 1664525u));
     float2 xi = float2(randomFloat(seed), randomFloat(seed));
     float3 rayDir = cosineSampleHemisphere(xi, normal);
+    float3 localRayDir = worldToLocalDirection(rayDir, normal);
     float pdf = max(dot(normal, rayDir), 0.0) / PI;
 
     RayDesc ray;
@@ -72,5 +73,5 @@ void main() {
     TraceRay(tlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
 
     float3 clampedRadiance = clampLuminance(payload.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE);
-    storeRayRecord(rayIndex, surfelIndex, clampedRadiance, max(pdf, 0.0001), payload.hitT);
+    storeRayRecord(rayIndex, surfelIndex, clampedRadiance, max(pdf, 0.0001), payload.hitT, localRayDir);
 }
