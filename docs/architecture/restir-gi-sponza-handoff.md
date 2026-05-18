@@ -79,15 +79,11 @@ Environment NEE is configurable:
 
 Sun Receiver is now the Sponza validation preset default.
 
-### Persistent Surfel Cache Diagnostic Gates
+### Retired Standalone Surfel Cache Diagnostics
 
-The surfel cache remains diagnostic-only unless all of these are true:
+The old standalone compute surfel cache diagnostic gates are retired. They belonged to the deleted compute-surfels prototype and should not be used as validation criteria for the current Sponza sweep.
 
-- `surfelGiGenerated` is non-zero in all three Sponza validation views.
-- `surfelGiEvalCandidates / surfelGiEvalAttempts` is bounded below 16 candidates per valid pixel.
-- `surfelGiCellOverflow` is below 10% of `surfelGiCellInsertAttempts`.
-- Enabling surfel diagnostics does not increase `totalMs` by more than 25% over Sun Receiver.
-- Debug AOVs show coherent local coverage rather than sparse isolated points.
+Continue evaluating the reservoir-owned direction with the current Sun Receiver and temporal/spatial sweep rows. The remaining bright-surfel reservoir proposal in `Raygen.slang` should be evaluated separately as receiver evidence for reservoir candidate generation, and only kept if it preserves the reservoir estimator audit contract.
 
 ### History Guide
 
