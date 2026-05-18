@@ -29,6 +29,8 @@ static const uint SURFEL_DEBUG_GBUFFER_DEPTH = 2u;
 static const uint SURFEL_DEBUG_SURFEL_RADIANCE = 5u;
 static const uint SURFEL_DEBUG_REFLECTION_RAW = 8u;
 static const uint SURFEL_DEBUG_REFLECTION_FILTERED = 9u;
+static const uint SURFEL_DEBUG_GBUFFER_ALBEDO = 13u;
+static const uint SURFEL_DEBUG_DIFFUSE_GI = 14u;
 static const float SURFEL_PT_DIFFUSE_GI_SCALE = 0.35;
 
 float3 primaryRayDirection(uint2 pixel) {
@@ -64,7 +66,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     float3 normal = normalize(normalRaw);
     float3 albedo = max(gBufferAlbedo[pixel].rgb, float3(0.0));
-    float3 diffuseGi = push.enableDiffuseGi != 0u ? albedo * max(outputImage[pixel].rgb, float3(0.0)) * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0);
+    float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0));
+    float3 diffuseGi = push.enableDiffuseGi != 0u ? albedo * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0);
     float directSun = max(dot(normal, sunDir), 0.0);
     float3 skyAmbient = evalSkyColor(normal, sunDir) * 0.25 + evalGroundColor(sunDir) * 0.10;
     float3 directLighting = SUN_RADIANCE * directSun + skyAmbient;
@@ -83,12 +86,16 @@ void main(uint3 tid : SV_DispatchThreadID) {
     } else if (push.debugView == SURFEL_DEBUG_GBUFFER_DEPTH) {
         float depthVis = saturate(depth / 50.0);
         lightingImages[pixel] = float4(depthVis, depthVis, depthVis, 1.0);
+    } else if (push.debugView == SURFEL_DEBUG_GBUFFER_ALBEDO) {
+        lightingImages[pixel] = float4(albedo, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_SURFEL_RADIANCE) {
-        lightingImages[pixel] = float4(diffuseGi, 1.0);
+        lightingImages[pixel] = float4(rawSurfelRadiance, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_REFLECTION_RAW) {
         lightingImages[pixel] = float4(reflectionRaw, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_REFLECTION_FILTERED) {
         lightingImages[pixel] = float4(reflectionFiltered, 1.0);
+    } else if (push.debugView == SURFEL_DEBUG_DIFFUSE_GI) {
+        lightingImages[pixel] = float4(diffuseGi, 1.0);
     } else {
         lightingImages[pixel] = float4(lighting, 1.0);
     }

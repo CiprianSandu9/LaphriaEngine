@@ -89,10 +89,11 @@ bool occursAtLeast(std::string_view haystack, std::string_view needle, size_t ex
 bool testSurfelPathTracerPipelineContractFiles()
 {
 	const std::filesystem::path root = sourceRoot();
-	const std::array<std::filesystem::path, 30> contractFiles = {
+	const std::array<std::filesystem::path, 31> contractFiles = {
 	    root / "CMakeLists.txt",
 	    root / "src" / "Core" / "EngineAuxiliary.h",
 	    root / "src" / "Core" / "UISystem.h",
+	    root / "src" / "Core" / "UISystem.cpp",
 	    root / "src" / "Core" / "EngineCore.cpp",
 	    root / "src" / "Core" / "SurfelPathTracerPipelines.h",
 	    root / "src" / "Core" / "SurfelPathTracerPipelines.cpp",
@@ -202,7 +203,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "ReferenceColor = 11",
 	    "ReferenceDifference = 12",
 	    "kMaxSurfelPathTracerDebugView",
-	    "SurfelPathTracerDebugView::ReferenceDifference",
+	    "SurfelPathTracerDebugView::DiffuseGi",
 	    "SurfelPathTracerSky.slang|main",
 	    "SurfelPathTracerGBuffer.slang|main",
 	    "SurfelPathTracerGBufferMiss.slang|main",
@@ -547,10 +548,24 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "outputImage[pixel] = float4(resolveSurfelRadiance(position, normal, coverage, closestSurfelIndex), 1.0)"}) &&
 	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
 	                       {"static const float SURFEL_PT_DIFFUSE_GI_SCALE = 0.35",
-	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? albedo * max(outputImage[pixel].rgb, float3(0.0)) * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0)"});
+	                        "float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0))",
+	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? albedo * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0)"});
+	bool debugViewsOk =
+	    containsAllNeedles(combined,
+	                       {"GBufferAlbedo = 13",
+	                        "DiffuseGi = 14",
+	                        "kMaxSurfelPathTracerDebugView =\n        SurfelPathTracerDebugView::DiffuseGi",
+	                        "\"GBuffer Albedo\"",
+	                        "\"Diffuse GI\"",
+	                        "static_cast<int>(SurfelPathTracerDebugView::DiffuseGi)",
+	                        "static const uint SURFEL_DEBUG_GBUFFER_ALBEDO = 13u",
+	                        "static const uint SURFEL_DEBUG_DIFFUSE_GI = 14u",
+	                        "lightingImages[pixel] = float4(albedo, 1.0)",
+	                        "lightingImages[pixel] = float4(rawSurfelRadiance, 1.0)",
+	                        "lightingImages[pixel] = float4(diffuseGi, 1.0)"});
 
 	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok &&
-	       rtPushConstantStagesOk && materialAlbedoOk && surfelDiffuseGiOk;
+	       rtPushConstantStagesOk && materialAlbedoOk && surfelDiffuseGiOk && debugViewsOk;
 }
 
 bool testSurfelPathTracerCellAddressBounds()
