@@ -1524,6 +1524,9 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
     ImGui::SameLine();
     if (ImGui::RadioButton("Path Tracer##render_mode", renderMode == RenderMode::PathTracer))
         renderMode = RenderMode::PathTracer;
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Surfel PT", renderMode == RenderMode::SurfelPathTracer))
+        renderMode = RenderMode::SurfelPathTracer;
     ImGui::SliderFloat("Exposure", &exposure, 0.1f, 4.0f, "%.2f");
     const char *colorSpaceModels[] = {"Hardware SRGB", "Legacy Manual"};
     int colorSpaceMode = static_cast<int>(textureColorSpaceModel);
@@ -1559,6 +1562,73 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         drawPathTracerBenchmarkControls();
         ImGui::Separator();
         drawPathTracerStats();
+    }
+
+    if (ImGui::CollapsingHeader("Surfel Path Tracer##settings")) {
+        auto &settings = surfelPathTracerSettings;
+        settings.resolutionScale = std::clamp(settings.resolutionScale, 0.5f, 1.0f);
+        settings.maxSurfels = std::clamp(settings.maxSurfels, 1024u, 500000u);
+        settings.maxRaysPerFrame = std::clamp(settings.maxRaysPerFrame, 1024u, settings.maxSurfels * 64u);
+        settings.cellSize = std::clamp(settings.cellSize, 0.05f, 64.0f);
+        settings.cellDimension = std::clamp(settings.cellDimension, 8u, 128u);
+        settings.perCellSurfelLimit = std::clamp(settings.perCellSurfelLimit, 4u, 256u);
+        settings.irradianceAtlasWidth = std::clamp(settings.irradianceAtlasWidth, 512u, 4096u);
+        settings.irradianceAtlasHeight = std::clamp(settings.irradianceAtlasHeight, 512u, 4096u);
+
+        ImGui::Checkbox("Enabled", &settings.enabled);
+        ImGui::Checkbox("Lock Surfels", &settings.lockSurfels);
+        if (ImGui::Button("Reset Surfels")) {
+            settings.resetSurfels = true;
+        }
+        ImGui::Checkbox("Diffuse GI", &settings.enableDiffuseGi);
+        ImGui::Checkbox("Reflections", &settings.enableReflections);
+        ImGui::Checkbox("Reflection Filter", &settings.enableReflectionFilter);
+        ImGui::Checkbox("Bilateral Cleanup", &settings.enableBilateralCleanup);
+        ImGui::Checkbox("TAA", &settings.enableTaa);
+        ImGui::SliderFloat("Surfel PT Resolution", &settings.resolutionScale, 0.5f, 1.0f, "%.2f");
+        int maxSurfels = static_cast<int>(settings.maxSurfels);
+        ImGui::SliderInt("Max Surfels", &maxSurfels, 1024, 500000);
+        settings.maxSurfels = static_cast<uint32_t>(maxSurfels);
+        int maxRaysPerFrame = static_cast<int>(settings.maxRaysPerFrame);
+        ImGui::SliderInt("Max Rays/Frame", &maxRaysPerFrame, 1024, static_cast<int>(settings.maxSurfels * 64u));
+        settings.maxRaysPerFrame = static_cast<uint32_t>(maxRaysPerFrame);
+        ImGui::SliderFloat("Cell Size", &settings.cellSize, 0.05f, 64.0f, "%.2f");
+        int cellDimension = static_cast<int>(settings.cellDimension);
+        ImGui::SliderInt("Cell Dimension", &cellDimension, 8, 128);
+        settings.cellDimension = static_cast<uint32_t>(cellDimension);
+        int perCellLimit = static_cast<int>(settings.perCellSurfelLimit);
+        ImGui::SliderInt("Per Cell Limit", &perCellLimit, 4, 256);
+        settings.perCellSurfelLimit = static_cast<uint32_t>(perCellLimit);
+        int irradianceAtlasWidth = static_cast<int>(settings.irradianceAtlasWidth);
+        ImGui::SliderInt("Irradiance Atlas Width", &irradianceAtlasWidth, 512, 4096);
+        settings.irradianceAtlasWidth = static_cast<uint32_t>(irradianceAtlasWidth);
+        int irradianceAtlasHeight = static_cast<int>(settings.irradianceAtlasHeight);
+        ImGui::SliderInt("Irradiance Atlas Height", &irradianceAtlasHeight, 512, 4096);
+        settings.irradianceAtlasHeight = static_cast<uint32_t>(irradianceAtlasHeight);
+        const char *debugViews[] = {
+            "Final Color",
+            "GBuffer Normal",
+            "GBuffer Depth",
+            "Surfel ID",
+            "Surfel Radius",
+            "Surfel Radiance",
+            "Surfel Variance",
+            "Cell Occupancy",
+            "Reflection Raw",
+            "Reflection Filtered"};
+        int debugView = static_cast<int>(settings.debugView);
+        ImGui::Combo("Debug View", &debugView, debugViews, IM_ARRAYSIZE(debugViews));
+        settings.debugView = static_cast<SurfelPathTracerDebugView>(debugView);
+
+        ImGui::Text("Surfels: %u alive / %u dead / %u dirty",
+                    surfelPathTracerStats.aliveSurfels,
+                    surfelPathTracerStats.deadSurfels,
+                    surfelPathTracerStats.dirtySurfels);
+        ImGui::Text("Rays: %u | Cells: %u | Rejected Stores: %u",
+                    surfelPathTracerStats.requestedRays,
+                    surfelPathTracerStats.filledCells,
+                    surfelPathTracerStats.rejectedStores);
+        ImGui::Text("Total: %.3f ms", surfelPathTracerStats.totalFrameMs);
     }
 
     ImGui::Separator();

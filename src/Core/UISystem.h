@@ -118,6 +118,20 @@ public:
         MidDepthInterior = 2
     };
 
+    enum class SurfelPathTracerDebugView
+    {
+        FinalColor = 0,
+        GBufferNormal = 1,
+        GBufferDepth = 2,
+        SurfelId = 3,
+        SurfelRadius = 4,
+        SurfelRadiance = 5,
+        SurfelVariance = 6,
+        CellOccupancy = 7,
+        ReflectionRaw = 8,
+        ReflectionFiltered = 9
+    };
+
     struct PathTracerSettings
     {
         float                 resolutionScale = 1.0f;
@@ -288,6 +302,38 @@ public:
         float cameraMotionFactor = 0.0f;
     };
 
+    struct SurfelPathTracerSettings
+    {
+        bool enabled = true;
+        bool lockSurfels = false;
+        bool resetSurfels = false;
+        bool enableDiffuseGi = true;
+        bool enableReflections = true;
+        bool enableReflectionFilter = true;
+        bool enableBilateralCleanup = true;
+        bool enableTaa = true;
+        float resolutionScale = 1.0f;
+        uint32_t maxSurfels = 150000;
+        uint32_t maxRaysPerFrame = 150000 * 64;
+        float cellSize = 2.0f;
+        uint32_t cellDimension = 64;
+        uint32_t perCellSurfelLimit = 64;
+        uint32_t irradianceAtlasWidth = 2048;
+        uint32_t irradianceAtlasHeight = 2048;
+        SurfelPathTracerDebugView debugView = SurfelPathTracerDebugView::FinalColor;
+    };
+
+    struct SurfelPathTracerStats
+    {
+        uint32_t aliveSurfels = 0;
+        uint32_t deadSurfels = 0;
+        uint32_t dirtySurfels = 0;
+        uint32_t requestedRays = 0;
+        uint32_t filledCells = 0;
+        uint32_t rejectedStores = 0;
+        float totalFrameMs = 0.0f;
+    };
+
     struct PathTracerAnalysisSettings
     {
         bool                         enableAnalysisMode = false;
@@ -350,6 +396,8 @@ public:
     PathTracerSettings pathTracerSettings;
     PathTracerAnalysisSettings pathTracerAnalysisSettings;
     PathTracerPerfStats pathTracerPerfStats;
+    SurfelPathTracerSettings surfelPathTracerSettings;
+    SurfelPathTracerStats surfelPathTracerStats;
     bool showEditorPanels = true;
 
 private:

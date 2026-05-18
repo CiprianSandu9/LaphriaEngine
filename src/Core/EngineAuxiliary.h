@@ -60,6 +60,7 @@ enum class RenderMode
 	Rasterizer,   // shadow + starfield compute + raster graphics pipeline
 	RayTracer,    // classic RT: direct illumination with RT shadows, tone-mapped in ClosestHit
 	PathTracer,   // path tracer with temporal reprojection and A-Trous denoiser
+	SurfelPathTracer, // RenderMode::SurfelPathTracer: persistent surfel GI cache with path-traced updates
 };
 
 enum class TextureColorSpaceModel : uint32_t
