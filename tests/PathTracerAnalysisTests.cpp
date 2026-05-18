@@ -1783,10 +1783,10 @@ bool testPathTracerReservoirGiMeasurementContract()
 
 	if (!containsText(raygen, "float reservoirProbeScale =") ||
 	    !containsText(raygen, "reservoirGiAuditProbeScaleOffset") ||
-	    !containsText(raygen, "appliedReservoirProbeScale") ||
-	    !containsText(raygen, "ReservoirEstimatorAuditNoProbeScale ? 1.0 : reservoirProbeScale"))
+	    !containsText(raygen, "float currentEstimatorLuma = pathTracerLuminance(reservoirTotal)") ||
+	    containsText(raygen, "ReservoirEstimatorAuditNoProbeScale ? 1.0 : reservoirProbeScale"))
 	{
-		std::cerr << "reservoir estimator audit must instrument reservoirProbeScale\n";
+		std::cerr << "reservoir estimator audit must record the unscaled estimator and legacy probe scale separately\n";
 		return false;
 	}
 
@@ -1905,8 +1905,8 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "prevPixel = uint2(uint(pixel.x), uint(pixel.y))",
 	    "loadTemporalReservoirGi(temporalPixel, launchSize",
 	    "float reservoirProbeScale = float(candidateCount) / float(candidateCount + 1)",
-	    "result.totalContribution = reservoirTotal * appliedReservoirProbeScale",
-	    "result.secondaryDirectSunContribution = reservoirSecondarySun * appliedReservoirProbeScale",
+	    "result.totalContribution = reservoirTotal;",
+	    "result.secondaryDirectSunContribution = reservoirSecondarySun;",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiCandidatesOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiConfidenceMScaledSumOffset, scaledConfidenceM)",
 	    "PATH_TRACER_RESERVOIR_GI_DETAILED_DIAGNOSTICS_BIT",

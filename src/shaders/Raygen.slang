@@ -3868,20 +3868,18 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     }
 
     float reservoirProbeScale = float(candidateCount) / float(candidateCount + 1);
-    float appliedReservoirProbeScale =
-        reservoirGiEstimatorAuditMode == ReservoirEstimatorAuditNoProbeScale ? 1.0 : reservoirProbeScale;
-    float currentEstimatorLuma = pathTracerLuminance(reservoirTotal * appliedReservoirProbeScale);
+    float currentEstimatorLuma = pathTracerLuminance(reservoirTotal);
     float referenceEstimatorLuma = rawReservoirLuma;
     if (acceptedReservoir &&
         reservoirGiEstimatorAuditMode != ReservoirEstimatorAuditOff) {
         recordReservoirGiEstimatorAudit(currentEstimatorLuma,
                                         referenceEstimatorLuma,
-                                        appliedReservoirProbeScale);
+                                        reservoirProbeScale);
     }
     result.reservoirSelectedWeight = selectedWeight;
     result.reservoirSelectedSource = acceptedReservoir ? float(selectedSource) : -1.0;
-    result.totalContribution = reservoirTotal * appliedReservoirProbeScale;
-    result.secondaryDirectSunContribution = reservoirSecondarySun * appliedReservoirProbeScale;
+    result.totalContribution = reservoirTotal;
+    result.secondaryDirectSunContribution = reservoirSecondarySun;
     return result;
 }
 
