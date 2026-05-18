@@ -2808,12 +2808,19 @@ bool evaluateBrightReceiverSurfelReservoirGiCandidate(float3 hitPos,
     ReservoirGiBrightSurfelRecord surfel;
     ReservoirGiTargetEvaluation selectedTargetEvaluation;
     float surfelSelectionPdf;
+    uint brightSurfelDiagnosticRngState = rngState;
     // Scan-local selector diagnostic only; do not feed it into target sourcePdf or reservoir weight.
     if (!selectWeightedIndexedBrightReceiverSurfelRecord(hitPos, N, V, primaryPayload,
                                                         launchID, launchSize,
-                                                        rngState, surfel, selectedTargetEvaluation,
+                                                        brightSurfelDiagnosticRngState, surfel, selectedTargetEvaluation,
                                                         surfelSelectionPdf)) {
+        if (allowSelection) {
+            rngState = brightSurfelDiagnosticRngState;
+        }
         return false;
+    }
+    if (allowSelection) {
+        rngState = brightSurfelDiagnosticRngState;
     }
 
     float3 toSurfel = surfel.position - hitPos;

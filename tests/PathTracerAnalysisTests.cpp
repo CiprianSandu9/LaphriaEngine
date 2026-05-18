@@ -159,6 +159,20 @@ bool requireBrightSurfelReservoirEvaluationSweepContracts(const std::string &ray
 	    !containsText(reservoirMain, "useBrightSurfelProposal && !reservoirGiBrightSurfelShadowOnly"))
 		return false;
 
+	const std::string brightSurfelCandidate =
+	    extractFunctionBody(raygen, "bool evaluateBrightReceiverSurfelReservoirGiCandidate(");
+	if (brightSurfelCandidate.empty() ||
+	    !containsText(brightSurfelCandidate, "uint brightSurfelDiagnosticRngState = rngState;") ||
+	    !containsText(brightSurfelCandidate, "brightSurfelDiagnosticRngState, surfel, selectedTargetEvaluation") ||
+	    !containsText(brightSurfelCandidate,
+	                  "if (allowSelection) {\n"
+	                  "        rngState = brightSurfelDiagnosticRngState;"))
+		return false;
+	if (containsText(brightSurfelCandidate,
+	                 "launchID, launchSize,\n"
+	                 "                                                        rngState, surfel"))
+		return false;
+
 	const std::string sponzaSweep =
 	    extractFunctionBody(engineCore, "void EngineCore::startPathTracerSponzaGiPerfSweep()");
 	if (sponzaSweep.empty() ||
