@@ -1,7 +1,10 @@
 #include "SurfelPathTracerResources.h"
 
+#include "EngineAuxiliary.h"
+
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <initializer_list>
 
 using namespace Laphria;
@@ -89,8 +92,29 @@ void SurfelPathTracerResources::init(const VulkanDevice &dev,
 {
 	destroy();
 	settings_ = settings;
-	createPersistentBuffers(dev, settings);
-	createExtentImages(dev, swapchain);
+	try
+	{
+		createPersistentBuffers(dev, settings);
+	}
+	catch (const std::exception &error)
+	{
+		LOGE("SurfelPathTracer persistent resource creation failed: %s", error.what());
+		destroyPersistentBuffers();
+		initialized_ = false;
+		throw;
+	}
+	try
+	{
+		createExtentImages(dev, swapchain);
+	}
+	catch (const std::exception &error)
+	{
+		LOGE("SurfelPathTracer extent resource creation failed: %s", error.what());
+		cleanupSwapchainResources();
+		destroyPersistentBuffers();
+		initialized_ = false;
+		throw;
+	}
 	initialized_ = true;
 }
 
@@ -112,7 +136,18 @@ void SurfelPathTracerResources::recreateSwapchainResources(const VulkanDevice &d
                                                            const SwapchainManager &swapchain)
 {
 	cleanupSwapchainResources();
-	createExtentImages(dev, swapchain);
+	try
+	{
+		createExtentImages(dev, swapchain);
+	}
+	catch (const std::exception &error)
+	{
+		LOGE("SurfelPathTracer extent resource creation failed: %s", error.what());
+		cleanupSwapchainResources();
+		initialized_ = false;
+		throw;
+	}
+	initialized_ = true;
 }
 
 void SurfelPathTracerResources::resetPersistentResources(
@@ -120,8 +155,20 @@ void SurfelPathTracerResources::resetPersistentResources(
     const UISystem::SurfelPathTracerSettings &settings)
 {
 	destroyPersistentBuffers();
+	initialized_ = false;
 	settings_ = settings;
-	createPersistentBuffers(dev, settings);
+	try
+	{
+		createPersistentBuffers(dev, settings);
+	}
+	catch (const std::exception &error)
+	{
+		LOGE("SurfelPathTracer persistent resource creation failed: %s", error.what());
+		destroyPersistentBuffers();
+		initialized_ = false;
+		throw;
+	}
+	initialized_ = true;
 }
 
 void SurfelPathTracerResources::destroy()

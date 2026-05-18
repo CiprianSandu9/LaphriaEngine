@@ -22,6 +22,17 @@
 #include "UISystem.h"
 #include "VulkanDevice.h"
 
+struct SurfelPathTracerStaticSettingsSnapshot
+{
+	float cellSize = 0.0f;
+	uint32_t maxSurfels = 0;
+	uint32_t maxRaysPerFrame = 0;
+	uint32_t cellDimension = 0;
+	uint32_t perCellSurfelLimit = 0;
+	uint32_t irradianceAtlasWidth = 0;
+	uint32_t irradianceAtlasHeight = 0;
+};
+
 class EngineCore
 {
   public:
@@ -69,6 +80,8 @@ class EngineCore
 	std::vector<vk::raii::DescriptorSet> surfelPathTracerRtDescriptorSets;
 	mutable bool                         surfelPathTracerPersistentImageLayoutsInitialized = false;
 	mutable std::array<bool, MAX_FRAMES_IN_FLIGHT> surfelPathTracerHistoryValid{};
+	SurfelPathTracerStaticSettingsSnapshot surfelPathTracerStaticSettings{};
+	bool surfelPathTracerStaticSettingsInitialized = false;
 
 	// Denoiser Resources (one set per frame in flight)
 	vk::raii::DescriptorPool             denoiserDescriptorPool{nullptr};

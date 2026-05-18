@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -84,7 +85,7 @@ bool testSurfelPathTracerPipelineContracts()
 		combined += '\n';
 	}
 
-	const std::array<std::string_view, 144> needles = {
+	const std::vector<std::string_view> needles = {
 	    "RenderMode::SurfelPathTracer",
 	    "SurfelPathTracerSettings",
 	    "SurfelPathTracerStats",
@@ -214,6 +215,17 @@ bool testSurfelPathTracerPipelineContracts()
 	    "if (samePixelFallback && taaHistoryKeyMatches(storedHistory.a, currentKey))",
 	    "taaHistoryImages[pixel] = float4(blended, currentKey)",
 	    "outputImage[pixel] = float4(applyAcesTonemap(blended, ubo.exposure), 1.0)",
+	    "SurfelPathTracer persistent resource creation failed",
+	    "SurfelPathTracer extent resource creation failed",
+	    "surfelPathTracerStaticSettings",
+	    "makeSurfelPathTracerStaticSettingsSnapshot",
+	    "refreshSurfelPathTracerRuntimeResources",
+	    "transitionSurfelOutputForBlit",
+	    "transitionSwapchainForBlit",
+	    "transitionSwapchainForUi",
+	    "recordSurfelFinalBlit",
+	    "recordSurfelPathTracerNoSceneFallback",
+	    "if (!resourceManager || resourceManager->getModelCount() == 0)",
 	    "commandBuffer.dispatch(groupCount16(push.width), groupCount16(push.height), 1)",
 	    "const bool historyReady = !ptForceHistoryReset && surfelPathTracerHistoryValid[fi]",
 	    "vk::PipelineStageFlagBits2::eComputeShader |\n\t\t                    vk::PipelineStageFlagBits2::eRayTracingShaderKHR",

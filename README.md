@@ -17,6 +17,8 @@ The current codebase includes an editor and validation refactor with expanded bu
   - Temporal reprojection plus A-Trous denoising
   - Per-stage GPU timing (TLAS, ray trace, reprojection, denoiser)
   - Adaptive quality controls (manual, auto balanced, auto aggressive)
+- Surfel path tracer backend with persistent surfel GI cache, glossy reflections,
+  temporal/spatial filtering, bilateral cleanup, and TAA debug controls.
 - Runtime glTF animation playback
 - GPU skinning compute pass (currently used for rasterization path)
 - Gameplay-oriented visual calibration controls (sun, fill, ambient, exposure)

@@ -318,6 +318,40 @@ const SponzaScenarioPreset &sponzaScenarioPresetForView(UISystem::PathTracerSpon
 	const int   index   = std::clamp(static_cast<int>(view), 0, static_cast<int>(presets.size() - 1));
 	return presets[static_cast<size_t>(index)];
 }
+
+SurfelPathTracerStaticSettingsSnapshot makeSurfelPathTracerStaticSettingsSnapshot(
+    const UISystem::SurfelPathTracerSettings &settings)
+{
+	return SurfelPathTracerStaticSettingsSnapshot{
+	    .cellSize = std::max(settings.cellSize, 0.0001f),
+	    .maxSurfels = std::max(settings.maxSurfels, 1u),
+	    .maxRaysPerFrame = std::max(settings.maxRaysPerFrame, 1u),
+	    .cellDimension = std::clamp(settings.cellDimension, 8u, 128u),
+	    .perCellSurfelLimit = std::clamp(settings.perCellSurfelLimit, 1u, 256u),
+	    .irradianceAtlasWidth = std::clamp(settings.irradianceAtlasWidth, 512u, 4096u),
+	    .irradianceAtlasHeight = std::clamp(settings.irradianceAtlasHeight, 512u, 4096u)};
+}
+
+bool surfelPathTracerStaticSettingsMatch(
+    const SurfelPathTracerStaticSettingsSnapshot &lhs,
+    const SurfelPathTracerStaticSettingsSnapshot &rhs)
+{
+	return lhs.cellSize == rhs.cellSize &&
+	       lhs.maxSurfels == rhs.maxSurfels &&
+	       lhs.maxRaysPerFrame == rhs.maxRaysPerFrame &&
+	       lhs.cellDimension == rhs.cellDimension &&
+	       lhs.perCellSurfelLimit == rhs.perCellSurfelLimit &&
+	       lhs.irradianceAtlasWidth == rhs.irradianceAtlasWidth &&
+	       lhs.irradianceAtlasHeight == rhs.irradianceAtlasHeight;
+}
+
+bool surfelPathTracerAtlasSettingsChanged(
+    const SurfelPathTracerStaticSettingsSnapshot &lhs,
+    const SurfelPathTracerStaticSettingsSnapshot &rhs)
+{
+	return lhs.irradianceAtlasWidth != rhs.irradianceAtlasWidth ||
+	       lhs.irradianceAtlasHeight != rhs.irradianceAtlasHeight;
+}
 }        // namespace
 
 EngineCore::EngineCore(EngineHostOptions optionsIn, EngineHostCallbacks callbacksIn) : options(std::move(optionsIn)), callbacks(std::move(callbacksIn))
@@ -515,6 +549,9 @@ void EngineCore::initVulkan()
 	createRayTracingDescriptorSets();
 	createDenoiserDescriptorSets();
 	surfelPathTracerResources.init(vulkan, swapchain, ui.surfelPathTracerSettings);
+	surfelPathTracerStaticSettings =
+	    makeSurfelPathTracerStaticSettingsSnapshot(ui.surfelPathTracerSettings);
+	surfelPathTracerStaticSettingsInitialized = true;
 	surfelPathTracerPersistentImageLayoutsInitialized = false;
 	surfelPathTracerHistoryValid.fill(false);
 	createSurfelPathTracerSkyDescriptorSets();
@@ -742,12 +779,15 @@ void EngineCore::recreateSwapChain()
 	createComputeDescriptorSets();
 	createRayTracingDescriptorSets();
 	createDenoiserDescriptorSets();
-	surfelPathTracerResources.recreateSwapchainResources(vulkan, swapchain);
-	surfelPathTracerPersistentImageLayoutsInitialized = false;
-	surfelPathTracerHistoryValid.fill(false);
-	createSurfelPathTracerSkyDescriptorSets();
-	createSurfelPathTracerStorageDescriptorSets();
-	createSurfelPathTracerRtDescriptorSets();
+	if (surfelPathTracerResources.initialized())
+	{
+		surfelPathTracerResources.recreateSwapchainResources(vulkan, swapchain);
+		surfelPathTracerPersistentImageLayoutsInitialized = false;
+		surfelPathTracerHistoryValid.fill(false);
+		createSurfelPathTracerSkyDescriptorSets();
+		createSurfelPathTracerStorageDescriptorSets();
+		createSurfelPathTracerRtDescriptorSets();
+	}
 	ptForceHistoryReset = true;
 }
 
@@ -2021,12 +2061,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	    const_cast<Laphria::SurfelPathTracerResources &>(surfelPathTracerResources);
 
 	if (fi >= surfelPathTracerResources.outputImages.size() ||
-	    fi >= surfelPathTracerResources.gBufferNormalImages.size() ||
-	    fi >= surfelPathTracerResources.gBufferDepthImages.size() ||
-	    fi >= surfelPathTracerResources.gBufferMotionMaterialImages.size() ||
 	    fi >= surfelPathTracerSkyDescriptorSets.size() ||
-	    fi >= surfelPathTracerStorageDescriptorSets.size() ||
-	    fi >= surfelPathTracerRtDescriptorSets.size() ||
 	    fi >= descriptorSets.size())
 	{
 		throw std::runtime_error("Surfel path tracer frame resources are incomplete");
@@ -2046,6 +2081,74 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                        vk::PipelineStageFlagBits2::eTopOfPipe,
 	                        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
 	                        vk::ImageAspectFlagBits::eColor);
+
+	auto transitionSurfelOutputForBlit = [&]() {
+		transition_image_layout(*surfelPathTracerResources.outputImages[fi],
+		                        vk::ImageLayout::eGeneral,
+		                        vk::ImageLayout::eTransferSrcOptimal,
+		                        vk::AccessFlagBits2::eShaderWrite,
+		                        vk::AccessFlagBits2::eTransferRead,
+		                        vk::PipelineStageFlagBits2::eComputeShader,
+		                        vk::PipelineStageFlagBits2::eTransfer,
+		                        vk::ImageAspectFlagBits::eColor);
+	};
+	auto transitionSwapchainForBlit = [&]() {
+		transition_image_layout(swapchain.images[imageIndex],
+		                        vk::ImageLayout::eUndefined,
+		                        vk::ImageLayout::eTransferDstOptimal,
+		                        {},
+		                        vk::AccessFlagBits2::eTransferWrite,
+		                        vk::PipelineStageFlagBits2::eTopOfPipe,
+		                        vk::PipelineStageFlagBits2::eTransfer,
+		                        vk::ImageAspectFlagBits::eColor);
+	};
+	auto recordSurfelFinalBlit = [&]() {
+		surfelPathTracerPasses.recordFinalBlit(commandBuffer,
+		                                       surfelPathTracerResources,
+		                                       swapchain.images[imageIndex],
+		                                       fi,
+		                                       swapchain.extent);
+	};
+	auto transitionSwapchainForUi = [&]() {
+		transition_image_layout(swapchain.images[imageIndex],
+		                        vk::ImageLayout::eTransferDstOptimal,
+		                        vk::ImageLayout::eColorAttachmentOptimal,
+		                        vk::AccessFlagBits2::eTransferWrite,
+		                        vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
+		                        vk::PipelineStageFlagBits2::eTransfer,
+		                        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		                        vk::ImageAspectFlagBits::eColor);
+	};
+	auto recordSurfelPathTracerNoSceneFallback = [&]() {
+		surfelPathTracerPasses.recordSkyPass(commandBuffer,
+		                                     pipelines.surfelPathTracerPipelines,
+		                                     surfelPathTracerResources,
+		                                     *surfelPathTracerSkyDescriptorSets[fi],
+		                                     *descriptorSets[fi],
+		                                     fi,
+		                                     swapchain.extent);
+		transitionSurfelOutputForBlit();
+		transitionSwapchainForBlit();
+		recordSurfelFinalBlit();
+		transitionSwapchainForUi();
+		surfelPathTracerHistoryValid.fill(false);
+	};
+
+	if (!resourceManager || resourceManager->getModelCount() == 0)
+	{
+		recordSurfelPathTracerNoSceneFallback();
+		return;
+	}
+
+	if (fi >= surfelPathTracerResources.gBufferNormalImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferDepthImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferMotionMaterialImages.size() ||
+	    fi >= surfelPathTracerStorageDescriptorSets.size() ||
+	    fi >= surfelPathTracerRtDescriptorSets.size())
+	{
+		throw std::runtime_error("Surfel path tracer scene frame resources are incomplete");
+	}
+
 	auto transitionSurfelGBufferToRtWrite = [&](vk::Image image) {
 		transition_image_layout(image,
 		                        vk::ImageLayout::eGeneral,
@@ -2202,38 +2305,10 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		surfelPathTracerHistoryValid.fill(false);
 	}
 
-	transition_image_layout(*surfelPathTracerResources.outputImages[fi],
-	                        vk::ImageLayout::eGeneral,
-	                        vk::ImageLayout::eTransferSrcOptimal,
-	                        vk::AccessFlagBits2::eShaderWrite,
-	                        vk::AccessFlagBits2::eTransferRead,
-	                        vk::PipelineStageFlagBits2::eComputeShader,
-	                        vk::PipelineStageFlagBits2::eTransfer,
-	                        vk::ImageAspectFlagBits::eColor);
-
-	transition_image_layout(swapchain.images[imageIndex],
-	                        vk::ImageLayout::eUndefined,
-	                        vk::ImageLayout::eTransferDstOptimal,
-	                        {},
-	                        vk::AccessFlagBits2::eTransferWrite,
-	                        vk::PipelineStageFlagBits2::eTopOfPipe,
-	                        vk::PipelineStageFlagBits2::eTransfer,
-	                        vk::ImageAspectFlagBits::eColor);
-
-	surfelPathTracerPasses.recordFinalBlit(commandBuffer,
-	                                       surfelPathTracerResources,
-	                                       swapchain.images[imageIndex],
-	                                       fi,
-	                                       swapchain.extent);
-
-	transition_image_layout(swapchain.images[imageIndex],
-	                        vk::ImageLayout::eTransferDstOptimal,
-	                        vk::ImageLayout::eColorAttachmentOptimal,
-	                        vk::AccessFlagBits2::eTransferWrite,
-	                        vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
-	                        vk::PipelineStageFlagBits2::eTransfer,
-	                        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-	                        vk::ImageAspectFlagBits::eColor);
+	transitionSurfelOutputForBlit();
+	transitionSwapchainForBlit();
+	recordSurfelFinalBlit();
+	transitionSwapchainForUi();
 }
 
 void EngineCore::createDescriptorPool()
@@ -4600,25 +4675,41 @@ void EngineCore::drawFrame()
 		throw std::runtime_error("failed to wait for fence!");
 	}
 
-	auto waitForSurfelPathTracerIdle = [&](const char *waitLabel) {
-		for (const auto &fence : frames.inFlightFences)
-		{
-			const auto surfelFenceResult = waitForFenceOrThrow(
-			    vulkan.logicalDevice, *fence, waitLabel);
-			if (surfelFenceResult != vk::Result::eSuccess)
-			{
-				throw std::runtime_error("failed to wait for surfel path tracer in-flight work");
-			}
-		}
-	};
-	auto refreshSurfelPathTracerPersistentResources = [&]() {
+	auto refreshSurfelPathTracerRuntimeResources = [&]() {
 		if (!surfelPathTracerResources.initialized())
 		{
 			return;
 		}
 
+		// Extends the earlier refreshSurfelPathTracerPersistentResources path to cover atlas images.
+		auto waitForSurfelPathTracerIdle = [&](const char *waitLabel) {
+			for (const auto &fence : frames.inFlightFences)
+			{
+				const auto surfelFenceResult = waitForFenceOrThrow(
+				    vulkan.logicalDevice, *fence, waitLabel);
+				if (surfelFenceResult != vk::Result::eSuccess)
+				{
+					throw std::runtime_error("failed to wait for surfel path tracer in-flight work");
+				}
+			}
+		};
+
+		const auto nextStaticSettings =
+		    makeSurfelPathTracerStaticSettingsSnapshot(ui.surfelPathTracerSettings);
+		if (!surfelPathTracerStaticSettingsInitialized)
+		{
+			surfelPathTracerStaticSettings = nextStaticSettings;
+			surfelPathTracerStaticSettingsInitialized = true;
+		}
+
+		const bool staticSettingsChanged =
+		    !surfelPathTracerStaticSettingsMatch(surfelPathTracerStaticSettings, nextStaticSettings);
+		const bool atlasSettingsChanged =
+		    surfelPathTracerAtlasSettingsChanged(surfelPathTracerStaticSettings, nextStaticSettings);
 		const bool needsResourceRecreate =
+		    staticSettingsChanged ||
 		    surfelPathTracerResources.needsPersistentResourceRecreate(ui.surfelPathTracerSettings);
+
 		waitForSurfelPathTracerIdle(needsResourceRecreate
 		                                ? "surfel path tracer persistent resource fence"
 		                                : "surfel path tracer stats fence");
@@ -4626,8 +4717,16 @@ void EngineCore::drawFrame()
 		if (needsResourceRecreate)
 		{
 			surfelPathTracerResources.resetPersistentResources(vulkan, ui.surfelPathTracerSettings);
+			if (atlasSettingsChanged)
+			{
+				surfelPathTracerResources.recreateSwapchainResources(vulkan, swapchain);
+				surfelPathTracerPersistentImageLayoutsInitialized = false;
+				createSurfelPathTracerSkyDescriptorSets();
+			}
 			createSurfelPathTracerStorageDescriptorSets();
 			createSurfelPathTracerRtDescriptorSets();
+			surfelPathTracerStaticSettings = nextStaticSettings;
+			surfelPathTracerStaticSettingsInitialized = true;
 			surfelPathTracerHistoryValid.fill(false);
 			ptForceHistoryReset = true;
 		}
@@ -4636,7 +4735,7 @@ void EngineCore::drawFrame()
 	};
 	if (ui.renderMode == RenderMode::SurfelPathTracer)
 	{
-		refreshSurfelPathTracerPersistentResources();
+		refreshSurfelPathTracerRuntimeResources();
 	}
 
 	// Runtime skinned BLAS refit currently reuses per-model AS buffers across frames.
