@@ -69,6 +69,70 @@ struct SurfelEvaluatePushConstants
 	uint32_t pad2 = 0;
 };
 
+struct SurfelReflectionPushConstants
+{
+	uint32_t width = 0;
+	uint32_t height = 0;
+	uint32_t fullWidth = 0;
+	uint32_t fullHeight = 0;
+	uint32_t maxSurfels = 0;
+	uint32_t cellDimension = 1;
+	float cellSize = 1.0f;
+	uint32_t frameIndex = 0;
+	uint32_t enabled = 1;
+	uint32_t pad0 = 0;
+	uint32_t pad1 = 0;
+	uint32_t pad2 = 0;
+};
+
+struct SurfelReflectionFilterPushConstants
+{
+	uint32_t width = 0;
+	uint32_t height = 0;
+	uint32_t fullWidth = 0;
+	uint32_t fullHeight = 0;
+	uint32_t enabled = 1;
+	uint32_t resetHistory = 1;
+	uint32_t frameIndex = 0;
+	uint32_t pad0 = 0;
+};
+
+struct SurfelBilateralPushConstants
+{
+	uint32_t width = 0;
+	uint32_t height = 0;
+	uint32_t fullWidth = 0;
+	uint32_t fullHeight = 0;
+	uint32_t enabled = 1;
+	uint32_t pad0 = 0;
+	uint32_t pad1 = 0;
+	uint32_t pad2 = 0;
+};
+
+struct SurfelLightIntegratePushConstants
+{
+	uint32_t width = 0;
+	uint32_t height = 0;
+	uint32_t enableDiffuseGi = 1;
+	uint32_t enableReflections = 1;
+	uint32_t useBilateralReflection = 0;
+	uint32_t debugView = 0;
+	uint32_t pad0 = 0;
+	uint32_t pad1 = 0;
+};
+
+struct SurfelTaaPushConstants
+{
+	uint32_t width = 0;
+	uint32_t height = 0;
+	uint32_t enabled = 1;
+	uint32_t resetHistory = 1;
+	uint32_t frameIndex = 0;
+	uint32_t pad0 = 0;
+	uint32_t pad1 = 0;
+	uint32_t pad2 = 0;
+};
+
 uint32_t linearGroupCount(uint64_t workItemCount)
 {
 	return static_cast<uint32_t>((std::max<uint64_t>(workItemCount, 1u) + kLinearWorkgroupSize - 1u) /
@@ -87,6 +151,11 @@ void bindComputeStorageSet(const vk::raii::CommandBuffer &commandBuffer,
 	                                 0,
 	                                 descriptorSets,
 	                                 nullptr);
+}
+
+uint32_t groupCount16(uint32_t value)
+{
+	return (std::max(value, 1u) + 15u) / 16u;
 }
 } // namespace
 
@@ -301,6 +370,161 @@ void SurfelPathTracerPasses::recordEvaluatePass(const vk::raii::CommandBuffer &c
 	commandBuffer.dispatch(groupCountX, groupCountY, 1);
 }
 
+void SurfelPathTracerPasses::recordReflectionPass(const vk::raii::CommandBuffer &commandBuffer,
+                                                  const SurfelPathTracerPipelines &pipelines,
+                                                  const SurfelPathTracerResources &resources,
+                                                  vk::DescriptorSet rayTracingSet,
+                                                  vk::DescriptorSet storageSet,
+                                                  vk::DescriptorSet globalSet,
+                                                  bool enabled,
+                                                  float cellSize,
+                                                  uint32_t cellDimension,
+                                                  vk::Extent2D extent,
+                                                  uint32_t frameIndex) const
+{
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.reflectionRayTracingPipeline);
+	const std::array descriptorSets = {rayTracingSet, storageSet, globalSet};
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR,
+	                                 *pipelines.rayTracingPipelineLayout,
+	                                 0,
+	                                 descriptorSets,
+	                                 nullptr);
+
+	const uint32_t halfWidth = std::max((extent.width + 1u) / 2u, 1u);
+	const uint32_t halfHeight = std::max((extent.height + 1u) / 2u, 1u);
+	const SurfelReflectionPushConstants push{
+	    .width = halfWidth,
+	    .height = halfHeight,
+	    .fullWidth = std::max(extent.width, 1u),
+	    .fullHeight = std::max(extent.height, 1u),
+	    .maxSurfels = std::max(resources.maxSurfelsCapacity(), 1u),
+	    .cellDimension = std::max(cellDimension, 1u),
+	    .cellSize = std::max(cellSize, 0.0001f),
+	    .frameIndex = frameIndex,
+	    .enabled = enabled ? 1u : 0u};
+	commandBuffer.pushConstants<SurfelReflectionPushConstants>(*pipelines.rayTracingPipelineLayout,
+	                                                           vk::ShaderStageFlagBits::eRaygenKHR,
+	                                                           0,
+	                                                           push);
+
+	vk::StridedDeviceAddressRegionKHR callableRegion{};
+	commandBuffer.traceRaysKHR(pipelines.reflectionSbt.raygenRegion,
+	                           pipelines.reflectionSbt.missRegion,
+	                           pipelines.reflectionSbt.hitRegion,
+	                           callableRegion,
+	                           halfWidth,
+	                           halfHeight,
+	                           1);
+}
+
+void SurfelPathTracerPasses::recordReflectionFilterPass(const vk::raii::CommandBuffer &commandBuffer,
+                                                        const SurfelPathTracerPipelines &pipelines,
+                                                        vk::DescriptorSet imageSet,
+                                                        bool enabled,
+                                                        bool resetHistory,
+                                                        vk::Extent2D extent,
+                                                        uint32_t frameIndex) const
+{
+	bindComputeStorageSet(commandBuffer, pipelines, pipelines.reflectionFilterPipeline, imageSet);
+
+	const SurfelReflectionFilterPushConstants push{
+	    .width = std::max((extent.width + 1u) / 2u, 1u),
+	    .height = std::max((extent.height + 1u) / 2u, 1u),
+	    .fullWidth = std::max(extent.width, 1u),
+	    .fullHeight = std::max(extent.height, 1u),
+	    .enabled = enabled ? 1u : 0u,
+	    .resetHistory = resetHistory ? 1u : 0u,
+	    .frameIndex = frameIndex};
+	commandBuffer.pushConstants<SurfelReflectionFilterPushConstants>(*pipelines.computePipelineLayout,
+	                                                                 vk::ShaderStageFlagBits::eCompute,
+	                                                                 0,
+	                                                                 push);
+	commandBuffer.dispatch(groupCount16(push.width), groupCount16(push.height), 1);
+}
+
+void SurfelPathTracerPasses::recordBilateralPass(const vk::raii::CommandBuffer &commandBuffer,
+                                                 const SurfelPathTracerPipelines &pipelines,
+                                                 vk::DescriptorSet imageSet,
+                                                 bool enabled,
+                                                 vk::Extent2D extent) const
+{
+	bindComputeStorageSet(commandBuffer, pipelines, pipelines.bilateralPipeline, imageSet);
+
+	const SurfelBilateralPushConstants push{
+	    .width = std::max((extent.width + 1u) / 2u, 1u),
+	    .height = std::max((extent.height + 1u) / 2u, 1u),
+	    .fullWidth = std::max(extent.width, 1u),
+	    .fullHeight = std::max(extent.height, 1u),
+	    .enabled = enabled ? 1u : 0u};
+	commandBuffer.pushConstants<SurfelBilateralPushConstants>(*pipelines.computePipelineLayout,
+	                                                          vk::ShaderStageFlagBits::eCompute,
+	                                                          0,
+	                                                          push);
+	commandBuffer.dispatch(groupCount16(push.width), groupCount16(push.height), 1);
+}
+
+void SurfelPathTracerPasses::recordLightIntegratePass(const vk::raii::CommandBuffer &commandBuffer,
+                                                      const SurfelPathTracerPipelines &pipelines,
+                                                      vk::DescriptorSet imageSet,
+                                                      vk::DescriptorSet globalSet,
+                                                      bool enableDiffuseGi,
+                                                      bool enableReflections,
+                                                      bool useBilateralReflection,
+                                                      uint32_t debugView,
+                                                      vk::Extent2D extent) const
+{
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.lightIntegratePipeline);
+	const std::array descriptorSets = {imageSet, globalSet};
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+	                                 *pipelines.computePipelineLayout,
+	                                 0,
+	                                 descriptorSets,
+	                                 nullptr);
+
+	const SurfelLightIntegratePushConstants push{
+	    .width = std::max(extent.width, 1u),
+	    .height = std::max(extent.height, 1u),
+	    .enableDiffuseGi = enableDiffuseGi ? 1u : 0u,
+	    .enableReflections = enableReflections ? 1u : 0u,
+	    .useBilateralReflection = useBilateralReflection ? 1u : 0u,
+	    .debugView = debugView};
+	commandBuffer.pushConstants<SurfelLightIntegratePushConstants>(*pipelines.computePipelineLayout,
+	                                                               vk::ShaderStageFlagBits::eCompute,
+	                                                               0,
+	                                                               push);
+	commandBuffer.dispatch(groupCount16(push.width), groupCount16(push.height), 1);
+}
+
+void SurfelPathTracerPasses::recordTaaPass(const vk::raii::CommandBuffer &commandBuffer,
+                                           const SurfelPathTracerPipelines &pipelines,
+                                           vk::DescriptorSet imageSet,
+                                           vk::DescriptorSet globalSet,
+                                           bool enabled,
+                                           bool resetHistory,
+                                           vk::Extent2D extent,
+                                           uint32_t frameIndex) const
+{
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.taaPipeline);
+	const std::array descriptorSets = {imageSet, globalSet};
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+	                                 *pipelines.computePipelineLayout,
+	                                 0,
+	                                 descriptorSets,
+	                                 nullptr);
+
+	const SurfelTaaPushConstants push{
+	    .width = std::max(extent.width, 1u),
+	    .height = std::max(extent.height, 1u),
+	    .enabled = enabled ? 1u : 0u,
+	    .resetHistory = resetHistory ? 1u : 0u,
+	    .frameIndex = frameIndex};
+	commandBuffer.pushConstants<SurfelTaaPushConstants>(*pipelines.computePipelineLayout,
+	                                                    vk::ShaderStageFlagBits::eCompute,
+	                                                    0,
+	                                                    push);
+	commandBuffer.dispatch(groupCount16(push.width), groupCount16(push.height), 1);
+}
+
 void SurfelPathTracerPasses::recordImageBarrierGBufferToCompute(
     const vk::raii::CommandBuffer &commandBuffer,
     const SurfelPathTracerResources &resources,
@@ -317,7 +541,8 @@ void SurfelPathTracerPasses::recordImageBarrierGBufferToCompute(
 		barriers[i] = vk::ImageMemoryBarrier2{
 		    .srcStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
 		    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-		    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+		    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader |
+		                    vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
 		    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
 		    .oldLayout = vk::ImageLayout::eGeneral,
 		    .newLayout = vk::ImageLayout::eGeneral,

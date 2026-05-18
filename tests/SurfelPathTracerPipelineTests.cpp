@@ -43,7 +43,7 @@ bool containsNeedle(const std::string &haystack, std::string_view needle)
 bool testSurfelPathTracerPipelineContracts()
 {
 	const std::filesystem::path root = sourceRoot();
-	const std::array<std::filesystem::path, 25> contractFiles = {
+	const std::array<std::filesystem::path, 30> contractFiles = {
 	    root / "CMakeLists.txt",
 	    root / "src" / "Core" / "EngineAuxiliary.h",
 	    root / "src" / "Core" / "UISystem.h",
@@ -69,6 +69,11 @@ bool testSurfelPathTracerPipelineContracts()
 	    root / "src" / "shaders" / "SurfelPathTracerAnyHit.slang",
 	    root / "src" / "shaders" / "SurfelPathTracerIntegrate.slang",
 	    root / "src" / "shaders" / "SurfelPathTracerEvaluate.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerReflection.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerReflectionFilter.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerBilateral.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerTaa.slang",
 	};
 
 	std::string combined;
@@ -79,7 +84,7 @@ bool testSurfelPathTracerPipelineContracts()
 		combined += '\n';
 	}
 
-	const std::array<std::string_view, 98> needles = {
+	const std::array<std::string_view, 144> needles = {
 	    "RenderMode::SurfelPathTracer",
 	    "SurfelPathTracerSettings",
 	    "SurfelPathTracerStats",
@@ -129,6 +134,11 @@ bool testSurfelPathTracerPipelineContracts()
 	    "recordSurfelRayTracePass",
 	    "recordIntegratePass",
 	    "recordEvaluatePass",
+	    "recordReflectionPass",
+	    "recordReflectionFilterPass",
+	    "recordBilateralPass",
+	    "recordLightIntegratePass",
+	    "recordTaaPass",
 	    "SurfelPathTracerEvaluateMode::Generate",
 	    "SurfelPathTracerEvaluateMode::Resolve",
 	    "recordImageBarrierGBufferToCompute",
@@ -149,6 +159,8 @@ bool testSurfelPathTracerPipelineContracts()
 	    "gBufferMotionMaterial",
 	    "gBufferNormal",
 	    "gBufferDepth",
+	    "lightingImages",
+	    "taaHistoryImages",
 	    "RaytracingAccelerationStructure tlas",
 	    "node->modelId >= static_cast<int>(Laphria::EngineConfig::kBindlessModelCapacity)",
 	    "vk::Format::eR32G32B32A32Sfloat, gBufferMotionMaterialImages",
@@ -177,6 +189,46 @@ bool testSurfelPathTracerPipelineContracts()
 	    "unpackNormalOctahedral",
 	    "SURFEL_PT_RAY_BIAS",
 	    "clampLuminance",
+	    "ggxSampleDirection",
+	    "applyAcesTonemap",
+	    "SurfelPathTracerDebugView::ReflectionFiltered",
+	    "const uint32_t halfWidth = std::max((width + 1u) / 2u, 1u)",
+	    "const uint32_t halfHeight = std::max((height + 1u) / 2u, 1u)",
+	    "makeReflectionHistoryKey",
+	    "reflectionHistoryKeyMatches",
+	    "float currentKey = makeReflectionHistoryKey(centerDepth, centerNormal, centerMaterial)",
+	    "bool historyUsable = push.resetHistory == 0u &&",
+	    "reflectionHistoryKeyMatches(previousFiltered.a, currentKey)",
+	    "filteredReflectionImages[pixel] = float4(clampLuminance(filtered, SURFEL_PT_MAX_RADIANCE_LUMINANCE), currentKey)",
+	    "[[vk::binding(16, 0)]] RWTexture2D<float4> reflectionImages",
+	    "[[vk::binding(17, 0)]] RWTexture2D<float4> filteredReflectionImages",
+	    "float4 sampleValue = filteredReflectionImages[samplePixel]",
+	    "reflectionImages[pixel] = float4(clampLuminance(filtered, SURFEL_PT_MAX_RADIANCE_LUMINANCE), centerValue.a)",
+	    "makeTaaHistoryKey",
+	    "taaHistoryKeyMatches",
+	    "[[vk::binding(1, 0)]] RWTexture2D<float4> gBufferNormal",
+	    "float3 normalRaw = gBufferNormal[pixel].xyz",
+	    "float currentKey = makeTaaHistoryKey(depth, motionMaterial, normal)",
+	    "uint2 previousPixel = min(uint2(previousUv * float2(push.width, push.height))",
+	    "bool samePixelFallback = all(abs(int2(previousPixel) - int2(pixel)) <= int2(0))",
+	    "if (samePixelFallback && taaHistoryKeyMatches(storedHistory.a, currentKey))",
+	    "taaHistoryImages[pixel] = float4(blended, currentKey)",
+	    "outputImage[pixel] = float4(applyAcesTonemap(blended, ubo.exposure), 1.0)",
+	    "commandBuffer.dispatch(groupCount16(push.width), groupCount16(push.height), 1)",
+	    "const bool historyReady = !ptForceHistoryReset && surfelPathTracerHistoryValid[fi]",
+	    "vk::PipelineStageFlagBits2::eComputeShader |\n\t\t                    vk::PipelineStageFlagBits2::eRayTracingShaderKHR",
+	    "const bool preserveReflectionDebug =",
+	    "SurfelPathTracerDebugView::ReflectionFiltered",
+	    "const bool taaHistoryEnabled =",
+	    "surfelSettings.debugView == UISystem::SurfelPathTracerDebugView::FinalColor",
+	    "if (taaHistoryEnabled)",
+	    "surfelPathTracerHistoryValid.fill(false)",
+	    "if (push.enabled == 0u)",
+	    "outputImage[pixel] = float4(applyAcesTonemap(currentLighting, ubo.exposure), 1.0)",
+	    "!isFinite3(rawNormal) || length(rawNormal) <= 0.001",
+	    "!isFinite3(sampleNormalRaw) || length(sampleNormalRaw) <= 0.001",
+	    "bool validNormal = isFinite3(normalRaw) && length(normalRaw) > 0.001",
+	    "halfWidth,\n\t                           halfHeight,\n\t                           1)",
 	};
 
 	bool ok = true;

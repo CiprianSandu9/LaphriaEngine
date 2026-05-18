@@ -245,9 +245,11 @@ void SurfelPathTracerResources::createExtentImages(const VulkanDevice &dev,
 	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, gBufferNormalImages, gBufferNormalViews);
 	createStorageImageSet(dev, width, height, vk::Format::eR32Sfloat, gBufferDepthImages, gBufferDepthViews);
 	createStorageImageSet(dev, width, height, vk::Format::eR32G32B32A32Sfloat, gBufferMotionMaterialImages, gBufferMotionMaterialViews);
-	createStorageImageSet(dev, std::max(width / 2u, 1u), std::max(height / 2u, 1u),
+	const uint32_t halfWidth = std::max((width + 1u) / 2u, 1u);
+	const uint32_t halfHeight = std::max((height + 1u) / 2u, 1u);
+	createStorageImageSet(dev, halfWidth, halfHeight,
 	                      vk::Format::eR16G16B16A16Sfloat, reflectionImages, reflectionViews);
-	createStorageImageSet(dev, std::max(width / 2u, 1u), std::max(height / 2u, 1u),
+	createStorageImageSet(dev, halfWidth, halfHeight,
 	                      vk::Format::eR16G16B16A16Sfloat, filteredReflectionImages, filteredReflectionViews);
 	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, lightingImages, lightingViews);
 	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, taaHistoryImages, taaHistoryViews);

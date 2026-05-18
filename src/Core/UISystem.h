@@ -131,6 +131,8 @@ public:
         ReflectionRaw = 8,
         ReflectionFiltered = 9
     };
+    static constexpr SurfelPathTracerDebugView kMaxSurfelPathTracerDebugView =
+        SurfelPathTracerDebugView::ReflectionFiltered;
 
     struct PathTracerSettings
     {

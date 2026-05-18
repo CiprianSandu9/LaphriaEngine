@@ -1618,6 +1618,9 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
             "Reflection Filtered"};
         int debugView = static_cast<int>(settings.debugView);
         ImGui::Combo("Debug View", &debugView, debugViews, IM_ARRAYSIZE(debugViews));
+        debugView = std::clamp(debugView,
+                               static_cast<int>(SurfelPathTracerDebugView::FinalColor),
+                               static_cast<int>(SurfelPathTracerDebugView::ReflectionFiltered));
         settings.debugView = static_cast<SurfelPathTracerDebugView>(debugView);
 
         ImGui::Text("Surfels: %u alive / %u dead / %u dirty",

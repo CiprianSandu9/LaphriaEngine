@@ -68,6 +68,7 @@ class EngineCore
 	vk::raii::DescriptorPool             surfelPathTracerRtDescriptorPool{nullptr};
 	std::vector<vk::raii::DescriptorSet> surfelPathTracerRtDescriptorSets;
 	mutable bool                         surfelPathTracerPersistentImageLayoutsInitialized = false;
+	mutable std::array<bool, MAX_FRAMES_IN_FLIGHT> surfelPathTracerHistoryValid{};
 
 	// Denoiser Resources (one set per frame in flight)
 	vk::raii::DescriptorPool             denoiserDescriptorPool{nullptr};
