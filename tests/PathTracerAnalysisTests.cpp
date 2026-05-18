@@ -448,7 +448,14 @@ bool requireSurfelBuildCellsPassContracts(const std::string &cmakeLists,
 	       containsText(surfelBuildCells, "[numthreads(128, 1, 1)]") &&
 	       !containsText(surfelBuildCells, "Contract anchor for Task 6") &&
 	       !containsText(surfelBuildCells, "// Contract anchor") &&
-	       containsText(buildCellsMain, "InterlockedAdd(cell.count");
+	       containsText(buildCellsMain, "for (int z = -1; z <= 1; ++z)") &&
+	       containsText(buildCellsMain, "for (int y = -1; y <= 1; ++y)") &&
+	       containsText(buildCellsMain, "for (int x = -1; x <= 1; ++x)") &&
+	       containsText(buildCellsMain, "surfelIntersectsCell(record, cell") &&
+	       containsText(buildCellsMain, "InterlockedAdd(surfelGiCells[cellIndex].writeCursor") &&
+	       containsText(buildCellsMain,
+	                    "surfelGiCellToSurfel[surfelGiCells[cellIndex].offset + slotIndex] = surfelIndex") &&
+	       !containsText(buildCellsMain, "SURFEL_GI_CELL_SLOT_COUNT");
 }
 
 bool requireSurfelIntegratePassContracts(const std::string &cmakeLists,
@@ -1190,7 +1197,7 @@ bool testPathTracerReservoirGiMeasurementContract()
 	if (!requireSurfelBuildCellsPassContracts(cmakeLists, pipelineHeader, pipelineSource,
 	                                          engineHeader, engineCore, surfelBuildCells))
 	{
-		std::cerr << "persistent surfel GI build-cells pass contract is incomplete\n";
+		std::cerr << "compact surfel fill pass must write multi-cell memberships into offset ranges\n";
 		return false;
 	}
 
