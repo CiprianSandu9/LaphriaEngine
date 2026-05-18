@@ -485,6 +485,8 @@ void EngineCore::initVulkan()
 	physicsSystem = std::make_unique<PhysicsSystem>();
 
 	pipelines.createDescriptorSetLayouts(vulkan);
+	pipelines.surfelPathTracerPipelines.createPipelineLayouts(vulkan, *pipelines.descriptorSetLayoutGlobal);
+	pipelines.surfelPathTracerPipelines.createComputePipelines(vulkan);
 
 	// Pipeline creation order matches dependency on the descriptor set layouts above.
 	pipelines.createGraphicsPipeline(vulkan, swapchain.surfaceFormat.format, vulkan.findDepthFormat());

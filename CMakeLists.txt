@@ -33,6 +33,26 @@ set(SHADER_SOURCES
         "Raygen.slang|main"
         "Reprojection.slang|reprojectionMain"
         "Denoiser.slang|atrousMain"
+        "SurfelPathTracerSky.slang|main"
+        "SurfelPathTracerGBuffer.slang|main"
+        "SurfelPathTracerGBufferMiss.slang|main"
+        "SurfelPathTracerGBufferClosestHit.slang|main"
+        "SurfelPathTracerGBufferAnyHit.slang|main"
+        "SurfelPathTracerPrepare.slang|main"
+        "SurfelPathTracerUpdate.slang|main"
+        "SurfelPathTracerCellInfo.slang|main"
+        "SurfelPathTracerCellToSurfel.slang|main"
+        "SurfelPathTracerRaygen.slang|main"
+        "SurfelPathTracerMiss.slang|main"
+        "SurfelPathTracerClosestHit.slang|main"
+        "SurfelPathTracerAnyHit.slang|main"
+        "SurfelPathTracerIntegrate.slang|main"
+        "SurfelPathTracerEvaluate.slang|main"
+        "SurfelPathTracerReflection.slang|main"
+        "SurfelPathTracerReflectionFilter.slang|main"
+        "SurfelPathTracerBilateral.slang|main"
+        "SurfelPathTracerLightIntegrate.slang|main"
+        "SurfelPathTracerTaa.slang|main"
 )
 
 if (CMAKE_CONFIGURATION_TYPES)
@@ -44,6 +64,7 @@ set(GENERATED_SPV_FILES "")
 
 set(SHADER_INCLUDE_DEPS
         "${SHADER_SOURCE_ROOT}/ShaderCommon.slang"
+        "${SHADER_SOURCE_ROOT}/SurfelPathTracerCommon.slang"
 )
 
 foreach (SHADER_ENTRY ${SHADER_SOURCES})
@@ -103,6 +124,8 @@ set(LAPHRIA_ENGINE_SOURCES
         src/Core/ResourceManager.cpp
         src/Core/ResourceManager.h
         src/Core/StbImageImpl.cpp
+        src/Core/SurfelPathTracerPipelines.cpp
+        src/Core/SurfelPathTracerPipelines.h
         src/Core/SurfelPathTracerResources.cpp
         src/Core/SurfelPathTracerResources.h
         src/Core/SwapchainManager.cpp

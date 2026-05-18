@@ -52,6 +52,7 @@ void PipelineCollection::createDescriptorSetLayouts(const VulkanDevice &dev)
 	createRayTracingDescriptorSetLayout(dev);
 	createPhysicsDescriptorSetLayout(dev);
 	createDenoiserDescriptorSetLayout(dev);
+	surfelPathTracerPipelines.createDescriptorSetLayouts(dev);
 }
 
 // ── Descriptor Set Layout Implementations ──────────────────────────────────
