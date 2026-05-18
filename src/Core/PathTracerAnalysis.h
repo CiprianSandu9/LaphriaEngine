@@ -60,9 +60,14 @@ struct PathTracerHistoryClampResult
 
 struct SurfelGiDiagnosticCounters
 {
+    uint32_t generateAttempts = 0;
     uint32_t generated = 0;
+    uint32_t generateRejectInvalid = 0;
+    uint32_t generateRejectCoverage = 0;
+    uint32_t cellInsertAttempts = 0;
     uint32_t cellInserted = 0;
     uint32_t cellOverflow = 0;
+    uint32_t evalAttempts = 0;
     uint32_t evalCandidates = 0;
     uint32_t evalAccepted = 0;
     uint32_t evalCellEmpty = 0;
@@ -70,8 +75,10 @@ struct SurfelGiDiagnosticCounters
 
 struct SurfelGiDiagnosticRatios
 {
+    float generateAcceptRatio = 0.0f;
     float cellInsertRatio = 0.0f;
     float cellOverflowRatio = 0.0f;
+    float evalCandidateRatio = 0.0f;
     float evalAcceptedRatio = 0.0f;
     float evalCellEmptyRatio = 0.0f;
 };

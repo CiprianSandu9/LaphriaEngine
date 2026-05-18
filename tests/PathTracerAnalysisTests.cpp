@@ -1018,22 +1018,37 @@ bool testPathTracerPowerHeuristic()
 bool testSurfelGiDiagnosticRatios()
 {
 	Laphria::SurfelGiDiagnosticCounters counters{};
+	counters.generateAttempts = 100;
 	counters.generated = 80;
+	counters.generateRejectInvalid = 12;
+	counters.generateRejectCoverage = 8;
+	counters.cellInsertAttempts = 100;
 	counters.cellInserted = 60;
 	counters.cellOverflow = 20;
+	counters.evalAttempts = 20;
 	counters.evalCandidates = 40;
 	counters.evalAccepted = 10;
 	counters.evalCellEmpty = 5;
 
 	const auto ratios = Laphria::computeSurfelGiDiagnosticRatios(counters);
-	if (std::abs(ratios.cellInsertRatio - 0.75f) > 0.0001f)
+	if (std::abs(ratios.generateAcceptRatio - 0.8f) > 0.0001f)
+	{
+		std::cerr << "surfel GI generate accept ratio mismatch\n";
+		return false;
+	}
+	if (std::abs(ratios.cellInsertRatio - 0.6f) > 0.0001f)
 	{
 		std::cerr << "surfel GI cell insert ratio mismatch\n";
 		return false;
 	}
-	if (std::abs(ratios.cellOverflowRatio - 0.25f) > 0.0001f)
+	if (std::abs(ratios.cellOverflowRatio - 0.2f) > 0.0001f)
 	{
 		std::cerr << "surfel GI cell overflow ratio mismatch\n";
+		return false;
+	}
+	if (std::abs(ratios.evalCandidateRatio - 2.0f) > 0.0001f)
+	{
+		std::cerr << "surfel GI eval candidate ratio mismatch\n";
 		return false;
 	}
 	if (std::abs(ratios.evalAcceptedRatio - 0.25f) > 0.0001f)
@@ -1196,7 +1211,10 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "surfelGiDebug",
 	    "Surfel GI Occupancy",
 	    "Surfel GI Gather",
+	    "surfelGiGenerateAttempts",
 	    "surfelGiGenerated",
+	    "surfelGiGenerateRejectInvalid",
+	    "surfelGiGenerateRejectCoverage",
 	    "surfelGiCellOverflow",
 	    "surfelGiEvalAccepted"};
 	for (const char *symbol : requiredTask8Symbols)
@@ -1223,7 +1241,10 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "ImGui::Checkbox(\"Surfel GI Cache\", &pathTracerSettings.enableSurfelGi)",
 	    "ImGui::Checkbox(\"Surfel GI Debug\", &pathTracerSettings.surfelGiDebug)",
 	    "ImGui::SliderInt(\"Surfel Eval Candidates\", &pathTracerSettings.surfelGiMaxEvalCandidates, 1, 16)",
+	    "Surfel GI Generate Attempts",
 	    "Surfel GI Generated",
+	    "Surfel GI Generate Reject Invalid",
+	    "Surfel GI Generate Reject Coverage",
 	    "Surfel GI Cell Insert Attempts",
 	    "Surfel GI Cell Overflow",
 	    "Surfel GI Eval Attempts",
@@ -1232,7 +1253,10 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "SurfelGiGather = 26",
 	    "PathTracerDebugAov::SurfelGiOccupancy",
 	    "PathTracerDebugAov::SurfelGiGather",
+	    "surfelGiGenerateAttempts=%.1f",
 	    "surfelGiGenerated=%.1f",
+	    "surfelGiGenerateRejectInvalid=%.1f",
+	    "surfelGiGenerateRejectCoverage=%.1f",
 	    "surfelGiCellInsertAttempts=%.1f",
 	    "surfelGiCellInserted=%.1f",
 	    "surfelGiCellOverflow=%.1f",
@@ -1240,7 +1264,10 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "surfelGiEvalCandidates=%.1f",
 	    "surfelGiEvalAccepted=%.1f",
 	    "surfelGiEvalCellEmpty=%.1f",
+	    "stats.surfelGiGenerateAttempts",
 	    "stats.surfelGiGenerated",
+	    "stats.surfelGiGenerateRejectInvalid",
+	    "stats.surfelGiGenerateRejectCoverage",
 	    "stats.surfelGiCellInsertAttempts",
 	    "stats.surfelGiCellInserted",
 	    "stats.surfelGiCellOverflow",

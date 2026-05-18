@@ -226,7 +226,10 @@ class EngineCore
 		double brightSurfelSelectorRejectReceiverHemisphere = 0.0;
 		double brightSurfelSelectorRejectSurfelHemisphere = 0.0;
 		double brightSurfelSelectorRejectInvalidVector = 0.0;
+		double surfelGiGenerateAttempts = 0.0;
 		double surfelGiGenerated = 0.0;
+		double surfelGiGenerateRejectInvalid = 0.0;
+		double surfelGiGenerateRejectCoverage = 0.0;
 		double surfelGiCellInsertAttempts = 0.0;
 		double surfelGiCellInserted = 0.0;
 		double surfelGiCellOverflow = 0.0;

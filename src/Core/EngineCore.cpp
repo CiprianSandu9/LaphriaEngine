@@ -2356,8 +2356,14 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    counters->reservoirGiBrightSurfelSelectorRejectSurfelHemisphere;
 	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectInvalidVector =
 	    counters->reservoirGiBrightSurfelSelectorRejectInvalidVector;
+	ui.pathTracerPerfStats.surfelGiGenerateAttempts =
+	    counters->surfelGiGenerateAttempts;
 	ui.pathTracerPerfStats.surfelGiGenerated =
 	    counters->surfelGiGenerated;
+	ui.pathTracerPerfStats.surfelGiGenerateRejectInvalid =
+	    counters->surfelGiGenerateRejectInvalid;
+	ui.pathTracerPerfStats.surfelGiGenerateRejectCoverage =
+	    counters->surfelGiGenerateRejectCoverage;
 	ui.pathTracerPerfStats.surfelGiCellInsertAttempts =
 	    counters->surfelGiCellInsertAttempts;
 	ui.pathTracerPerfStats.surfelGiCellInserted =
@@ -2877,7 +2883,9 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "brightSurfelSelectorRejectReceiverHemisphere=%.1f, "
 	     "brightSurfelSelectorRejectSurfelHemisphere=%.1f, "
 	     "brightSurfelSelectorRejectInvalidVector=%.1f, "
-	     "surfelGiGenerated=%.1f, surfelGiCellInsertAttempts=%.1f, "
+	     "surfelGiGenerateAttempts=%.1f, surfelGiGenerated=%.1f, "
+	     "surfelGiGenerateRejectInvalid=%.1f, surfelGiGenerateRejectCoverage=%.1f, "
+	     "surfelGiCellInsertAttempts=%.1f, "
 	     "surfelGiCellInserted=%.1f, surfelGiCellOverflow=%.1f, "
 	     "surfelGiEvalAttempts=%.1f, surfelGiEvalCandidates=%.1f, "
 	     "surfelGiEvalAccepted=%.1f, surfelGiEvalCellEmpty=%.1f, "
@@ -2974,7 +2982,10 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.brightSurfelSelectorRejectReceiverHemisphere * invSamples,
 	     accum.brightSurfelSelectorRejectSurfelHemisphere * invSamples,
 	     accum.brightSurfelSelectorRejectInvalidVector * invSamples,
+	     accum.surfelGiGenerateAttempts * invSamples,
 	     accum.surfelGiGenerated * invSamples,
+	     accum.surfelGiGenerateRejectInvalid * invSamples,
+	     accum.surfelGiGenerateRejectCoverage * invSamples,
 	     accum.surfelGiCellInsertAttempts * invSamples,
 	     accum.surfelGiCellInserted * invSamples,
 	     accum.surfelGiCellOverflow * invSamples,
@@ -3185,8 +3196,14 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectSurfelHemisphere);
 	ptExperimentAccum.brightSurfelSelectorRejectInvalidVector +=
 	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectInvalidVector);
+	ptExperimentAccum.surfelGiGenerateAttempts +=
+	    static_cast<double>(stats.surfelGiGenerateAttempts);
 	ptExperimentAccum.surfelGiGenerated +=
 	    static_cast<double>(stats.surfelGiGenerated);
+	ptExperimentAccum.surfelGiGenerateRejectInvalid +=
+	    static_cast<double>(stats.surfelGiGenerateRejectInvalid);
+	ptExperimentAccum.surfelGiGenerateRejectCoverage +=
+	    static_cast<double>(stats.surfelGiGenerateRejectCoverage);
 	ptExperimentAccum.surfelGiCellInsertAttempts +=
 	    static_cast<double>(stats.surfelGiCellInsertAttempts);
 	ptExperimentAccum.surfelGiCellInserted +=

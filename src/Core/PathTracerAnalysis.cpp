@@ -133,11 +133,15 @@ PathTracerHistoryClampResult computePathTracerHistoryClamp(const PathTracerHisto
 
 SurfelGiDiagnosticRatios computeSurfelGiDiagnosticRatios(const SurfelGiDiagnosticCounters &counters)
 {
-	const float generated = static_cast<float>(std::max(counters.generated, 1u));
+	const float generateAttempts = static_cast<float>(std::max(counters.generateAttempts, 1u));
+	const float cellInsertAttempts = static_cast<float>(std::max(counters.cellInsertAttempts, 1u));
+	const float evalAttempts = static_cast<float>(std::max(counters.evalAttempts, 1u));
 	const float evalCandidates = static_cast<float>(std::max(counters.evalCandidates, 1u));
 	return SurfelGiDiagnosticRatios{
-	    .cellInsertRatio = static_cast<float>(counters.cellInserted) / generated,
-	    .cellOverflowRatio = static_cast<float>(counters.cellOverflow) / generated,
+	    .generateAcceptRatio = static_cast<float>(counters.generated) / generateAttempts,
+	    .cellInsertRatio = static_cast<float>(counters.cellInserted) / cellInsertAttempts,
+	    .cellOverflowRatio = static_cast<float>(counters.cellOverflow) / cellInsertAttempts,
+	    .evalCandidateRatio = static_cast<float>(counters.evalCandidates) / evalAttempts,
 	    .evalAcceptedRatio = static_cast<float>(counters.evalAccepted) / evalCandidates,
 	    .evalCellEmptyRatio = static_cast<float>(counters.evalCellEmpty) / evalCandidates};
 }
