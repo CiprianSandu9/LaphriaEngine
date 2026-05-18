@@ -428,6 +428,40 @@ bool requireSurfelClearPassContracts(const std::string &pipelineHeader,
 	return true;
 }
 
+bool requirePathTracerAnalysisRtToComputeBarrier(const std::string &engineCore)
+{
+	const std::string rayTraceRecord =
+	    stripComments(extractFunctionBody(engineCore, "void EngineCore::recordRayTracingCommandBuffer("));
+	if (rayTraceRecord.empty())
+	{
+		return false;
+	}
+	const std::size_t tracePos = rayTraceRecord.find("commandBuffer.traceRaysKHR");
+	const std::size_t surfelClearPos = rayTraceRecord.find("recordSurfelGiClearPass(commandBuffer, fi)");
+	if (tracePos == std::string::npos || surfelClearPos == std::string::npos || tracePos >= surfelClearPos)
+	{
+		return false;
+	}
+
+	const std::string rtToSurfelSnippet =
+	    rayTraceRecord.substr(tracePos, surfelClearPos - tracePos);
+	if (!containsText(rtToSurfelSnippet, "ptAnalysisRtToComputeBarrier") ||
+	    !containsText(rtToSurfelSnippet, ".srcStageMask  = vk::PipelineStageFlagBits2::eRayTracingShaderKHR") ||
+	    !containsText(rtToSurfelSnippet, ".srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite") ||
+	    !containsText(rtToSurfelSnippet, ".dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader") ||
+	    !containsText(rtToSurfelSnippet, "vk::AccessFlagBits2::eShaderStorageRead") ||
+	    !containsText(rtToSurfelSnippet, "vk::AccessFlagBits2::eShaderStorageWrite") ||
+	    !containsText(rtToSurfelSnippet, ".buffer        = *frames.ptAnalysisCounterBuffers[fi]") ||
+	    !containsText(rtToSurfelSnippet, ".size          = sizeof(Laphria::PathTracerAnalysisCounters)") ||
+	    !containsText(rtToSurfelSnippet, "commandBuffer.pipelineBarrier2(ptAnalysisRtToComputeDependency)"))
+	{
+		std::cerr << "path tracer analysis counters need an RT-to-compute buffer barrier before surfel GI passes\n";
+		return false;
+	}
+
+	return true;
+}
+
 bool requireSurfelGeneratePassContracts(const std::string &cmakeLists,
                                         const std::string &pipelineHeader,
                                         const std::string &pipelineSource,
@@ -1442,6 +1476,10 @@ bool testPathTracerReservoirGiMeasurementContract()
 	}
 	if (!requireCompactSurfelGridDiagnosticPlumbing(
 	        engineAuxiliaryHeader, uiHeader, uiSource, engineHeader, engineCore))
+	{
+		return false;
+	}
+	if (!requirePathTracerAnalysisRtToComputeBarrier(engineCore))
 	{
 		return false;
 	}

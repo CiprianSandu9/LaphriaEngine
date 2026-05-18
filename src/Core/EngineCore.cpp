@@ -1915,6 +1915,19 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	barrierRTtoCompute(*frames.rtGBufferDepth[fi]);
 	barrierRTtoCompute(*frames.rtMotionVectors[fi]);
 
+	vk::BufferMemoryBarrier2 ptAnalysisRtToComputeBarrier{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	    .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+	    .buffer        = *frames.ptAnalysisCounterBuffers[fi],
+	    .offset        = 0,
+	    .size          = sizeof(Laphria::PathTracerAnalysisCounters)};
+	vk::DependencyInfo ptAnalysisRtToComputeDependency{
+	    .bufferMemoryBarrierCount = 1,
+	    .pBufferMemoryBarriers    = &ptAnalysisRtToComputeBarrier};
+	commandBuffer.pipelineBarrier2(ptAnalysisRtToComputeDependency);
+
 	if (ui.pathTracerSettings.enableSurfelGi ||
 	    ui.pathTracerSettings.surfelGiDebug ||
 	    surfelGiDebugAovSelected)
