@@ -193,6 +193,13 @@ UISystem::SurfelPathTracerStats SurfelPathTracerResources::readStats() const
 	stats.requestedRays = counters->requestedRays;
 	stats.filledCells = counters->filledCells;
 	stats.rejectedStores = counters->rejectedStores;
+	stats.recycledSurfels = counters->recycledSurfels;
+	stats.spawnedSurfels = counters->spawnedSurfels;
+	stats.removedSurfels = counters->removedSurfels;
+	stats.guidedRays = counters->guidedRays;
+	stats.cosineRays = counters->cosineRays;
+	stats.surfelTerminatedPaths = counters->surfelTerminatedPaths;
+	stats.pathMisses = counters->pathMisses;
 	return stats;
 }
 
@@ -204,28 +211,6 @@ bool SurfelPathTracerResources::needsPersistentResourceRecreate(
 	       capacity.maxRaysPerFrame != settings_.maxRaysPerFrame ||
 	       capacity.cellDimension != settings_.cellDimension ||
 	       capacity.perCellSurfelLimit != settings_.perCellSurfelLimit;
-}
-
-SurfelPathTracerCellAddress SurfelPathTracerResources::cellAddressForPosition(
-    const glm::vec3 &position,
-    float cellSize,
-    uint32_t cellDimension)
-{
-	const float safeCellSize = std::max(cellSize, 0.0001f);
-	const uint32_t dim = std::clamp(cellDimension, kMinCellDimension, kMaxCellDimension);
-	const double halfDim = static_cast<double>(dim) * 0.5;
-	const double maxCoord = static_cast<double>(dim - 1u);
-	const glm::dvec3 centeredCell = glm::floor(glm::dvec3(position) / static_cast<double>(safeCellSize)) +
-	                                glm::dvec3(halfDim);
-	const glm::dvec3 clampedCell = glm::clamp(centeredCell, glm::dvec3(0.0), glm::dvec3(maxCoord));
-	const glm::ivec3 coord{
-	    static_cast<int>(clampedCell.x),
-	    static_cast<int>(clampedCell.y),
-	    static_cast<int>(clampedCell.z)};
-	const uint64_t flat = static_cast<uint64_t>(coord.x) +
-	                      static_cast<uint64_t>(coord.y) * dim +
-	                      static_cast<uint64_t>(coord.z) * dim * dim;
-	return {coord, static_cast<uint32_t>(flat)};
 }
 
 void SurfelPathTracerResources::createPersistentBuffers(

@@ -1,5 +1,7 @@
 #include "SurfelPathTracerPipelineTests.h"
 
+#include "../src/Core/SurfelPathTracerResources.h"
+
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -35,13 +37,38 @@ std::string readTextFile(const std::filesystem::path &path, bool &ok)
 	return stream.str();
 }
 
-bool containsNeedle(const std::string &haystack, std::string_view needle)
+bool containsNeedle(std::string_view haystack, std::string_view needle)
 {
 	return haystack.find(needle) != std::string::npos;
 }
-} // namespace
 
-bool testSurfelPathTracerPipelineContracts()
+bool containsAllNeedles(std::string_view haystack, std::initializer_list<std::string_view> needles)
+{
+	bool ok = true;
+	for (std::string_view needle : needles)
+	{
+		if (!containsNeedle(haystack, needle))
+		{
+			std::cerr << "missing SurfelPathTracer contract: " << needle << '\n';
+			ok = false;
+		}
+	}
+	return ok;
+}
+
+bool appearsBefore(std::string_view haystack, std::string_view first, std::string_view second)
+{
+	const auto firstPos = haystack.find(first);
+	const auto secondPos = haystack.find(second);
+	if (firstPos == std::string_view::npos || secondPos == std::string_view::npos || firstPos >= secondPos)
+	{
+		std::cerr << "SurfelPathTracer pass-order contract failed: " << first << " before " << second << '\n';
+		return false;
+	}
+	return true;
+}
+
+bool testSurfelPathTracerPipelineContractFiles()
 {
 	const std::filesystem::path root = sourceRoot();
 	const std::array<std::filesystem::path, 30> contractFiles = {
@@ -85,7 +112,7 @@ bool testSurfelPathTracerPipelineContracts()
 		combined += '\n';
 	}
 
-	const std::vector<std::string_view> needles = {
+	const std::initializer_list<std::string_view> needles = {
 	    "RenderMode::SurfelPathTracer",
 	    "SurfelPathTracerSettings",
 	    "SurfelPathTracerStats",
@@ -95,6 +122,18 @@ bool testSurfelPathTracerPipelineContracts()
 	    "struct SurfelPathTracerSurfel",
 	    "struct SurfelPathTracerCellInfo",
 	    "struct SurfelPathTracerCounters",
+	    "lastSeenFrame",
+	    "lastReferencedFrame",
+	    "sleepState",
+	    "materialKey",
+	    "varianceAndInconsistency",
+	    "recycledSurfels",
+	    "spawnedSurfels",
+	    "removedSurfels",
+	    "guidedRays",
+	    "cosineRays",
+	    "surfelTerminatedPaths",
+	    "pathMisses",
 	    "cellAddressForPosition",
 	    "needsPersistentReset",
 	    "~SurfelPathTracerResources",
@@ -107,6 +146,31 @@ bool testSurfelPathTracerPipelineContracts()
 	    "const uint64_t flat",
 	    "irradianceAtlasWidth",
 	    "irradianceAtlasHeight",
+	    "minRaysPerSurfel",
+	    "maxRaysPerSurfel",
+	    "rayBudgetScale",
+	    "activeMaxDepth",
+	    "sleepingMaxDepth",
+	    "placementThreshold",
+	    "removalThreshold",
+	    "varianceSensitivity",
+	    "surfelTargetArea",
+	    "surfelMinRadius",
+	    "surfelMaxRadiusScale",
+	    "maxSurfelSamplesPerQuery",
+	    "maxRadianceSharingSamples",
+	    "enableGuidedSampling",
+	    "enableSurfelTermination",
+	    "enableRadianceSharing",
+	    "enableSurfelPlacement",
+	    "enableSurfelRemoval",
+	    "enableReferenceValidation",
+	    "atlasTileSize",
+	    "SurfelCoverage = 10",
+	    "ReferenceColor = 11",
+	    "ReferenceDifference = 12",
+	    "kMaxSurfelPathTracerDebugView",
+	    "SurfelPathTracerDebugView::ReferenceDifference",
 	    "SurfelPathTracerSky.slang|main",
 	    "SurfelPathTracerGBuffer.slang|main",
 	    "SurfelPathTracerGBufferMiss.slang|main",
@@ -189,6 +253,18 @@ bool testSurfelPathTracerPipelineContracts()
 	    "packNormalOctahedral",
 	    "unpackNormalOctahedral",
 	    "SURFEL_PT_RAY_BIAS",
+	    "SURFEL_PT_ATLAS_TILE_SIZE",
+	    "SURFEL_PT_SLEEP_AWAKE",
+	    "SURFEL_PT_SLEEP_SLEEPING",
+	    "SURFEL_PT_STATUS_LAST_SEEN",
+	    "SURFEL_PT_STATUS_LAST_REFERENCED",
+	    "SURFEL_PT_COUNTER_RECYCLED_SURFELS_OFFSET",
+	    "SURFEL_PT_COUNTER_SPAWNED_SURFELS_OFFSET",
+	    "SURFEL_PT_COUNTER_REMOVED_SURFELS_OFFSET",
+	    "SURFEL_PT_COUNTER_GUIDED_RAYS_OFFSET",
+	    "SURFEL_PT_COUNTER_COSINE_RAYS_OFFSET",
+	    "SURFEL_PT_COUNTER_SURFEL_TERMINATED_PATHS_OFFSET",
+	    "SURFEL_PT_COUNTER_PATH_MISSES_OFFSET",
 	    "clampLuminance",
 	    "ggxSampleDirection",
 	    "applyAcesTonemap",
@@ -249,15 +325,26 @@ bool testSurfelPathTracerPipelineContracts()
 	    "halfWidth,\n\t                           halfHeight,\n\t                           1)",
 	};
 
-	bool ok = true;
-	for (std::string_view needle : needles)
-	{
-		if (!containsNeedle(combined, needle))
-		{
-			std::cerr << "missing SurfelPathTracer contract: " << needle << '\n';
-			ok = false;
-		}
-	}
+	const bool ok = containsAllNeedles(combined, needles);
 
 	return filesOk && ok;
+}
+
+bool testSurfelPathTracerCellAddressBounds()
+{
+	const auto atCenter = Laphria::SurfelPathTracerResources::cellAddressForPosition(glm::vec3(0.0f), 1.0f, 64);
+	const auto atFar = Laphria::SurfelPathTracerResources::cellAddressForPosition(glm::vec3(100000.0f), 1.0f, 64);
+
+	if (atCenter.flatIndex >= 64u * 64u * 64u || atFar.flatIndex >= 64u * 64u * 64u)
+	{
+		std::cerr << "surfel cell address escaped valid bounds\n";
+		return false;
+	}
+	return true;
+}
+} // namespace
+
+bool testSurfelPathTracerPipelineContracts()
+{
+	return testSurfelPathTracerPipelineContractFiles() && testSurfelPathTracerCellAddressBounds();
 }

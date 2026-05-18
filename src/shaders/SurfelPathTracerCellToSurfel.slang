@@ -15,8 +15,6 @@ struct CellToSurfelPushConstants {
 
 [[vk::push_constant]] CellToSurfelPushConstants push;
 
-static const uint COUNTER_REJECTED_STORES_OFFSET = 20u;
-
 uint cellIndexForPosition(float3 position, float cellSize, uint cellDimension) {
     float safeCellSize = max(cellSize, 0.0001f);
     uint dim = max(cellDimension, 1u);
@@ -44,7 +42,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     uint cellIndex = cellIndexForPosition(surfel.position, push.cellSize, push.cellDimension);
     SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
     if (cellInfo.surfelCount == 0u) {
-        counters.InterlockedAdd(COUNTER_REJECTED_STORES_OFFSET, 1u);
+        counters.InterlockedAdd(SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET, 1u);
         return;
     }
 
@@ -55,6 +53,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (cellSlot < cellInfo.surfelCount) {
         cellToSurfelBuffer[cellInfo.surfelOffset + cellSlot] = surfelIndex;
     } else {
-        counters.InterlockedAdd(COUNTER_REJECTED_STORES_OFFSET, 1u);
+        counters.InterlockedAdd(SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET, 1u);
     }
 }

@@ -1,6 +1,7 @@
 #ifndef LAPHRIAENGINE_SURFELPATHTRACERRESOURCES_H
 #define LAPHRIAENGINE_SURFELPATHTRACERRESOURCES_H
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -26,6 +27,11 @@ struct SurfelPathTracerSurfel
 	uint32_t flags = 0;
 	glm::vec4 meanAndVariance{0.0f};
 	glm::vec4 shortMeanAndLife{0.0f};
+	uint32_t lastSeenFrame = 0;
+	uint32_t lastReferencedFrame = 0;
+	uint32_t sleepState = 0;
+	uint32_t materialKey = 0;
+	glm::vec4 varianceAndInconsistency{1.0f};
 };
 
 struct SurfelPathTracerCellInfo
@@ -44,6 +50,14 @@ struct SurfelPathTracerCounters
 	uint32_t rejectedStores = 0;
 	uint32_t frameIndex = 0;
 	uint32_t pad0 = 0;
+	uint32_t recycledSurfels = 0;
+	uint32_t spawnedSurfels = 0;
+	uint32_t removedSurfels = 0;
+	uint32_t guidedRays = 0;
+	uint32_t cosineRays = 0;
+	uint32_t surfelTerminatedPaths = 0;
+	uint32_t pathMisses = 0;
+	uint32_t pad1 = 0;
 };
 
 struct SurfelPathTracerCellAddress
@@ -85,7 +99,24 @@ class SurfelPathTracerResources
 
 	static SurfelPathTracerCellAddress cellAddressForPosition(const glm::vec3 &position,
 	                                                          float cellSize,
-	                                                          uint32_t cellDimension);
+	                                                          uint32_t cellDimension)
+	{
+		const float safeCellSize = std::max(cellSize, 0.0001f);
+		const uint32_t dim = std::clamp(cellDimension, kMinCellDimension, kMaxCellDimension);
+		const double halfDim = static_cast<double>(dim) * 0.5;
+		const double maxCoord = static_cast<double>(dim - 1u);
+		const glm::dvec3 centeredCell = glm::floor(glm::dvec3(position) / static_cast<double>(safeCellSize)) +
+		                                glm::dvec3(halfDim);
+		const glm::dvec3 clampedCell = glm::clamp(centeredCell, glm::dvec3(0.0), glm::dvec3(maxCoord));
+		const glm::ivec3 coord{
+		    static_cast<int>(clampedCell.x),
+		    static_cast<int>(clampedCell.y),
+		    static_cast<int>(clampedCell.z)};
+		const uint64_t flat = static_cast<uint64_t>(coord.x) +
+		                      static_cast<uint64_t>(coord.y) * dim +
+		                      static_cast<uint64_t>(coord.z) * dim * dim;
+		return {coord, static_cast<uint32_t>(flat)};
+	}
 
 	VulkanUtils::VmaBuffer countersBuffer;
 	VulkanUtils::VmaBuffer surfelBuffer;

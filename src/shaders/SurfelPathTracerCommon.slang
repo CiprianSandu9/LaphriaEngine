@@ -5,6 +5,11 @@
 
 static const uint SURFEL_PT_MAX_LIFE = 255u;
 static const uint SURFEL_PT_INVALID_INDEX = 0xFFFFFFFFu;
+static const uint SURFEL_PT_ATLAS_TILE_SIZE = 6u;
+static const uint SURFEL_PT_SLEEP_AWAKE = 0u;
+static const uint SURFEL_PT_SLEEP_SLEEPING = 1u;
+static const uint SURFEL_PT_STATUS_LAST_SEEN = 0x2u;
+static const uint SURFEL_PT_STATUS_LAST_REFERENCED = 0x4u;
 static const float SURFEL_PT_RAY_BIAS = 0.001;
 static const float SURFEL_PT_MAX_RADIANCE_LUMINANCE = 32.0;
 
@@ -12,8 +17,16 @@ static const uint SURFEL_PT_COUNTER_ALIVE_SURFELS_OFFSET = 0u;
 static const uint SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET = 4u;
 static const uint SURFEL_PT_COUNTER_DIRTY_SURFELS_OFFSET = 8u;
 static const uint SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET = 12u;
+static const uint SURFEL_PT_COUNTER_FILLED_CELLS_OFFSET = 16u;
 static const uint SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET = 20u;
 static const uint SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET = 24u;
+static const uint SURFEL_PT_COUNTER_RECYCLED_SURFELS_OFFSET = 32u;
+static const uint SURFEL_PT_COUNTER_SPAWNED_SURFELS_OFFSET = 36u;
+static const uint SURFEL_PT_COUNTER_REMOVED_SURFELS_OFFSET = 40u;
+static const uint SURFEL_PT_COUNTER_GUIDED_RAYS_OFFSET = 44u;
+static const uint SURFEL_PT_COUNTER_COSINE_RAYS_OFFSET = 48u;
+static const uint SURFEL_PT_COUNTER_SURFEL_TERMINATED_PATHS_OFFSET = 52u;
+static const uint SURFEL_PT_COUNTER_PATH_MISSES_OFFSET = 56u;
 
 static const uint SURFEL_PT_RAY_RECORD_UINTS = 8u;
 static const uint SURFEL_PT_RAY_SURFEL_INDEX = 0u;
@@ -35,6 +48,11 @@ struct SurfelPathTracerSurfel {
     uint flags;
     float4 meanAndVariance;
     float4 shortMeanAndLife;
+    uint lastSeenFrame;
+    uint lastReferencedFrame;
+    uint sleepState;
+    uint materialKey;
+    float4 varianceAndInconsistency;
 };
 
 struct SurfelPathTracerCellInfo {
@@ -51,6 +69,14 @@ struct SurfelPathTracerCounters {
     uint rejectedStores;
     uint frameIndex;
     uint pad0;
+    uint recycledSurfels;
+    uint spawnedSurfels;
+    uint removedSurfels;
+    uint guidedRays;
+    uint cosineRays;
+    uint surfelTerminatedPaths;
+    uint pathMisses;
+    uint pad1;
 };
 
 uint packNormalOctahedral(float3 normal) {

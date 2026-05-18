@@ -20,14 +20,6 @@ struct PreparePushConstants {
 
 [[vk::push_constant]] PreparePushConstants push;
 
-static const uint COUNTER_ALIVE_SURFELS_OFFSET = 0u;
-static const uint COUNTER_DEAD_SURFELS_OFFSET = 4u;
-static const uint COUNTER_DIRTY_SURFELS_OFFSET = 8u;
-static const uint COUNTER_REQUESTED_RAYS_OFFSET = 12u;
-static const uint COUNTER_FILLED_CELLS_OFFSET = 16u;
-static const uint COUNTER_REJECTED_STORES_OFFSET = 20u;
-static const uint COUNTER_FRAME_INDEX_OFFSET = 24u;
-
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
@@ -39,15 +31,22 @@ void main(uint3 tid : SV_DispatchThreadID) {
     uint cellCounterCount = 1u + cellCount * 2u;
 
     if (index == 0u) {
-        counters.Store(COUNTER_DIRTY_SURFELS_OFFSET, 0u);
-        counters.Store(COUNTER_REQUESTED_RAYS_OFFSET, 0u);
-        counters.Store(COUNTER_FILLED_CELLS_OFFSET, 0u);
-        counters.Store(COUNTER_REJECTED_STORES_OFFSET, 0u);
-        counters.InterlockedAdd(COUNTER_FRAME_INDEX_OFFSET, 1u);
+        counters.Store(SURFEL_PT_COUNTER_DIRTY_SURFELS_OFFSET, 0u);
+        counters.Store(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET, 0u);
+        counters.Store(SURFEL_PT_COUNTER_FILLED_CELLS_OFFSET, 0u);
+        counters.Store(SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET, 0u);
+        counters.Store(SURFEL_PT_COUNTER_RECYCLED_SURFELS_OFFSET, 0u);
+        counters.Store(SURFEL_PT_COUNTER_SPAWNED_SURFELS_OFFSET, 0u);
+        counters.Store(SURFEL_PT_COUNTER_REMOVED_SURFELS_OFFSET, 0u);
+        counters.Store(SURFEL_PT_COUNTER_GUIDED_RAYS_OFFSET, 0u);
+        counters.Store(SURFEL_PT_COUNTER_COSINE_RAYS_OFFSET, 0u);
+        counters.Store(SURFEL_PT_COUNTER_SURFEL_TERMINATED_PATHS_OFFSET, 0u);
+        counters.Store(SURFEL_PT_COUNTER_PATH_MISSES_OFFSET, 0u);
+        counters.InterlockedAdd(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET, 1u);
 
         if (push.resetPersistent != 0u) {
-            counters.Store(COUNTER_ALIVE_SURFELS_OFFSET, 0u);
-            counters.Store(COUNTER_DEAD_SURFELS_OFFSET, maxSurfels);
+            counters.Store(SURFEL_PT_COUNTER_ALIVE_SURFELS_OFFSET, 0u);
+            counters.Store(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET, maxSurfels);
         }
     }
 
@@ -86,6 +85,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
         surfel.flags = 0;
         surfel.meanAndVariance = float4(0.0f, 0.0f, 0.0f, 0.0f);
         surfel.shortMeanAndLife = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        surfel.lastSeenFrame = 0u;
+        surfel.lastReferencedFrame = 0u;
+        surfel.sleepState = SURFEL_PT_SLEEP_AWAKE;
+        surfel.materialKey = 0u;
+        surfel.varianceAndInconsistency = float4(1.0, 1.0, 1.0, 1.0);
         surfelBuffer[index] = surfel;
     }
 

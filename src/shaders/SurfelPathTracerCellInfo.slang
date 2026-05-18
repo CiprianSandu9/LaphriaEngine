@@ -13,7 +13,6 @@ struct CellInfoPushConstants {
 
 [[vk::push_constant]] CellInfoPushConstants push;
 
-static const uint COUNTER_FILLED_CELLS_OFFSET = 16u;
 static const uint CELL_RUNNING_TOTAL_OFFSET = 0u;
 
 [shader("compute")]
@@ -39,6 +38,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     cellInfoBuffer[cellIndex] = cellInfo;
 
     if (clampedCount > 0u) {
-        counters.InterlockedAdd(COUNTER_FILLED_CELLS_OFFSET, 1u);
+        counters.InterlockedAdd(SURFEL_PT_COUNTER_FILLED_CELLS_OFFSET, 1u);
     }
 }

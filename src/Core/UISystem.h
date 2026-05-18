@@ -129,10 +129,13 @@ public:
         SurfelVariance = 6,
         CellOccupancy = 7,
         ReflectionRaw = 8,
-        ReflectionFiltered = 9
+        ReflectionFiltered = 9,
+        SurfelCoverage = 10,
+        ReferenceColor = 11,
+        ReferenceDifference = 12
     };
     static constexpr SurfelPathTracerDebugView kMaxSurfelPathTracerDebugView =
-        SurfelPathTracerDebugView::ReflectionFiltered;
+        SurfelPathTracerDebugView::ReferenceDifference;
 
     struct PathTracerSettings
     {
@@ -321,6 +324,26 @@ public:
         uint32_t perCellSurfelLimit = 64;
         uint32_t irradianceAtlasWidth = 2048;
         uint32_t irradianceAtlasHeight = 2048;
+        uint32_t minRaysPerSurfel = 4;
+        uint32_t maxRaysPerSurfel = 64;
+        uint32_t rayBudgetScale = 16;
+        uint32_t activeMaxDepth = 3;
+        uint32_t sleepingMaxDepth = 5;
+        float placementThreshold = 0.35f;
+        float removalThreshold = 4.0f;
+        float varianceSensitivity = 1.2f;
+        float surfelTargetArea = 16.0f;
+        float surfelMinRadius = 0.05f;
+        float surfelMaxRadiusScale = 2.0f;
+        uint32_t maxSurfelSamplesPerQuery = 32;
+        uint32_t maxRadianceSharingSamples = 32;
+        uint32_t atlasTileSize = 6;
+        bool enableGuidedSampling = true;
+        bool enableSurfelTermination = true;
+        bool enableRadianceSharing = true;
+        bool enableSurfelPlacement = true;
+        bool enableSurfelRemoval = true;
+        bool enableReferenceValidation = false;
         SurfelPathTracerDebugView debugView = SurfelPathTracerDebugView::FinalColor;
     };
 
@@ -332,6 +355,13 @@ public:
         uint32_t requestedRays = 0;
         uint32_t filledCells = 0;
         uint32_t rejectedStores = 0;
+        uint32_t recycledSurfels = 0;
+        uint32_t spawnedSurfels = 0;
+        uint32_t removedSurfels = 0;
+        uint32_t guidedRays = 0;
+        uint32_t cosineRays = 0;
+        uint32_t surfelTerminatedPaths = 0;
+        uint32_t pathMisses = 0;
         float totalFrameMs = 0.0f;
     };
 

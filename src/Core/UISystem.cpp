@@ -1566,13 +1566,40 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
 
     if (ImGui::CollapsingHeader("Surfel Path Tracer##settings")) {
         auto &settings = surfelPathTracerSettings;
-        settings.maxSurfels = std::clamp(settings.maxSurfels, 1024u, 500000u);
-        settings.maxRaysPerFrame = std::clamp(settings.maxRaysPerFrame, 1024u, settings.maxSurfels * 64u);
-        settings.cellSize = std::clamp(settings.cellSize, 0.05f, 64.0f);
-        settings.cellDimension = std::clamp(settings.cellDimension, 8u, 128u);
-        settings.perCellSurfelLimit = std::clamp(settings.perCellSurfelLimit, 4u, 256u);
-        settings.irradianceAtlasWidth = std::clamp(settings.irradianceAtlasWidth, 512u, 4096u);
-        settings.irradianceAtlasHeight = std::clamp(settings.irradianceAtlasHeight, 512u, 4096u);
+        auto clampSurfelPathTracerSettings = [&settings]() {
+            settings.maxSurfels = std::clamp(settings.maxSurfels, 1024u, 500000u);
+            settings.cellSize = std::clamp(settings.cellSize, 0.05f, 64.0f);
+            settings.cellDimension = std::clamp(settings.cellDimension, 8u, 128u);
+            settings.perCellSurfelLimit = std::clamp(settings.perCellSurfelLimit, 4u, 256u);
+            settings.minRaysPerSurfel = std::clamp(settings.minRaysPerSurfel, 1u, 64u);
+            settings.maxRaysPerSurfel = std::clamp(settings.maxRaysPerSurfel, settings.minRaysPerSurfel, 128u);
+            settings.rayBudgetScale = std::clamp(settings.rayBudgetScale, 1u, 64u);
+            settings.activeMaxDepth = std::clamp(settings.activeMaxDepth, 1u, 8u);
+            settings.sleepingMaxDepth = std::clamp(settings.sleepingMaxDepth, settings.activeMaxDepth, 8u);
+            settings.placementThreshold = std::clamp(settings.placementThreshold, 0.05f, 4.0f);
+            settings.removalThreshold = std::clamp(settings.removalThreshold, settings.placementThreshold, 16.0f);
+            settings.varianceSensitivity = std::clamp(settings.varianceSensitivity, 0.01f, 16.0f);
+            settings.surfelTargetArea = std::clamp(settings.surfelTargetArea, 1.0f, 256.0f);
+            settings.surfelMinRadius = std::clamp(settings.surfelMinRadius, 0.001f, 1.0f);
+            settings.surfelMaxRadiusScale = std::clamp(settings.surfelMaxRadiusScale, 0.25f, 8.0f);
+            settings.maxSurfelSamplesPerQuery = std::clamp(settings.maxSurfelSamplesPerQuery, 1u, 128u);
+            settings.maxRadianceSharingSamples = std::clamp(settings.maxRadianceSharingSamples, 1u, 128u);
+            settings.atlasTileSize = 6u;
+            settings.irradianceAtlasWidth = std::clamp(settings.irradianceAtlasWidth, 512u, 4096u);
+            const uint32_t tilesPerRow = std::max(settings.irradianceAtlasWidth / settings.atlasTileSize, 1u);
+            const uint32_t requiredRows = (settings.maxSurfels + tilesPerRow - 1u) / tilesPerRow;
+            settings.irradianceAtlasHeight = std::clamp(std::max(settings.irradianceAtlasHeight,
+                                                                 requiredRows * settings.atlasTileSize),
+                                                        512u,
+                                                        4096u);
+            const uint32_t atlasSurfelsCapacity =
+                tilesPerRow * std::max(settings.irradianceAtlasHeight / settings.atlasTileSize, 1u);
+            settings.maxSurfels = std::min(settings.maxSurfels, atlasSurfelsCapacity);
+            settings.maxRaysPerFrame = std::clamp(settings.maxRaysPerFrame, 1024u, settings.maxSurfels * 64u);
+            settings.maxRaysPerFrame =
+                std::max(settings.maxRaysPerFrame, settings.maxSurfels * settings.rayBudgetScale);
+        };
+        clampSurfelPathTracerSettings();
 
         ImGui::Checkbox("Enabled", &settings.enabled);
         ImGui::Checkbox("Lock Surfels", &settings.lockSurfels);
@@ -1584,13 +1611,46 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         ImGui::Checkbox("Reflection Filter", &settings.enableReflectionFilter);
         ImGui::Checkbox("Bilateral Cleanup", &settings.enableBilateralCleanup);
         ImGui::Checkbox("TAA", &settings.enableTaa);
+        ImGui::Checkbox("Guided Sampling", &settings.enableGuidedSampling);
+        ImGui::Checkbox("Surfel Termination", &settings.enableSurfelTermination);
+        ImGui::Checkbox("Radiance Sharing", &settings.enableRadianceSharing);
+        ImGui::Checkbox("Surfel Placement", &settings.enableSurfelPlacement);
+        ImGui::Checkbox("Surfel Removal", &settings.enableSurfelRemoval);
+        ImGui::Checkbox("Reference Validation", &settings.enableReferenceValidation);
         int maxSurfels = static_cast<int>(settings.maxSurfels);
         ImGui::SliderInt("Max Surfels", &maxSurfels, 1024, 500000);
         settings.maxSurfels = static_cast<uint32_t>(maxSurfels);
         int maxRaysPerFrame = static_cast<int>(settings.maxRaysPerFrame);
         ImGui::SliderInt("Max Rays/Frame", &maxRaysPerFrame, 1024, static_cast<int>(settings.maxSurfels * 64u));
         settings.maxRaysPerFrame = static_cast<uint32_t>(maxRaysPerFrame);
+        int minRaysPerSurfel = static_cast<int>(settings.minRaysPerSurfel);
+        ImGui::SliderInt("Min Rays/Surfel", &minRaysPerSurfel, 1, 64);
+        settings.minRaysPerSurfel = static_cast<uint32_t>(minRaysPerSurfel);
+        int maxRaysPerSurfel = static_cast<int>(settings.maxRaysPerSurfel);
+        ImGui::SliderInt("Max Rays/Surfel", &maxRaysPerSurfel, static_cast<int>(settings.minRaysPerSurfel), 128);
+        settings.maxRaysPerSurfel = static_cast<uint32_t>(maxRaysPerSurfel);
+        int rayBudgetScale = static_cast<int>(settings.rayBudgetScale);
+        ImGui::SliderInt("Ray Budget Scale", &rayBudgetScale, 1, 64);
+        settings.rayBudgetScale = static_cast<uint32_t>(rayBudgetScale);
+        int activeMaxDepth = static_cast<int>(settings.activeMaxDepth);
+        ImGui::SliderInt("Active Max Depth", &activeMaxDepth, 1, 8);
+        settings.activeMaxDepth = static_cast<uint32_t>(activeMaxDepth);
+        int sleepingMaxDepth = static_cast<int>(settings.sleepingMaxDepth);
+        ImGui::SliderInt("Sleeping Max Depth", &sleepingMaxDepth, static_cast<int>(settings.activeMaxDepth), 8);
+        settings.sleepingMaxDepth = static_cast<uint32_t>(sleepingMaxDepth);
         ImGui::SliderFloat("Cell Size", &settings.cellSize, 0.05f, 64.0f, "%.2f");
+        ImGui::SliderFloat("Placement Threshold", &settings.placementThreshold, 0.05f, 4.0f, "%.2f");
+        ImGui::SliderFloat("Removal Threshold", &settings.removalThreshold, settings.placementThreshold, 16.0f, "%.2f");
+        ImGui::SliderFloat("Variance Sensitivity", &settings.varianceSensitivity, 0.01f, 16.0f, "%.2f");
+        ImGui::SliderFloat("Surfel Target Area", &settings.surfelTargetArea, 1.0f, 256.0f, "%.1f");
+        ImGui::SliderFloat("Surfel Min Radius", &settings.surfelMinRadius, 0.001f, 1.0f, "%.3f");
+        ImGui::SliderFloat("Surfel Max Radius Scale", &settings.surfelMaxRadiusScale, 0.25f, 8.0f, "%.2f");
+        int maxSurfelSamplesPerQuery = static_cast<int>(settings.maxSurfelSamplesPerQuery);
+        ImGui::SliderInt("Max Surfel Samples/Query", &maxSurfelSamplesPerQuery, 1, 128);
+        settings.maxSurfelSamplesPerQuery = static_cast<uint32_t>(maxSurfelSamplesPerQuery);
+        int maxRadianceSharingSamples = static_cast<int>(settings.maxRadianceSharingSamples);
+        ImGui::SliderInt("Max Radiance Sharing Samples", &maxRadianceSharingSamples, 1, 128);
+        settings.maxRadianceSharingSamples = static_cast<uint32_t>(maxRadianceSharingSamples);
         int cellDimension = static_cast<int>(settings.cellDimension);
         ImGui::SliderInt("Cell Dimension", &cellDimension, 8, 128);
         settings.cellDimension = static_cast<uint32_t>(cellDimension);
@@ -1603,6 +1663,7 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         int irradianceAtlasHeight = static_cast<int>(settings.irradianceAtlasHeight);
         ImGui::SliderInt("Irradiance Atlas Height", &irradianceAtlasHeight, 512, 4096);
         settings.irradianceAtlasHeight = static_cast<uint32_t>(irradianceAtlasHeight);
+        clampSurfelPathTracerSettings();
         const char *debugViews[] = {
             "Final Color",
             "GBuffer Normal",
@@ -1613,12 +1674,15 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
             "Surfel Variance",
             "Cell Occupancy",
             "Reflection Raw",
-            "Reflection Filtered"};
+            "Reflection Filtered",
+            "Surfel Coverage",
+            "Reference Color",
+            "Reference Difference"};
         int debugView = static_cast<int>(settings.debugView);
         ImGui::Combo("Debug View", &debugView, debugViews, IM_ARRAYSIZE(debugViews));
         debugView = std::clamp(debugView,
                                static_cast<int>(SurfelPathTracerDebugView::FinalColor),
-                               static_cast<int>(SurfelPathTracerDebugView::ReflectionFiltered));
+                               static_cast<int>(SurfelPathTracerDebugView::ReferenceDifference));
         settings.debugView = static_cast<SurfelPathTracerDebugView>(debugView);
 
         ImGui::Text("Surfels: %u alive / %u dead / %u dirty",
@@ -1629,6 +1693,15 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
                     surfelPathTracerStats.requestedRays,
                     surfelPathTracerStats.filledCells,
                     surfelPathTracerStats.rejectedStores);
+        ImGui::Text("Lifecycle: %u spawned / %u recycled / %u removed",
+                    surfelPathTracerStats.spawnedSurfels,
+                    surfelPathTracerStats.recycledSurfels,
+                    surfelPathTracerStats.removedSurfels);
+        ImGui::Text("Guided: %u | Cosine: %u | Terminated: %u | Misses: %u",
+                    surfelPathTracerStats.guidedRays,
+                    surfelPathTracerStats.cosineRays,
+                    surfelPathTracerStats.surfelTerminatedPaths,
+                    surfelPathTracerStats.pathMisses);
         ImGui::Text("Total: %.3f ms", surfelPathTracerStats.totalFrameMs);
     }
 

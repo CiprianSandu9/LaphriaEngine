@@ -148,7 +148,14 @@ void allocateSurfel(uint2 pixel, float3 position, float3 normal, float radius) {
     surfel.flags = 1u;
     surfel.meanAndVariance = float4(0.0, 0.0, 0.0, 0.0);
     surfel.shortMeanAndLife = float4(0.0, 0.0, 0.0, 1.0);
+    surfel.lastSeenFrame = frameIndex;
+    surfel.lastReferencedFrame = frameIndex;
+    surfel.sleepState = SURFEL_PT_SLEEP_AWAKE;
+    surfel.materialKey = 0u;
+    surfel.varianceAndInconsistency = float4(1.0, 1.0, 1.0, 1.0);
     surfelBuffer[surfelIndex] = surfel;
+
+    counters.InterlockedAdd(SURFEL_PT_COUNTER_SPAWNED_SURFELS_OFFSET, 1u);
 
     uint aliveSlot = 0u;
     counters.InterlockedAdd(SURFEL_PT_COUNTER_ALIVE_SURFELS_OFFSET, 1u, aliveSlot);
