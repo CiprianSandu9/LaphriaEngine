@@ -228,6 +228,7 @@ set_tests_properties(LaphriaValidationSceneInvalid PROPERTIES WILL_FAIL TRUE)
 add_executable(LaphriaEngineUnitTests
         tests/EngineUnitTestsMain.cpp
         tests/PathTracerAnalysisTests.cpp
+        tests/SurfelPathTracerPipelineTests.cpp
         src/Core/PathTracerAnalysis.cpp
         src/SceneManagement/SceneNode.cpp
         src/Physics/Broadphase.cpp

@@ -2,6 +2,7 @@
 #include "../src/SceneManagement/Frustum.h"
 #include "../src/SceneManagement/SceneNode.h"
 #include "PathTracerAnalysisTests.h"
+#include "SurfelPathTracerPipelineTests.h"
 
 #include <algorithm>
 #include <cmath>
@@ -139,5 +140,6 @@ int main()
 	const bool okPtReservoirGiMeasurement = testPathTracerReservoirGiMeasurementContract();
 	const bool okPtHistoryClamp = testPathTracerHistoryClampPreservesDimIndirectHistory();
 	const bool okPtPowerHeuristic = testPathTracerPowerHeuristic();
-	return (okTransform && okFrustum && okBroadphase && okPtSweep && okPtPercentiles && okPtScore && okPtAovContract && okPtReservoirGiMeasurement && okPtHistoryClamp && okPtPowerHeuristic) ? 0 : 1;
+	const bool okSurfelPathTracer = testSurfelPathTracerPipelineContracts();
+	return (okTransform && okFrustum && okBroadphase && okPtSweep && okPtPercentiles && okPtScore && okPtAovContract && okPtReservoirGiMeasurement && okPtHistoryClamp && okPtPowerHeuristic && okSurfelPathTracer) ? 0 : 1;
 }
