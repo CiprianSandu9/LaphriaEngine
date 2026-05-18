@@ -75,6 +75,8 @@ constexpr uint32_t    kPtFlagsReservoirSpatialBudgetShift    = 19u;
 constexpr uint32_t    kPtFlagsReservoirSpatialBudgetMask     = 0x3u;
 constexpr uint32_t    kPtFlagsEnvironmentBounceShift         = 21u;
 constexpr uint32_t    kPtFlagsEnvironmentBounceMask          = 0x3u;
+constexpr uint32_t    kPtFlagsReservoirEstimatorAuditShift   = 23u;
+constexpr uint32_t    kPtFlagsReservoirEstimatorAuditMask    = 0x3u;
 constexpr uint32_t    RESERVOIR_GI_RECEIVER_CACHE_CURRENT_BINDING = 14u;
 constexpr uint32_t    RESERVOIR_GI_RECEIVER_CACHE_HISTORY_BINDING = 15u;
 constexpr uint32_t    RESERVOIR_GI_BRIGHT_SURFEL_CURRENT_BINDING = 16u;
@@ -184,7 +186,11 @@ uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
 	                          kPtFlagsReservoirSpatialBudgetMask) |
 	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.environmentNeeBounceMode, 0, 2)),
 	                          kPtFlagsEnvironmentBounceShift,
-	                          kPtFlagsEnvironmentBounceMask);
+	                          kPtFlagsEnvironmentBounceMask) |
+	       packPathTracerBits(static_cast<uint32_t>(
+	                              std::clamp(static_cast<int>(settings.reservoirGiEstimatorAuditMode), 0, 3)),
+	                          kPtFlagsReservoirEstimatorAuditShift,
+	                          kPtFlagsReservoirEstimatorAuditMask);
 }
 
 std::filesystem::path resolveProjectRootPath()
@@ -2519,6 +2525,18 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    (counters->reservoirGiAccepted > 0) ? static_cast<float>(counters->reservoirGiConfidenceMScaledSum) /
 	                                              (static_cast<float>(counters->reservoirGiAccepted) * 64.0f) :
 	                                          0.0f;
+	const float reservoirAuditInvSamples =
+	    counters->reservoirGiAuditSampleCount > 0 ?
+	        1.0f / static_cast<float>(counters->reservoirGiAuditSampleCount) :
+	        0.0f;
+	ui.pathTracerPerfStats.reservoirGiAuditCurrentLuma =
+	    static_cast<float>(counters->reservoirGiAuditCurrentLumaScaledSum) * reservoirAuditInvSamples / 64.0f;
+	ui.pathTracerPerfStats.reservoirGiAuditReferenceLuma =
+	    static_cast<float>(counters->reservoirGiAuditReferenceLumaScaledSum) * reservoirAuditInvSamples / 64.0f;
+	ui.pathTracerPerfStats.reservoirGiAuditRelativeErrorPct =
+	    static_cast<float>(counters->reservoirGiAuditRelativeErrorScaledSum) * reservoirAuditInvSamples / 64.0f;
+	ui.pathTracerPerfStats.reservoirGiAuditProbeScale =
+	    static_cast<float>(counters->reservoirGiAuditProbeScaleScaledSum) * reservoirAuditInvSamples / 64.0f;
 
 	const float historyTotal                      = static_cast<float>(counters->historyAcceptedCount + counters->historyRejectedCount);
 	ui.pathTracerPerfStats.historyAcceptanceRatio = (historyTotal > 0.0f) ? static_cast<float>(counters->historyAcceptedCount) / historyTotal : 0.0f;
@@ -2962,6 +2980,7 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
 	settings.reservoirGiUseCandidateRis         = row.reservoirGiUseCandidateRis;
 	settings.reservoirGiTemporalBudgetDivisor   = row.reservoirGiTemporalBudgetDivisor;
 	settings.reservoirGiSpatialBudgetDivisor    = row.reservoirGiSpatialBudgetDivisor;
+	settings.reservoirGiEstimatorAuditMode      = row.reservoirGiEstimatorAuditMode;
 	settings.enableSurfelGi                     = row.enableSurfelGi;
 	settings.surfelGiDebug                      = row.surfelGiDebug;
 	settings.reservoirGiDetailedDiagnostics = false;
@@ -3009,6 +3028,8 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "reservoirGiAcceptedAvgLuma=%.5f, reservoirGiAcceptedLumaSum=%.1f, "
 	     "reservoirGiSelectedWeightAvg=%.5f, reservoirGiTargetWeightAvg=%.5f, "
 	     "reservoirGiConfidenceMAvg=%.5f, "
+	     "reservoirGiAuditCurrentLuma=%.5f, reservoirGiAuditReferenceLuma=%.5f, "
+	     "reservoirGiAuditRelativeErrorPct=%.2f, reservoirGiAuditProbeScale=%.5f, "
 	     "reservoirGiSelectedLocal=%.1f, reservoirGiSelectedTemporal=%.1f, reservoirGiSelectedSpatial=%.1f, "
 	     "reservoirGiSelectedCache=%.1f, reservoirGiSelectedCacheReconnect=%.1f, "
 	     "temporalAccepted=%.1f, temporalReuseAttempts=%.1f, "
@@ -3082,6 +3103,10 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.reservoirGiSelectedWeightAverage * invSamples,
 	     accum.reservoirGiTargetWeightAverage * invSamples,
 	     accum.reservoirGiConfidenceMAvg * invSamples,
+	     accum.reservoirGiAuditCurrentLuma * invSamples,
+	     accum.reservoirGiAuditReferenceLuma * invSamples,
+	     accum.reservoirGiAuditRelativeErrorPct * invSamples,
+	     accum.reservoirGiAuditProbeScale * invSamples,
 	     accum.reservoirGiSelectedLocal * invSamples,
 	     accum.reservoirGiSelectedTemporal * invSamples,
 	     accum.reservoirGiSelectedSpatial * invSamples,
@@ -3209,6 +3234,14 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.reservoirGiTargetWeightAverage);
 	ptExperimentAccum.reservoirGiConfidenceMAvg +=
 	    static_cast<double>(stats.reservoirGiConfidenceMAvg);
+	ptExperimentAccum.reservoirGiAuditCurrentLuma +=
+	    static_cast<double>(stats.reservoirGiAuditCurrentLuma);
+	ptExperimentAccum.reservoirGiAuditReferenceLuma +=
+	    static_cast<double>(stats.reservoirGiAuditReferenceLuma);
+	ptExperimentAccum.reservoirGiAuditRelativeErrorPct +=
+	    static_cast<double>(stats.reservoirGiAuditRelativeErrorPct);
+	ptExperimentAccum.reservoirGiAuditProbeScale +=
+	    static_cast<double>(stats.reservoirGiAuditProbeScale);
 	ptExperimentAccum.reservoirGiTemporalAccepted +=
 	    static_cast<double>(stats.reservoirGiTemporalAccepted);
 	ptExperimentAccum.reservoirGiTemporalRejected +=
@@ -3680,6 +3713,8 @@ void EngineCore::applySponzaValidationPreset(UISystem::PathTracerSponzaValidatio
 	pathTracerSettings.reservoirGiUseCandidateRis = false;
 	pathTracerSettings.reservoirGiTemporalBudgetDivisor = 2;
 	pathTracerSettings.reservoirGiSpatialBudgetDivisor = 2;
+	pathTracerSettings.reservoirGiEstimatorAuditMode =
+	    UISystem::PathTracerReservoirGiEstimatorAuditMode::Off;
 	pathTracerSettings.reservoirGiCandidateEvaluationMode = 2;
 	pathTracerSettings.pathTracerMaxBounces       = 8;
 	pathTracerSettings.directSunBounceMode = 1;

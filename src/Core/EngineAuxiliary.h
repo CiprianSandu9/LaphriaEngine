@@ -275,6 +275,11 @@ struct PathTracerAnalysisCounters
 	uint32_t surfelGiCellMaxPopulation = 0;
 	uint32_t surfelGiEvalDenseCell = 0;
 	uint32_t surfelGiEvalDenseCellSkipped = 0;
+	uint32_t reservoirGiAuditCurrentLumaScaledSum = 0;
+	uint32_t reservoirGiAuditReferenceLumaScaledSum = 0;
+	uint32_t reservoirGiAuditRelativeErrorScaledSum = 0;
+	uint32_t reservoirGiAuditProbeScaleScaledSum = 0;
+	uint32_t reservoirGiAuditSampleCount = 0;
 };
 
 struct SkinningPushConstants

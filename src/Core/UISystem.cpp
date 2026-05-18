@@ -1177,6 +1177,17 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::SliderInt("Reservoir Spatial Neighbors", &pathTracerSettings.reservoirGiSpatialNeighborCount, 1, 8);
         ImGui::Checkbox("Reservoir GI Candidate RIS", &pathTracerSettings.reservoirGiUseCandidateRis);
         ImGui::Checkbox("Detailed Reservoir Diagnostics", &pathTracerSettings.reservoirGiDetailedDiagnostics);
+        const char *reservoirAuditModes[] = {
+            "Off",
+            "Current",
+            "Single Candidate Reference",
+            "No Probe Scale"};
+        int reservoirAuditMode = static_cast<int>(pathTracerSettings.reservoirGiEstimatorAuditMode);
+        if (ImGui::Combo("Reservoir Estimator Audit", &reservoirAuditMode,
+                         reservoirAuditModes, IM_ARRAYSIZE(reservoirAuditModes))) {
+            pathTracerSettings.reservoirGiEstimatorAuditMode =
+                static_cast<PathTracerReservoirGiEstimatorAuditMode>(reservoirAuditMode);
+        }
         ImGui::SliderInt("Temporal Reuse Budget Divisor", &pathTracerSettings.reservoirGiTemporalBudgetDivisor, 1, 4);
         ImGui::SliderInt("Spatial Reuse Budget Divisor", &pathTracerSettings.reservoirGiSpatialBudgetDivisor, 1, 4);
         ImGui::Checkbox("Surfel GI Cache", &pathTracerSettings.enableSurfelGi);
@@ -1203,6 +1214,11 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::Text("Reservoir GI Selected Weight Avg: %.5f", pathTracerPerfStats.reservoirGiSelectedWeightAverage);
         ImGui::Text("Reservoir GI Target Weight Avg: %.5f", pathTracerPerfStats.reservoirGiTargetWeightAverage);
         ImGui::Text("Reservoir GI Confidence M Avg: %.5f", pathTracerPerfStats.reservoirGiConfidenceMAvg);
+        ImGui::Text("Reservoir GI Audit Current Luma: %.5f", pathTracerPerfStats.reservoirGiAuditCurrentLuma);
+        ImGui::Text("Reservoir GI Audit Reference Luma: %.5f", pathTracerPerfStats.reservoirGiAuditReferenceLuma);
+        ImGui::Text("Reservoir GI Audit Relative Error: %.2f%%",
+                    pathTracerPerfStats.reservoirGiAuditRelativeErrorPct);
+        ImGui::Text("Reservoir GI Audit Probe Scale: %.5f", pathTracerPerfStats.reservoirGiAuditProbeScale);
         ImGui::Text("Reservoir GI Selected Local: %u", pathTracerPerfStats.reservoirGiSelectedLocal);
         ImGui::Text("Reservoir GI Selected Temporal: %u", pathTracerPerfStats.reservoirGiSelectedTemporal);
         ImGui::Text("Reservoir GI Selected Spatial: %u", pathTracerPerfStats.reservoirGiSelectedSpatial);

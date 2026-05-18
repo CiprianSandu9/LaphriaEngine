@@ -93,6 +93,14 @@ public:
         TemporalSpatial = 3
     };
 
+    enum class PathTracerReservoirGiEstimatorAuditMode
+    {
+        Off = 0,
+        Current = 1,
+        SingleCandidateReference = 2,
+        NoProbeScale = 3
+    };
+
     enum class PathTracerReservoirGiProposalMode
     {
         Cosine = 0,
@@ -134,6 +142,8 @@ public:
         int                   reservoirGiSpatialNeighborCount = 4;
         bool                  reservoirGiUseCandidateRis = true;
         bool                  reservoirGiDetailedDiagnostics = true;
+        PathTracerReservoirGiEstimatorAuditMode reservoirGiEstimatorAuditMode =
+            PathTracerReservoirGiEstimatorAuditMode::Off;
         int                   reservoirGiTemporalBudgetDivisor = 1;
         int                   reservoirGiSpatialBudgetDivisor = 1;
         bool enableSurfelGi = false;
@@ -294,6 +304,10 @@ public:
         float reservoirGiSelectedWeightAverage = 0.0f;
         float reservoirGiTargetWeightAverage = 0.0f;
         float reservoirGiConfidenceMAvg = 0.0f;
+        float reservoirGiAuditCurrentLuma = 0.0f;
+        float reservoirGiAuditReferenceLuma = 0.0f;
+        float reservoirGiAuditRelativeErrorPct = 0.0f;
+        float reservoirGiAuditProbeScale = 0.0f;
         float cameraMotionFactor = 0.0f;
     };
 

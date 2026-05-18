@@ -193,6 +193,12 @@ static const uint PT_FLAGS_RESERVOIR_SPATIAL_BUDGET_SHIFT = 19u;
 static const uint PT_FLAGS_RESERVOIR_SPATIAL_BUDGET_MASK = 0x3u;
 static const uint PT_FLAGS_ENVIRONMENT_BOUNCE_SHIFT = 21u;
 static const uint PT_FLAGS_ENVIRONMENT_BOUNCE_MASK = 0x3u;
+static const uint PT_FLAGS_RESERVOIR_ESTIMATOR_AUDIT_SHIFT = 23u;
+static const uint PT_FLAGS_RESERVOIR_ESTIMATOR_AUDIT_MASK = 0x3u;
+static const int ReservoirEstimatorAuditOff = 0;
+static const int ReservoirEstimatorAuditCurrent = 1;
+static const int ReservoirEstimatorAuditSingleCandidateReference = 2;
+static const int ReservoirEstimatorAuditNoProbeScale = 3;
 static const uint PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = PT_FLAGS_APPLY_FIRST_HIT_PROBES_BIT;
 static const uint targetWallFirstHitProbeContributionSumOffset = 52u;
 static const uint targetWallBaseLuminanceSumOffset = 56u;
@@ -282,6 +288,12 @@ static const uint reservoirGiBrightSurfelSelectorRejectDistanceOffset = 388u;
 static const uint reservoirGiBrightSurfelSelectorRejectReceiverHemisphereOffset = 392u;
 static const uint reservoirGiBrightSurfelSelectorRejectSurfelHemisphereOffset = 396u;
 static const uint reservoirGiBrightSurfelSelectorRejectInvalidVectorOffset = 400u;
+static const uint reservoirGiAuditCurrentLumaScaledSumOffset = 480u;
+static const uint reservoirGiAuditReferenceLumaScaledSumOffset = 484u;
+static const uint reservoirGiAuditRelativeErrorScaledSumOffset = 488u;
+static const uint reservoirGiAuditProbeScaleOffset = 492u;
+static const uint reservoirGiAuditProbeScaleScaledSumOffset = reservoirGiAuditProbeScaleOffset;
+static const uint reservoirGiAuditSampleCountOffset = 496u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_NONE = 0u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_GEOMETRY = 1u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_NO_LIGHT = 2u;
@@ -3305,6 +3317,7 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
                                                                  int reservoirGiCandidateEvaluationMode,
                                                                  int reservoirGiTemporalBudgetDivisor,
                                                                  int reservoirGiSpatialBudgetDivisor,
+                                                                 int reservoirGiEstimatorAuditMode,
                                                                  bool reservoirGiDetailedDiagnostics,
                                                                  uint2 launchID,
                                                                  uint2 launchSize,
@@ -3939,6 +3952,8 @@ void main() {
                                             PT_FLAGS_ENVIRONMENT_SAMPLING_MASK);
     int    environmentNeeBounceMode = int((packedPathTracerFlags >> PT_FLAGS_ENVIRONMENT_BOUNCE_SHIFT) &
                                           PT_FLAGS_ENVIRONMENT_BOUNCE_MASK);
+    int    reservoirGiEstimatorAuditMode = int((packedPathTracerFlags >> PT_FLAGS_RESERVOIR_ESTIMATOR_AUDIT_SHIFT) &
+                                               PT_FLAGS_RESERVOIR_ESTIMATOR_AUDIT_MASK);
     int    firstHitDiffuseSampleCount =
         clamp(int((packedPathTracerFlags >> PT_FLAGS_FIRST_HIT_DIFFUSE_SAMPLES_SHIFT) &
                   PT_FLAGS_FIRST_HIT_DIFFUSE_SAMPLES_MASK),
@@ -4052,6 +4067,7 @@ void main() {
                                                                       reservoirGiCandidateEvaluationMode,
                                                                       reservoirGiTemporalBudgetDivisor,
                                                                       reservoirGiSpatialBudgetDivisor,
+                                                                      reservoirGiEstimatorAuditMode,
                                                                       reservoirGiDetailedDiagnostics,
                                                                       launchID, launchSize, rngState);
                 firstHitBounceUsesReservoirGi = true;

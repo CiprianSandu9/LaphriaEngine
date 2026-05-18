@@ -117,6 +117,8 @@ class EngineCore
 		bool reservoirGiUseCandidateRis = true;
 		int reservoirGiTemporalBudgetDivisor = 1;
 		int reservoirGiSpatialBudgetDivisor = 1;
+		UISystem::PathTracerReservoirGiEstimatorAuditMode reservoirGiEstimatorAuditMode =
+		    UISystem::PathTracerReservoirGiEstimatorAuditMode::Off;
 		int environmentNeeBounceMode = 0;
 		int pathTracerMaxBounces = 8;
 		// 0 = all bounces, 1 = first bounce only, 2 = first 2 bounces.
@@ -150,6 +152,10 @@ class EngineCore
 		double reservoirGiSelectedWeightAverage = 0.0;
 		double reservoirGiTargetWeightAverage = 0.0;
 		double reservoirGiConfidenceMAvg = 0.0;
+		double reservoirGiAuditCurrentLuma = 0.0;
+		double reservoirGiAuditReferenceLuma = 0.0;
+		double reservoirGiAuditRelativeErrorPct = 0.0;
+		double reservoirGiAuditProbeScale = 0.0;
 		double reservoirGiTemporalAccepted = 0.0;
 		double reservoirGiTemporalRejected = 0.0;
 		double reservoirGiTemporalReuseAttempts = 0.0;
