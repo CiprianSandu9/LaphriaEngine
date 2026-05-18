@@ -803,12 +803,8 @@ bool testPathTracerReservoirGiMeasurementContract()
 		return false;
 	}
 
-	const std::array<const char *, 6> reservoirAuditRows{
+	const std::array<const char *, 2> reservoirAuditRows{
 	    "Reservoir Audit / Single Frame 1C Current",
-	    "Reservoir Audit / Single Frame 1C No Probe Scale",
-	    "Reservoir Audit / Single Frame 2C Current",
-	    "Reservoir Audit / Single Frame 2C RIS",
-	    "Reservoir Audit / Temporal Static",
 	    "Reservoir Audit / Temporal Spatial Static"};
 	for (const char *row : reservoirAuditRows)
 	{
@@ -1745,29 +1741,33 @@ bool testPathTracerReservoirGiMeasurementContract()
 	}
 	const std::string sponzaSweepSource =
 	    engineCore.substr(sponzaSweepStartPos, sponzaSweepEndPos - sponzaSweepStartPos);
-	const char *currentSponzaAuditRowSchedule[] = {
-	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);",
-	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);",
-	    "ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);",
-	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow);",
-	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow);",
-	    "ptExperimentRows.push_back(reservoirAuditSingleFrame1cCurrentRow);",
-	    "ptExperimentRows.push_back(reservoirAuditSingleFrame1cNoProbeScaleRow);",
-	    "ptExperimentRows.push_back(reservoirAuditSingleFrame2cCurrentRow);",
-	    "ptExperimentRows.push_back(reservoirAuditSingleFrame2cRisRow);",
-	    "ptExperimentRows.push_back(reservoirAuditTemporalStaticRow);",
-	    "ptExperimentRows.push_back(reservoirAuditTemporalSpatialStaticRow);"};
-	const char *leanSponzaAuditRowSchedule[] = {
+	const char *requiredDefaultRows[] = {
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);",
 	    "ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);",
 	    "ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);",
 	    "ptExperimentRows.push_back(reservoirAuditSingleFrame1cCurrentRow);",
 	    "ptExperimentRows.push_back(reservoirAuditTemporalSpatialStaticRow);"};
-	if (!matchesExactPushBackSequence(sponzaSweepSource, currentSponzaAuditRowSchedule) &&
-	    !matchesExactPushBackSequence(sponzaSweepSource, leanSponzaAuditRowSchedule))
+	const char *forbiddenDefaultRows[] = {
+	    "reservoirMixedTemporalSpatialBudget2SunReceiverSurfelCacheDebugRow",
+	    "reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoRow",
+	    "reservoirMixedTemporalSpatialBudget2SunReceiverEnvFirstTwoCacheContinuationRow",
+	    "reservoirAuditSingleFrame1cNoProbeScaleRow",
+	    "reservoirAuditSingleFrame2cCurrentRow",
+	    "reservoirAuditSingleFrame2cRisRow",
+	    "reservoirAuditTemporalStaticRow"};
+	if (!matchesExactPushBackSequence(sponzaSweepSource, requiredDefaultRows))
 	{
-		std::cerr << "focused Sponza PT/GI audit sweep must contain exactly the current or lean required rows\n";
+		std::cerr << "focused Sponza PT/GI audit sweep must contain exactly the required reservoir rows\n";
 		return false;
+	}
+	for (const char *forbiddenRow : forbiddenDefaultRows)
+	{
+		if (containsText(sponzaSweepSource, forbiddenRow))
+		{
+			std::cerr << "focused Sponza PT/GI audit sweep must not contain retired row: "
+			          << forbiddenRow << "\n";
+			return false;
+		}
 	}
 	const std::size_t experimentSweepUpdatePos =
 	    engineCore.find("void EngineCore::updatePathTracerExperimentSweep()");
