@@ -75,6 +75,14 @@ void surfelEvaluateMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         return;
     }
 
+    if (cell.count > SURFEL_GI_DENSE_CELL_LIMIT)
+    {
+        ptAnalysisCounters.InterlockedAdd(surfelGiEvalDenseCellOffset, 1u);
+        ptAnalysisCounters.InterlockedAdd(surfelGiEvalDenseCellSkippedOffset, 1u);
+        surfelGiDebug[pixel] = float4(0.0f, 0.5f, 1.0f, 1.0f);
+        return;
+    }
+
     uint configuredCandidateCount = clamp(push.maxEvalCandidates, 1u, SURFEL_GI_MAX_EVAL_CANDIDATES);
     uint boundedCandidateCount = min(cell.count, configuredCandidateCount);
     uint accepted = 0u;

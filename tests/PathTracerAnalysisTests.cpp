@@ -206,7 +206,9 @@ bool requirePersistentSurfelCounterLayout(const std::string &engineAuxiliaryHead
 	    "surfelGiEvalAttempts",
 	    "surfelGiEvalCellEmpty",
 	    "surfelGiEvalCandidates",
-	    "surfelGiEvalAccepted"};
+	    "surfelGiEvalAccepted",
+	    "surfelGiEvalDenseCell",
+	    "surfelGiEvalDenseCellSkipped"};
 
 	for (const char *counter : requiredCounters)
 	{
@@ -226,7 +228,9 @@ bool requirePersistentSurfelCounterLayout(const std::string &engineAuxiliaryHead
 	    "surfelGiEvalAttemptsOffset",
 	    "surfelGiEvalCellEmptyOffset",
 	    "surfelGiEvalCandidatesOffset",
-	    "surfelGiEvalAcceptedOffset"};
+	    "surfelGiEvalAcceptedOffset",
+	    "surfelGiEvalDenseCellOffset",
+	    "surfelGiEvalDenseCellSkippedOffset"};
 
 	for (const char *offset : requiredOffsets)
 	{
@@ -467,6 +471,7 @@ bool requireSurfelGeneratePassContracts(const std::string &cmakeLists,
                                         const std::string &pipelineSource,
                                         const std::string &engineHeader,
                                         const std::string &engineCore,
+                                        const std::string &surfelCommon,
                                         const std::string &surfelGenerate)
 {
 	const char *requiredSymbols[] = {
@@ -487,6 +492,20 @@ bool requireSurfelGeneratePassContracts(const std::string &cmakeLists,
 		    !containsText(engineCore, symbol) &&
 		    !containsText(surfelGenerate, symbol))
 			return false;
+	}
+
+	if (!containsText(surfelCommon, "float calcSurfelGiRadius(") ||
+	    !containsText(surfelCommon, "SURFEL_GI_CELL_SIZE * 0.5f") ||
+	    !containsText(surfelCommon, "const float shortestAxis = max(float(min(extent.x, extent.y)), 1.0f);") ||
+	    !containsText(surfelCommon, "const float projectedRadius = (hitT / shortestAxis) * 4.0f") ||
+	    !containsText(surfelCommon, "clamp(projectedRadius,") ||
+	    !containsText(surfelCommon, "min(SURFEL_GI_MAX_RADIUS, SURFEL_GI_CELL_SIZE * 0.5f)") ||
+	    containsText(surfelCommon, "max(hitT / shortestAxis, SURFEL_GI_MIN_RADIUS)") ||
+	    !containsText(surfelGenerate, "calcSurfelGiRadius(depth, uint2(width, height))") ||
+	    containsText(surfelGenerate, "record.positionRadius = float4(worldPos, SURFEL_GI_MIN_RADIUS)"))
+	{
+		std::cerr << "surfel GI generation must use projected radius instead of fixed min radius\n";
+		return false;
 	}
 
 	return containsText(cmakeLists, "SurfelGenerate.slang|surfelGenerateMain") &&
@@ -640,6 +659,33 @@ bool requireSurfelEvaluatePassContracts(const std::string &cmakeLists,
 			return false;
 	}
 
+	const std::string evaluateMain =
+	    stripComments(extractFunctionBody(surfelEvaluate, "void surfelEvaluateMain("));
+	if (evaluateMain.empty())
+	{
+		std::cerr << "missing surfel GI evaluate main body\n";
+		return false;
+	}
+	const std::size_t emptyCellBranch =
+	    evaluateMain.find("cell.count == 0u || cell.offset == 0xffffffffu");
+	const std::size_t denseCellBranch =
+	    evaluateMain.find("cell.count > SURFEL_GI_DENSE_CELL_LIMIT");
+	const std::size_t candidateSampling =
+	    evaluateMain.find("uint configuredCandidateCount");
+	if (emptyCellBranch == std::string::npos ||
+	    denseCellBranch == std::string::npos ||
+	    !containsText(evaluateMain, "surfelGiEvalDenseCellOffset") ||
+	    !containsText(evaluateMain, "surfelGiEvalDenseCellSkippedOffset") ||
+	    !containsText(evaluateMain, "float4(0.0f, 0.5f, 1.0f, 1.0f)") ||
+	    !containsText(evaluateMain.substr(denseCellBranch), "return;") ||
+	    candidateSampling == std::string::npos ||
+	    !(emptyCellBranch < denseCellBranch &&
+	      denseCellBranch < candidateSampling))
+	{
+		std::cerr << "surfel GI evaluation must handle empty cells before dense-cell diagnostics and candidate sampling\n";
+		return false;
+	}
+
 	return containsText(cmakeLists, "SurfelEvaluate.slang|surfelEvaluateMain") &&
 	       containsText(surfelEvaluate, "[shader(\"compute\")]") &&
 	       containsText(surfelEvaluate, "[numthreads(8, 8, 1)]") &&
@@ -744,13 +790,30 @@ bool requireSurfelGiSlotCapacityAlignment(const std::string &frameContextHeader,
 	    extractUnsignedAssignment(surfelCommon, "SURFEL_GI_MAX_CELL_MEMBERSHIPS_PER_SURFEL");
 	const auto shaderMaxCandidates =
 	    extractUnsignedAssignment(surfelCommon, "SURFEL_GI_MAX_EVAL_CANDIDATES");
+	const auto shaderGridDim =
+	    extractUnsignedAssignment(surfelCommon, "SURFEL_GI_GRID_DIM");
+	const auto frameGridDim =
+	    extractUnsignedAssignment(frameContextHeader, "kSurfelGiGridDim");
 	const auto frameMaxCellMemberships =
 	    extractUnsignedAssignment(frameContextHeader, "kSurfelGiMaxCellMembershipsPerSurfel");
 	const auto sliderRange = extractSurfelEvalCandidateSliderRange(uiSource);
 	if (!shaderMaxCellMemberships || !shaderMaxCandidates ||
+	    !shaderGridDim || !frameGridDim ||
 	    !frameMaxCellMemberships || !sliderRange)
 	{
 		std::cerr << "missing compact surfel GI cell/candidate capacity declarations\n";
+		return false;
+	}
+
+	if (*shaderGridDim != *frameGridDim)
+	{
+		std::cerr << "surfel GI shader and host grid dimensions must match\n";
+		return false;
+	}
+	if (*shaderGridDim != 64u ||
+	    !containsText(surfelCommon, "SURFEL_GI_CELL_SIZE = 0.75f"))
+	{
+		std::cerr << "surfel GI density experiment expects 64^3 cells at 0.75m to preserve coverage\n";
 		return false;
 	}
 
@@ -1025,7 +1088,9 @@ bool requireCompactSurfelGridDiagnosticPlumbing(const std::string &engineAuxilia
 	    "surfelGiCellAllocatedMemberships",
 	    "surfelGiCellAllocationOverflow",
 	    "surfelGiCellNonEmpty",
-	    "surfelGiCellMaxPopulation"};
+	    "surfelGiCellMaxPopulation",
+	    "surfelGiEvalDenseCell",
+	    "surfelGiEvalDenseCellSkipped"};
 
 	bool ok = true;
 	const std::string counterCopyBody =
@@ -1134,7 +1199,9 @@ bool requireCompactSurfelGridDiagnosticPlumbing(const std::string &engineAuxilia
 	    "Surfel GI cell allocated memberships",
 	    "Surfel GI cell allocation overflow",
 	    "Surfel GI non-empty cells",
-	    "Surfel GI max cell population"};
+	    "Surfel GI max cell population",
+	    "Surfel GI dense cells",
+	    "Surfel GI dense cells skipped"};
 	for (const char *label : uiLabels)
 	{
 		if (!containsText(uiSource, label))
@@ -1410,7 +1477,7 @@ bool testPathTracerReservoirGiMeasurementContract()
 	}
 
 	if (!requireSurfelGeneratePassContracts(cmakeLists, pipelineHeader, pipelineSource,
-	                                        engineHeader, engineCore, surfelGenerate))
+	                                        engineHeader, engineCore, surfelCommon, surfelGenerate))
 	{
 		std::cerr << "persistent surfel GI generate pass contract is incomplete\n";
 		return false;
@@ -1479,6 +1546,13 @@ bool testPathTracerReservoirGiMeasurementContract()
 	{
 		return false;
 	}
+	if (!containsText(surfelCommon, "SURFEL_GI_DENSE_CELL_LIMIT = 64u") ||
+	    !containsText(surfelCommon, "surfelGiEvalDenseCellOffset = 472u") ||
+	    !containsText(surfelCommon, "surfelGiEvalDenseCellSkippedOffset = 476u"))
+	{
+		std::cerr << "surfel GI dense-cell constants and counters are required\n";
+		return false;
+	}
 	if (!requirePathTracerAnalysisRtToComputeBarrier(engineCore))
 	{
 		return false;
@@ -1519,7 +1593,9 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "uint32_t surfelGiCellAllocatedMemberships",
 	    "uint32_t surfelGiCellAllocationOverflow",
 	    "uint32_t surfelGiCellNonEmpty",
-	    "uint32_t surfelGiCellMaxPopulation"};
+	    "uint32_t surfelGiCellMaxPopulation",
+	    "uint32_t surfelGiEvalDenseCell",
+	    "uint32_t surfelGiEvalDenseCellSkipped"};
 	const char *orderedSurfelCounterOffsets[] = {
 	    "surfelGiEvalAttemptsOffset = 436u",
 	    "surfelGiEvalCellEmptyOffset = 440u",
@@ -1529,7 +1605,9 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "surfelGiCellAllocatedMembershipsOffset = 456u",
 	    "surfelGiCellAllocationOverflowOffset = 460u",
 	    "surfelGiCellNonEmptyOffset = 464u",
-	    "surfelGiCellMaxPopulationOffset = 468u"};
+	    "surfelGiCellMaxPopulationOffset = 468u",
+	    "surfelGiEvalDenseCellOffset = 472u",
+	    "surfelGiEvalDenseCellSkippedOffset = 476u"};
 	std::size_t previousFieldPos = 0u;
 	std::size_t previousOffsetPos = 0u;
 	for (std::size_t i = 0u; i < std::size(orderedSurfelCounterFields); ++i)
@@ -1604,7 +1682,9 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "surfelGiGenerateRejectInvalid",
 	    "surfelGiGenerateRejectCoverage",
 	    "surfelGiCellOverflow",
-	    "surfelGiEvalAccepted"};
+	    "surfelGiEvalAccepted",
+	    "surfelGiEvalDenseCell",
+	    "surfelGiEvalDenseCellSkipped"};
 	for (const char *symbol : requiredTask8Symbols)
 	{
 		if (!containsText(uiHeader, symbol) &&
@@ -2528,7 +2608,11 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    {"surfelGiCellNonEmpty",
 	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellNonEmpty), 464u},
 	    {"surfelGiCellMaxPopulation",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellMaxPopulation), 468u}};
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiCellMaxPopulation), 468u},
+	    {"surfelGiEvalDenseCell",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalDenseCell), 472u},
+	    {"surfelGiEvalDenseCellSkipped",
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalDenseCellSkipped), 476u}};
 	for (const auto &counterOffset : counterOffsets)
 	{
 		if (counterOffset.offset != counterOffset.expectedOffset)

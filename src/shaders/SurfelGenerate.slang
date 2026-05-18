@@ -58,7 +58,7 @@ void surfelGenerateMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     const bool hadPreviousRecord = (previous.flags & 1u) != 0u;
 
     SurfelGiRecord record;
-    record.positionRadius = float4(worldPos, SURFEL_GI_MIN_RADIUS);
+    record.positionRadius = float4(worldPos, calcSurfelGiRadius(depth, uint2(width, height)));
     record.normalConfidence = float4(normalize(normal),
         hadPreviousRecord ? max(previous.normalConfidence.w, 0.1f) : 0.1f);
     record.radianceAge = hadPreviousRecord ? previous.radianceAge : float4(0.0f, 0.0f, 0.0f, 0.0f);

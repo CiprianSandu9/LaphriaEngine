@@ -4,15 +4,16 @@
 #include "ShaderCommon.slang"
 
 static const uint SURFEL_GI_MAX_SURFELS = 32768u;
-static const uint SURFEL_GI_GRID_DIM = 32u;
+static const uint SURFEL_GI_GRID_DIM = 64u;
 static const uint SURFEL_GI_CELL_COUNT = SURFEL_GI_GRID_DIM * SURFEL_GI_GRID_DIM * SURFEL_GI_GRID_DIM;
 static const uint SURFEL_GI_MAX_CELL_MEMBERSHIPS_PER_SURFEL = 27u;
 static const uint SURFEL_GI_CELL_TO_SURFEL_CAPACITY =
     SURFEL_GI_MAX_SURFELS * SURFEL_GI_MAX_CELL_MEMBERSHIPS_PER_SURFEL;
 static const uint SURFEL_GI_MAX_EVAL_CANDIDATES = 16u;
-static const float SURFEL_GI_CELL_SIZE = 1.5f;
-static const float SURFEL_GI_MIN_RADIUS = 0.25f;
-static const float SURFEL_GI_MAX_RADIUS = 2.5f;
+static const uint SURFEL_GI_DENSE_CELL_LIMIT = 64u;
+static const float SURFEL_GI_CELL_SIZE = 0.75f;
+static const float SURFEL_GI_MIN_RADIUS = 0.08f;
+static const float SURFEL_GI_MAX_RADIUS = 0.75f;
 
 static const uint surfelGiClearDispatchesOffset = 404u;
 static const uint surfelGiGenerateAttemptsOffset = 408u;
@@ -31,6 +32,8 @@ static const uint surfelGiCellAllocatedMembershipsOffset = 456u;
 static const uint surfelGiCellAllocationOverflowOffset = 460u;
 static const uint surfelGiCellNonEmptyOffset = 464u;
 static const uint surfelGiCellMaxPopulationOffset = 468u;
+static const uint surfelGiEvalDenseCellOffset = 472u;
+static const uint surfelGiEvalDenseCellSkippedOffset = 476u;
 
 struct SurfelGiRecord
 {
@@ -69,6 +72,15 @@ int3 calcSurfelGiCell(float3 worldPos, float3 cameraPos)
     float3 local = worldPos - cameraPos;
     float3 grid = local / SURFEL_GI_CELL_SIZE + float3(SURFEL_GI_GRID_DIM, SURFEL_GI_GRID_DIM, SURFEL_GI_GRID_DIM) * 0.5f;
     return int3(floor(grid));
+}
+
+float calcSurfelGiRadius(float hitT, uint2 extent)
+{
+    const float shortestAxis = max(float(min(extent.x, extent.y)), 1.0f);
+    const float projectedRadius = (hitT / shortestAxis) * 4.0f;
+    return clamp(projectedRadius,
+                 SURFEL_GI_MIN_RADIUS,
+                 min(SURFEL_GI_MAX_RADIUS, SURFEL_GI_CELL_SIZE * 0.5f));
 }
 
 float3 calcSurfelGiPrimaryRayDirection(uint2 pixel,

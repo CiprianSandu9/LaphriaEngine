@@ -273,6 +273,8 @@ struct PathTracerAnalysisCounters
 	uint32_t surfelGiCellAllocationOverflow = 0;
 	uint32_t surfelGiCellNonEmpty = 0;
 	uint32_t surfelGiCellMaxPopulation = 0;
+	uint32_t surfelGiEvalDenseCell = 0;
+	uint32_t surfelGiEvalDenseCellSkipped = 0;
 };
 
 struct SkinningPushConstants

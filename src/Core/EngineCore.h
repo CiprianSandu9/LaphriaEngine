@@ -238,6 +238,8 @@ class EngineCore
 		double surfelGiCellAllocationOverflow = 0.0;
 		double surfelGiCellNonEmpty = 0.0;
 		double surfelGiCellMaxPopulation = 0.0;
+		double surfelGiEvalDenseCell = 0.0;
+		double surfelGiEvalDenseCellSkipped = 0.0;
 		double surfelGiEvalAttempts = 0.0;
 		double surfelGiEvalCandidates = 0.0;
 		double surfelGiEvalAccepted = 0.0;

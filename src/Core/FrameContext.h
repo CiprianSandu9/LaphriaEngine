@@ -97,7 +97,7 @@ class FrameContext
 	std::vector<void *>                          ptAnalysisCounterMapped;
 
 	static constexpr uint32_t       kSurfelGiMaxSurfels = 32768;
-	static constexpr uint32_t       kSurfelGiGridDim = 32;
+	static constexpr uint32_t       kSurfelGiGridDim = 64;
 	static constexpr uint32_t       kSurfelGiCellCount = kSurfelGiGridDim * kSurfelGiGridDim * kSurfelGiGridDim;
 	static constexpr uint32_t       kSurfelGiMaxCellMembershipsPerSurfel = 27;
 	static constexpr uint32_t       kSurfelGiCellToSurfelCapacity =

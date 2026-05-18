@@ -2480,6 +2480,10 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	    counters->surfelGiCellNonEmpty;
 	ui.pathTracerPerfStats.surfelGiCellMaxPopulation =
 	    counters->surfelGiCellMaxPopulation;
+	ui.pathTracerPerfStats.surfelGiEvalDenseCell =
+	    counters->surfelGiEvalDenseCell;
+	ui.pathTracerPerfStats.surfelGiEvalDenseCellSkipped =
+	    counters->surfelGiEvalDenseCellSkipped;
 	ui.pathTracerPerfStats.surfelGiEvalAttempts =
 	    counters->surfelGiEvalAttempts;
 	ui.pathTracerPerfStats.surfelGiEvalCandidates =
@@ -3040,6 +3044,7 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "surfelGiCellTotalMemberships=%.1f, surfelGiCellAllocatedMemberships=%.1f, "
 	     "surfelGiCellAllocationOverflow=%.1f, surfelGiCellNonEmpty=%.1f, "
 	     "surfelGiCellMaxPopulation=%.1f, "
+	     "surfelGiEvalDenseCell=%.1f, surfelGiEvalDenseCellSkipped=%.1f, "
 	     "surfelGiEvalAttempts=%.1f, surfelGiEvalCandidates=%.1f, "
 	     "surfelGiEvalAccepted=%.1f, surfelGiEvalCellEmpty=%.1f, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
@@ -3147,6 +3152,8 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     accum.surfelGiCellAllocationOverflow * invSamples,
 	     accum.surfelGiCellNonEmpty * invSamples,
 	     accum.surfelGiCellMaxPopulation * invSamples,
+	     accum.surfelGiEvalDenseCell * invSamples,
+	     accum.surfelGiEvalDenseCellSkipped * invSamples,
 	     accum.surfelGiEvalAttempts * invSamples,
 	     accum.surfelGiEvalCandidates * invSamples,
 	     accum.surfelGiEvalAccepted * invSamples,
@@ -3378,6 +3385,10 @@ void EngineCore::updatePathTracerExperimentSweep()
 	    static_cast<double>(stats.surfelGiCellNonEmpty);
 	ptExperimentAccum.surfelGiCellMaxPopulation +=
 	    static_cast<double>(stats.surfelGiCellMaxPopulation);
+	ptExperimentAccum.surfelGiEvalDenseCell +=
+	    static_cast<double>(stats.surfelGiEvalDenseCell);
+	ptExperimentAccum.surfelGiEvalDenseCellSkipped +=
+	    static_cast<double>(stats.surfelGiEvalDenseCellSkipped);
 	ptExperimentAccum.surfelGiEvalAttempts +=
 	    static_cast<double>(stats.surfelGiEvalAttempts);
 	ptExperimentAccum.surfelGiEvalCandidates +=
