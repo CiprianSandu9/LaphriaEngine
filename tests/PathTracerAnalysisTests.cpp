@@ -1755,12 +1755,11 @@ bool testPathTracerReservoirGiMeasurementContract()
 		}
 	}
 
-	const std::array<const char *, 13> estimatorAuditSymbols{
+	const std::array<const char *, 12> estimatorAuditSymbols{
 	    "enum class PathTracerReservoirGiEstimatorAuditMode",
 	    "reservoirGiEstimatorAuditMode",
 	    "ReservoirEstimatorAuditOff",
 	    "ReservoirEstimatorAuditCurrent",
-	    "ReservoirEstimatorAuditSingleCandidateReference",
 	    "ReservoirEstimatorAuditNoProbeScale",
 	    "reservoirGiAuditCurrentLuma",
 	    "reservoirGiAuditReferenceLuma",
@@ -1783,7 +1782,9 @@ bool testPathTracerReservoirGiMeasurementContract()
 	}
 
 	if (!containsText(raygen, "float reservoirProbeScale =") ||
-	    !containsText(raygen, "reservoirGiAuditProbeScaleOffset"))
+	    !containsText(raygen, "reservoirGiAuditProbeScaleOffset") ||
+	    !containsText(raygen, "appliedReservoirProbeScale") ||
+	    !containsText(raygen, "ReservoirEstimatorAuditNoProbeScale ? 1.0 : reservoirProbeScale"))
 	{
 		std::cerr << "reservoir estimator audit must instrument reservoirProbeScale\n";
 		return false;
@@ -1904,8 +1905,8 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    "prevPixel = uint2(uint(pixel.x), uint(pixel.y))",
 	    "loadTemporalReservoirGi(temporalPixel, launchSize",
 	    "float reservoirProbeScale = float(candidateCount) / float(candidateCount + 1)",
-	    "result.totalContribution = reservoirTotal * reservoirProbeScale",
-	    "result.secondaryDirectSunContribution = reservoirSecondarySun * reservoirProbeScale",
+	    "result.totalContribution = reservoirTotal * appliedReservoirProbeScale",
+	    "result.secondaryDirectSunContribution = reservoirSecondarySun * appliedReservoirProbeScale",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiCandidatesOffset, 1u)",
 	    "ptAnalysisCounters.InterlockedAdd(reservoirGiConfidenceMScaledSumOffset, scaledConfidenceM)",
 	    "PATH_TRACER_RESERVOIR_GI_DETAILED_DIAGNOSTICS_BIT",
@@ -2672,7 +2673,17 @@ bool testPathTracerReservoirGiMeasurementContract()
 	    {"surfelGiEvalDenseCell",
 	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalDenseCell), 472u},
 	    {"surfelGiEvalDenseCellSkipped",
-	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalDenseCellSkipped), 476u}};
+	     offsetof(Laphria::PathTracerAnalysisCounters, surfelGiEvalDenseCellSkipped), 476u},
+	    {"reservoirGiAuditCurrentLumaScaledSum",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditCurrentLumaScaledSum), 480u},
+	    {"reservoirGiAuditReferenceLumaScaledSum",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditReferenceLumaScaledSum), 484u},
+	    {"reservoirGiAuditRelativeErrorScaledSum",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditRelativeErrorScaledSum), 488u},
+	    {"reservoirGiAuditProbeScaleScaledSum",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditProbeScaleScaledSum), 492u},
+	    {"reservoirGiAuditSampleCount",
+	     offsetof(Laphria::PathTracerAnalysisCounters, reservoirGiAuditSampleCount), 496u}};
 	for (const auto &counterOffset : counterOffsets)
 	{
 		if (counterOffset.offset != counterOffset.expectedOffset)

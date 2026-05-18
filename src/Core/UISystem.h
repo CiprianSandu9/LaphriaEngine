@@ -97,8 +97,7 @@ public:
     {
         Off = 0,
         Current = 1,
-        SingleCandidateReference = 2,
-        NoProbeScale = 3
+        NoProbeScale = 2
     };
 
     enum class PathTracerReservoirGiProposalMode

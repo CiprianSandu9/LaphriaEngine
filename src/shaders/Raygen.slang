@@ -197,8 +197,7 @@ static const uint PT_FLAGS_RESERVOIR_ESTIMATOR_AUDIT_SHIFT = 23u;
 static const uint PT_FLAGS_RESERVOIR_ESTIMATOR_AUDIT_MASK = 0x3u;
 static const int ReservoirEstimatorAuditOff = 0;
 static const int ReservoirEstimatorAuditCurrent = 1;
-static const int ReservoirEstimatorAuditSingleCandidateReference = 2;
-static const int ReservoirEstimatorAuditNoProbeScale = 3;
+static const int ReservoirEstimatorAuditNoProbeScale = 2;
 static const uint PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = PT_FLAGS_APPLY_FIRST_HIT_PROBES_BIT;
 static const uint targetWallFirstHitProbeContributionSumOffset = 52u;
 static const uint targetWallBaseLuminanceSumOffset = 56u;
@@ -3869,18 +3868,20 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
     }
 
     float reservoirProbeScale = float(candidateCount) / float(candidateCount + 1);
-    float currentEstimatorLuma = pathTracerLuminance(reservoirTotal * reservoirProbeScale);
+    float appliedReservoirProbeScale =
+        reservoirGiEstimatorAuditMode == ReservoirEstimatorAuditNoProbeScale ? 1.0 : reservoirProbeScale;
+    float currentEstimatorLuma = pathTracerLuminance(reservoirTotal * appliedReservoirProbeScale);
     float referenceEstimatorLuma = rawReservoirLuma;
     if (acceptedReservoir &&
         reservoirGiEstimatorAuditMode != ReservoirEstimatorAuditOff) {
         recordReservoirGiEstimatorAudit(currentEstimatorLuma,
                                         referenceEstimatorLuma,
-                                        reservoirProbeScale);
+                                        appliedReservoirProbeScale);
     }
     result.reservoirSelectedWeight = selectedWeight;
     result.reservoirSelectedSource = acceptedReservoir ? float(selectedSource) : -1.0;
-    result.totalContribution = reservoirTotal * reservoirProbeScale;
-    result.secondaryDirectSunContribution = reservoirSecondarySun * reservoirProbeScale;
+    result.totalContribution = reservoirTotal * appliedReservoirProbeScale;
+    result.secondaryDirectSunContribution = reservoirSecondarySun * appliedReservoirProbeScale;
     return result;
 }
 

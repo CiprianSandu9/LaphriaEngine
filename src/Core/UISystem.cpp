@@ -1180,7 +1180,6 @@ void UISystem::drawPathTracerDebugLab() {
         const char *reservoirAuditModes[] = {
             "Off",
             "Current",
-            "Single Candidate Reference",
             "No Probe Scale"};
         int reservoirAuditMode = static_cast<int>(pathTracerSettings.reservoirGiEstimatorAuditMode);
         if (ImGui::Combo("Reservoir Estimator Audit", &reservoirAuditMode,

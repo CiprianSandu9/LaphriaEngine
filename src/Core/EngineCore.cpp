@@ -188,7 +188,7 @@ uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
 	                          kPtFlagsEnvironmentBounceShift,
 	                          kPtFlagsEnvironmentBounceMask) |
 	       packPathTracerBits(static_cast<uint32_t>(
-	                              std::clamp(static_cast<int>(settings.reservoirGiEstimatorAuditMode), 0, 3)),
+	                              std::clamp(static_cast<int>(settings.reservoirGiEstimatorAuditMode), 0, 2)),
 	                          kPtFlagsReservoirEstimatorAuditShift,
 	                          kPtFlagsReservoirEstimatorAuditMask);
 }
