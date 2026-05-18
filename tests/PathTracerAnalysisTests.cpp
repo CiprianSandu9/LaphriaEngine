@@ -314,6 +314,20 @@ bool requireCompactSurfelCellIndexListBuffers(const std::string &frameContextSou
 	if (createSurfelBuffers.empty())
 		return false;
 
+	const std::string cellToSurfelInitLoop =
+	    stripComments(extractFunctionBody(createSurfelBuffers, "for (auto &buffer : surfelGiCellSlotBuffers)"));
+	if (cellToSurfelInitLoop.empty())
+		return false;
+	const bool cellToSurfelInitBarrier =
+	    containsText(cellToSurfelInitLoop, "cmd.fillBuffer(*buffer, 0, cellToSurfelBufferSize, 0xffffffffu)") &&
+	    containsText(cellToSurfelInitLoop, ".srcStageMask = vk::PipelineStageFlagBits2::eTransfer") &&
+	    containsText(cellToSurfelInitLoop, ".srcAccessMask = vk::AccessFlagBits2::eTransferWrite") &&
+	    containsText(cellToSurfelInitLoop, ".dstStageMask = vk::PipelineStageFlagBits2::eComputeShader") &&
+	    containsText(cellToSurfelInitLoop, "vk::AccessFlagBits2::eShaderStorageRead") &&
+	    containsText(cellToSurfelInitLoop, "vk::AccessFlagBits2::eShaderStorageWrite") &&
+	    containsText(cellToSurfelInitLoop, ".buffer = *buffer") &&
+	    containsText(cellToSurfelInitLoop, ".size = cellToSurfelBufferSize");
+
 	return containsText(createSurfelBuffers, "kSurfelGiCellToSurfelCapacity") &&
 	       containsText(createSurfelBuffers, "kSurfelGiCellToSurfelIndexSize") &&
 	       !containsText(createSurfelBuffers, "kSurfelGiCellSlotCount * kSurfelGiCellSlotSize") &&
@@ -321,6 +335,7 @@ bool requireCompactSurfelCellIndexListBuffers(const std::string &frameContextSou
 	                    "cellToSurfelBufferSize,\n                                      vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst") &&
 	       containsText(createSurfelBuffers,
 	                    "cmd.fillBuffer(*buffer, 0, cellToSurfelBufferSize, 0xffffffffu)") &&
+	       cellToSurfelInitBarrier &&
 	       containsText(engineCore,
 	                    "FrameContext::kSurfelGiCellToSurfelCapacity * FrameContext::kSurfelGiCellToSurfelIndexSize");
 }
