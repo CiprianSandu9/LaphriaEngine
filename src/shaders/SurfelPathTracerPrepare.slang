@@ -55,14 +55,14 @@ void main(uint3 tid : SV_DispatchThreadID) {
         cellCounterBuffer.Store(index * 4u, 0u);
     }
 
-    if (index < cellCount) {
+    if (push.resetPersistent != 0u && index < cellCount) {
         SurfelPathTracerCellInfo cellInfo;
         cellInfo.surfelOffset = 0u;
         cellInfo.surfelCount = 0u;
         cellInfoBuffer[index] = cellInfo;
     }
 
-    if (index < cellToSurfelCount) {
+    if (push.resetPersistent != 0u && index < cellToSurfelCount) {
         cellToSurfelBuffer[index] = SURFEL_PT_INVALID_INDEX;
     }
 

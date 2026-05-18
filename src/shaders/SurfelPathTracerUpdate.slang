@@ -2,18 +2,17 @@
 
 [[vk::binding(4, 0)]] RWByteAddressBuffer counters;
 [[vk::binding(5, 0)]] RWStructuredBuffer<SurfelPathTracerSurfel> surfelBuffer;
+[[vk::binding(10, 0)]] RWStructuredBuffer<uint> rayBuffer;
 [[vk::binding(12, 0)]] RWByteAddressBuffer cellCounterBuffer;
 
 struct UpdatePushConstants {
     uint maxSurfels;
     float cellSize;
     uint cellDimension;
-    uint pad0;
+    uint maxRays;
 };
 
 [[vk::push_constant]] UpdatePushConstants push;
-
-static const uint COUNTER_REQUESTED_RAYS_OFFSET = 12u;
 
 uint cellIndexForPosition(float3 position, float cellSize, uint cellDimension) {
     float safeCellSize = max(cellSize, 0.0001f);
@@ -45,12 +44,25 @@ void main(uint3 tid : SV_DispatchThreadID) {
     uint cellCountOffset = (1u + cellIndex) * 4u;
     cellCounterBuffer.InterlockedAdd(cellCountOffset, 1u);
 
-    if (surfel.rayCount > 0u) {
+    if (surfel.rayCount > 0u && push.maxRays > 0u) {
         uint rayOffset = 0u;
-        counters.InterlockedAdd(COUNTER_REQUESTED_RAYS_OFFSET, surfel.rayCount, rayOffset);
+        counters.InterlockedAdd(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET, surfel.rayCount, rayOffset);
+        uint writableRayCount = rayOffset < push.maxRays ? min(surfel.rayCount, push.maxRays - rayOffset) : 0u;
+        if (writableRayCount < surfel.rayCount) {
+            counters.InterlockedMin(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET, push.maxRays);
+        }
+
         surfel.rayOffset = rayOffset;
+        surfel.rayCount = writableRayCount;
+        for (uint ray = 0u; ray < writableRayCount; ++ray) {
+            uint rayIndex = rayOffset + ray;
+            uint base = rayIndex * SURFEL_PT_RAY_RECORD_UINTS;
+            rayBuffer[base + SURFEL_PT_RAY_SURFEL_INDEX] = surfelIndex;
+            rayBuffer[base + SURFEL_PT_RAY_FLAGS] = 0u;
+        }
     } else {
         surfel.rayOffset = 0u;
+        surfel.rayCount = 0u;
     }
 
     surfelBuffer[surfelIndex] = surfel;

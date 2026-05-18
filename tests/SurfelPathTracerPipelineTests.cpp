@@ -43,7 +43,7 @@ bool containsNeedle(const std::string &haystack, std::string_view needle)
 bool testSurfelPathTracerPipelineContracts()
 {
 	const std::filesystem::path root = sourceRoot();
-	const std::array<std::filesystem::path, 19> contractFiles = {
+	const std::array<std::filesystem::path, 25> contractFiles = {
 	    root / "CMakeLists.txt",
 	    root / "src" / "Core" / "EngineAuxiliary.h",
 	    root / "src" / "Core" / "UISystem.h",
@@ -63,6 +63,12 @@ bool testSurfelPathTracerPipelineContracts()
 	    root / "src" / "shaders" / "SurfelPathTracerUpdate.slang",
 	    root / "src" / "shaders" / "SurfelPathTracerCellInfo.slang",
 	    root / "src" / "shaders" / "SurfelPathTracerCellToSurfel.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerRaygen.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerMiss.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerClosestHit.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerAnyHit.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerIntegrate.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerEvaluate.slang",
 	};
 
 	std::string combined;
@@ -73,7 +79,7 @@ bool testSurfelPathTracerPipelineContracts()
 		combined += '\n';
 	}
 
-	const std::array<std::string_view, 84> needles = {
+	const std::array<std::string_view, 98> needles = {
 	    "RenderMode::SurfelPathTracer",
 	    "SurfelPathTracerSettings",
 	    "SurfelPathTracerStats",
@@ -120,7 +126,15 @@ bool testSurfelPathTracerPipelineContracts()
 	    "recordUpdatePass",
 	    "recordCellInfoPass",
 	    "recordCellToSurfelPass",
+	    "recordSurfelRayTracePass",
+	    "recordIntegratePass",
+	    "recordEvaluatePass",
+	    "SurfelPathTracerEvaluateMode::Generate",
+	    "SurfelPathTracerEvaluateMode::Resolve",
+	    "recordImageBarrierGBufferToCompute",
 	    "recordStorageBarrierComputeToCompute",
+	    "recordStorageBarrierComputeToRt",
+	    "recordStorageBarrierRtToCompute",
 	    "gBufferRayTracingPipeline",
 	    "rayTracingDescriptorSetLayout",
 	    "surfelPathTracerStorageDescriptorSets",
@@ -158,6 +172,11 @@ bool testSurfelPathTracerPipelineContracts()
 	    "perCellSurfelLimit",
 	    "rejectedStores",
 	    "InterlockedAdd",
+	    "msmeBlend",
+	    "packNormalOctahedral",
+	    "unpackNormalOctahedral",
+	    "SURFEL_PT_RAY_BIAS",
+	    "clampLuminance",
 	};
 
 	bool ok = true;

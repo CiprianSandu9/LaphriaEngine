@@ -9,6 +9,7 @@ struct SurfelPathTracerPayload {
 
 [shader("miss")]
 void main(inout SurfelPathTracerPayload payload) {
-    payload.radiance = evalSkyColor(normalize(WorldRayDirection()), normalize(-ubo.lightDir.xyz));
+    payload.radiance = clampLuminance(evalSkyColor(normalize(WorldRayDirection()), normalize(-ubo.lightDir.xyz)),
+                                      SURFEL_PT_MAX_RADIANCE_LUMINANCE);
     payload.hitT = -1.0;
 }

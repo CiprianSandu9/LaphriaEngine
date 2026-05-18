@@ -22,7 +22,7 @@ struct SurfelUpdatePushConstants
 	uint32_t maxSurfels = 0;
 	float cellSize = 1.0f;
 	uint32_t cellDimension = 1;
-	uint32_t pad0 = 0;
+	uint32_t maxRays = 0;
 };
 
 struct SurfelCellInfoPushConstants
@@ -39,6 +39,34 @@ struct SurfelCellToSurfelPushConstants
 	float cellSize = 1.0f;
 	uint32_t cellDimension = 1;
 	uint32_t perCellSurfelLimit = 0;
+};
+
+struct SurfelRayTracePushConstants
+{
+	uint32_t rayCount = 0;
+	uint32_t maxSurfels = 0;
+	uint32_t pad0 = 0;
+	uint32_t pad1 = 0;
+};
+
+struct SurfelIntegratePushConstants
+{
+	uint32_t maxSurfels = 0;
+	uint32_t pad0 = 0;
+	uint32_t pad1 = 0;
+	uint32_t pad2 = 0;
+};
+
+struct SurfelEvaluatePushConstants
+{
+	uint32_t mode = 0;
+	uint32_t width = 0;
+	uint32_t height = 0;
+	float cellSize = 1.0f;
+	uint32_t cellDimension = 1;
+	uint32_t maxSurfels = 0;
+	uint32_t pad1 = 0;
+	uint32_t pad2 = 0;
 };
 
 uint32_t linearGroupCount(uint64_t workItemCount)
@@ -121,6 +149,7 @@ void SurfelPathTracerPasses::recordUpdatePass(const vk::raii::CommandBuffer &com
                                               const SurfelPathTracerPipelines &pipelines,
                                               vk::DescriptorSet imageSet,
                                               uint32_t maxSurfels,
+                                              uint32_t maxRays,
                                               float cellSize,
                                               uint32_t cellDimension) const
 {
@@ -130,7 +159,7 @@ void SurfelPathTracerPasses::recordUpdatePass(const vk::raii::CommandBuffer &com
 	    .maxSurfels = std::max(maxSurfels, 1u),
 	    .cellSize = std::max(cellSize, 0.0001f),
 	    .cellDimension = std::max(cellDimension, 1u),
-	    .pad0 = 0};
+	    .maxRays = std::max(maxRays, 1u)};
 	commandBuffer.pushConstants<SurfelUpdatePushConstants>(*pipelines.computePipelineLayout,
 	                                                       vk::ShaderStageFlagBits::eCompute,
 	                                                       0,
@@ -180,11 +209,163 @@ void SurfelPathTracerPasses::recordCellToSurfelPass(const vk::raii::CommandBuffe
 	commandBuffer.dispatch(linearGroupCount(push.maxSurfels), 1, 1);
 }
 
+void SurfelPathTracerPasses::recordSurfelRayTracePass(const vk::raii::CommandBuffer &commandBuffer,
+                                                      const SurfelPathTracerPipelines &pipelines,
+                                                      const SurfelPathTracerResources &resources,
+                                                      vk::DescriptorSet rayTracingSet,
+                                                      vk::DescriptorSet storageSet,
+                                                      vk::DescriptorSet globalSet,
+                                                      uint32_t rayCount) const
+{
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.surfelRayTracingPipeline);
+	const std::array descriptorSets = {rayTracingSet, storageSet, globalSet};
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR,
+	                                 *pipelines.rayTracingPipelineLayout,
+	                                 0,
+	                                 descriptorSets,
+	                                 nullptr);
+
+	const SurfelRayTracePushConstants push{
+	    .rayCount = std::max(rayCount, 1u),
+	    .maxSurfels = std::max(resources.maxSurfelsCapacity(), 1u),
+	    .pad0 = 0,
+	    .pad1 = 0};
+	commandBuffer.pushConstants<SurfelRayTracePushConstants>(*pipelines.rayTracingPipelineLayout,
+	                                                         vk::ShaderStageFlagBits::eRaygenKHR,
+	                                                         0,
+	                                                         push);
+
+	vk::StridedDeviceAddressRegionKHR callableRegion{};
+	commandBuffer.traceRaysKHR(pipelines.surfelSbt.raygenRegion,
+	                           pipelines.surfelSbt.missRegion,
+	                           pipelines.surfelSbt.hitRegion,
+	                           callableRegion,
+	                           push.rayCount,
+	                           1,
+	                           1);
+}
+
+void SurfelPathTracerPasses::recordIntegratePass(const vk::raii::CommandBuffer &commandBuffer,
+                                                 const SurfelPathTracerPipelines &pipelines,
+                                                 vk::DescriptorSet imageSet,
+                                                 uint32_t maxSurfels) const
+{
+	bindComputeStorageSet(commandBuffer, pipelines, pipelines.integratePipeline, imageSet);
+
+	const SurfelIntegratePushConstants push{
+	    .maxSurfels = std::max(maxSurfels, 1u),
+	    .pad0 = 0,
+	    .pad1 = 0,
+	    .pad2 = 0};
+	commandBuffer.pushConstants<SurfelIntegratePushConstants>(*pipelines.computePipelineLayout,
+	                                                          vk::ShaderStageFlagBits::eCompute,
+	                                                          0,
+	                                                          push);
+	commandBuffer.dispatch(linearGroupCount(push.maxSurfels), 1, 1);
+}
+
+void SurfelPathTracerPasses::recordEvaluatePass(const vk::raii::CommandBuffer &commandBuffer,
+                                                const SurfelPathTracerPipelines &pipelines,
+                                                vk::DescriptorSet imageSet,
+                                                vk::DescriptorSet globalSet,
+                                                SurfelPathTracerEvaluateMode mode,
+                                                float cellSize,
+                                                uint32_t cellDimension,
+                                                uint32_t maxSurfels,
+                                                vk::Extent2D extent) const
+{
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.evaluatePipeline);
+	const std::array descriptorSets = {imageSet, globalSet};
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+	                                 *pipelines.computePipelineLayout,
+	                                 0,
+	                                 descriptorSets,
+	                                 nullptr);
+
+	const SurfelEvaluatePushConstants push{
+	    .mode = static_cast<uint32_t>(mode),
+	    .width = std::max(extent.width, 1u),
+	    .height = std::max(extent.height, 1u),
+	    .cellSize = std::max(cellSize, 0.0001f),
+	    .cellDimension = std::max(cellDimension, 1u),
+	    .maxSurfels = std::max(maxSurfels, 1u),
+	    .pad1 = 0,
+	    .pad2 = 0};
+	commandBuffer.pushConstants<SurfelEvaluatePushConstants>(*pipelines.computePipelineLayout,
+	                                                         vk::ShaderStageFlagBits::eCompute,
+	                                                         0,
+	                                                         push);
+
+	const uint32_t groupCountX = (push.width + 15u) / 16u;
+	const uint32_t groupCountY = (push.height + 15u) / 16u;
+	commandBuffer.dispatch(groupCountX, groupCountY, 1);
+}
+
+void SurfelPathTracerPasses::recordImageBarrierGBufferToCompute(
+    const vk::raii::CommandBuffer &commandBuffer,
+    const SurfelPathTracerResources &resources,
+    uint32_t frameIndex) const
+{
+	const std::array images = {
+	    static_cast<vk::Image>(*resources.gBufferNormalImages[frameIndex]),
+	    static_cast<vk::Image>(*resources.gBufferDepthImages[frameIndex]),
+	    static_cast<vk::Image>(*resources.gBufferMotionMaterialImages[frameIndex])};
+
+	std::array<vk::ImageMemoryBarrier2, 3> barriers{};
+	for (size_t i = 0; i < images.size(); ++i)
+	{
+		barriers[i] = vk::ImageMemoryBarrier2{
+		    .srcStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+		    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+		    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+		    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
+		    .oldLayout = vk::ImageLayout::eGeneral,
+		    .newLayout = vk::ImageLayout::eGeneral,
+		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		    .image = images[i],
+		    .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+	}
+
+	vk::DependencyInfo dependency{
+	    .imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
+	    .pImageMemoryBarriers = barriers.data()};
+	commandBuffer.pipelineBarrier2(dependency);
+}
+
 void SurfelPathTracerPasses::recordStorageBarrierComputeToCompute(
     const vk::raii::CommandBuffer &commandBuffer) const
 {
 	vk::MemoryBarrier2 storageBufferBarrier{
 	    .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite};
+	vk::DependencyInfo dependency{
+	    .memoryBarrierCount = 1,
+	    .pMemoryBarriers = &storageBufferBarrier};
+	commandBuffer.pipelineBarrier2(dependency);
+}
+
+void SurfelPathTracerPasses::recordStorageBarrierComputeToRt(
+    const vk::raii::CommandBuffer &commandBuffer) const
+{
+	vk::MemoryBarrier2 storageBufferBarrier{
+	    .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	    .dstStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite};
+	vk::DependencyInfo dependency{
+	    .memoryBarrierCount = 1,
+	    .pMemoryBarriers = &storageBufferBarrier};
+	commandBuffer.pipelineBarrier2(dependency);
+}
+
+void SurfelPathTracerPasses::recordStorageBarrierRtToCompute(
+    const vk::raii::CommandBuffer &commandBuffer) const
+{
+	vk::MemoryBarrier2 storageBufferBarrier{
+	    .srcStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
 	    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
 	    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
 	    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite};

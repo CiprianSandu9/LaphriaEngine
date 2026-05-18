@@ -490,6 +490,8 @@ void EngineCore::initVulkan()
 	pipelines.surfelPathTracerPipelines.createComputePipelines(vulkan);
 	pipelines.surfelPathTracerPipelines.createGBufferRayTracingPipeline(vulkan);
 	pipelines.surfelPathTracerPipelines.createGBufferShaderBindingTable(vulkan);
+	pipelines.surfelPathTracerPipelines.createSurfelRayTracingPipeline(vulkan);
+	pipelines.surfelPathTracerPipelines.createSurfelShaderBindingTable(vulkan);
 
 	// Pipeline creation order matches dependency on the descriptor set layouts above.
 	pipelines.createGraphicsPipeline(vulkan, swapchain.surfaceFormat.format, vulkan.findDepthFormat());
@@ -2059,6 +2061,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                         *surfelPathTracerStorageDescriptorSets[fi],
 	                                         *descriptorSets[fi],
 	                                         swapchain.extent);
+	surfelPathTracerPasses.recordImageBarrierGBufferToCompute(commandBuffer, surfelPathTracerResources, fi);
 
 	const auto &surfelSettings = mutableUi.surfelPathTracerSettings;
 	const bool resetPersistent = surfelSettings.resetSurfels ||
@@ -2074,10 +2077,21 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	mutableUi.surfelPathTracerSettings.resetSurfels = false;
 
 	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	surfelPathTracerPasses.recordEvaluatePass(commandBuffer,
+	                                          pipelines.surfelPathTracerPipelines,
+	                                          *surfelPathTracerStorageDescriptorSets[fi],
+	                                          *descriptorSets[fi],
+	                                          Laphria::SurfelPathTracerEvaluateMode::Generate,
+	                                          surfelSettings.cellSize,
+	                                          surfelPathTracerResources.cellDimensionCapacity(),
+	                                          surfelPathTracerResources.maxSurfelsCapacity(),
+	                                          swapchain.extent);
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 	surfelPathTracerPasses.recordUpdatePass(commandBuffer,
 	                                        pipelines.surfelPathTracerPipelines,
 	                                        *surfelPathTracerStorageDescriptorSets[fi],
 	                                        surfelPathTracerResources.maxSurfelsCapacity(),
+	                                        surfelPathTracerResources.maxRaysPerFrameCapacity(),
 	                                        surfelSettings.cellSize,
 	                                        surfelPathTracerResources.cellDimensionCapacity());
 	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
@@ -2094,25 +2108,29 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                              surfelSettings.cellSize,
 	                                              surfelPathTracerResources.cellDimensionCapacity(),
 	                                              surfelPathTracerResources.perCellSurfelLimitCapacity());
+	surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
+	surfelPathTracerPasses.recordSurfelRayTracePass(commandBuffer,
+	                                                pipelines.surfelPathTracerPipelines,
+	                                                surfelPathTracerResources,
+	                                                *surfelPathTracerRtDescriptorSets[fi],
+	                                                *surfelPathTracerStorageDescriptorSets[fi],
+	                                                *descriptorSets[fi],
+	                                                surfelPathTracerResources.maxSurfelsCapacity());
+	surfelPathTracerPasses.recordStorageBarrierRtToCompute(commandBuffer);
+	surfelPathTracerPasses.recordIntegratePass(commandBuffer,
+	                                           pipelines.surfelPathTracerPipelines,
+	                                           *surfelPathTracerStorageDescriptorSets[fi],
+	                                           surfelPathTracerResources.maxSurfelsCapacity());
 	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
-
-	// TODO: Route surfel debug views to output once the later lighting/TAA stages exist.
-	transition_image_layout(*surfelPathTracerResources.outputImages[fi],
-	                        vk::ImageLayout::eGeneral,
-	                        vk::ImageLayout::eGeneral,
-	                        vk::AccessFlagBits2::eShaderWrite,
-	                        vk::AccessFlagBits2::eShaderWrite,
-	                        vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-	                        vk::PipelineStageFlagBits2::eComputeShader,
-	                        vk::ImageAspectFlagBits::eColor);
-
-	surfelPathTracerPasses.recordSkyPass(commandBuffer,
-	                                     pipelines.surfelPathTracerPipelines,
-	                                     surfelPathTracerResources,
-	                                     *surfelPathTracerSkyDescriptorSets[fi],
-	                                     *descriptorSets[fi],
-	                                     fi,
-	                                     swapchain.extent);
+	surfelPathTracerPasses.recordEvaluatePass(commandBuffer,
+	                                          pipelines.surfelPathTracerPipelines,
+	                                          *surfelPathTracerStorageDescriptorSets[fi],
+	                                          *descriptorSets[fi],
+	                                          Laphria::SurfelPathTracerEvaluateMode::Resolve,
+	                                          surfelSettings.cellSize,
+	                                          surfelPathTracerResources.cellDimensionCapacity(),
+	                                          surfelPathTracerResources.maxSurfelsCapacity(),
+	                                          swapchain.extent);
 
 	transition_image_layout(*surfelPathTracerResources.outputImages[fi],
 	                        vk::ImageLayout::eGeneral,
