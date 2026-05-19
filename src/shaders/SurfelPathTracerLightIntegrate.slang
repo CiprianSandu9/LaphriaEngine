@@ -36,6 +36,7 @@ static const uint SURFEL_DEBUG_REFLECTION_RAW = 8u;
 static const uint SURFEL_DEBUG_REFLECTION_FILTERED = 9u;
 static const uint SURFEL_DEBUG_GBUFFER_ALBEDO = 13u;
 static const uint SURFEL_DEBUG_DIFFUSE_GI = 14u;
+static const uint SURFEL_DEBUG_SUN_VISIBILITY = 15u;
 static const float SURFEL_PT_DIFFUSE_GI_SCALE = 0.35;
 
 float3 primaryRayDirection(uint2 pixel) {
@@ -126,6 +127,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
         lightingImages[pixel] = float4(reflectionFiltered, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_DIFFUSE_GI) {
         lightingImages[pixel] = float4(diffuseGi, 1.0);
+    } else if (push.debugView == SURFEL_DEBUG_SUN_VISIBILITY) {
+        lightingImages[pixel] = float4(sunVisibility.xxx, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_CELL_OCCUPANCY) {
         float3 worldPosition = reconstructWorldPosition(pixel, depth);
         float3 occupancyColor = cellOccupancyDebugColor(worldPosition);

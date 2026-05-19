@@ -1679,12 +1679,13 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
             "Reference Color",
             "Reference Difference",
             "GBuffer Albedo",
-            "Diffuse GI"};
+            "Diffuse GI",
+            "Sun Visibility"};
         int debugView = static_cast<int>(settings.debugView);
         ImGui::Combo("Debug View", &debugView, debugViews, IM_ARRAYSIZE(debugViews));
         debugView = std::clamp(debugView,
                                static_cast<int>(SurfelPathTracerDebugView::FinalColor),
-                               static_cast<int>(SurfelPathTracerDebugView::DiffuseGi));
+                               static_cast<int>(SurfelPathTracerDebugView::SunVisibility));
         settings.debugView = static_cast<SurfelPathTracerDebugView>(debugView);
 
         ImGui::Text("Surfels: %u alive / %u dead / %u dirty",

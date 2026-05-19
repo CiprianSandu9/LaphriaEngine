@@ -134,10 +134,11 @@ public:
         ReferenceColor = 11,
         ReferenceDifference = 12,
         GBufferAlbedo = 13,
-        DiffuseGi = 14
+        DiffuseGi = 14,
+        SunVisibility = 15
     };
     static constexpr SurfelPathTracerDebugView kMaxSurfelPathTracerDebugView =
-        SurfelPathTracerDebugView::DiffuseGi;
+        SurfelPathTracerDebugView::SunVisibility;
 
     struct PathTracerSettings
     {
