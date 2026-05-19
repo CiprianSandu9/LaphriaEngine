@@ -28,6 +28,45 @@ uint reservoirSlotForCellSurfel(uint surfelIndex, uint cellIndex, uint cellSlot,
     return candidate < cellCapacity ? candidate : SURFEL_PT_INVALID_INDEX;
 }
 
+uint dominantNormalBucket(float3 normal)
+{
+    float3 n = normalize(normal);
+    float3 a = abs(n);
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        return n.x >= 0.0 ? 0u : 1u;
+    }
+    if (a.y >= a.z)
+    {
+        return n.y >= 0.0 ? 2u : 3u;
+    }
+    return n.z >= 0.0 ? 4u : 5u;
+}
+
+uint representativeSlotForCellSurfel(SurfelPathTracerSurfel surfel,
+                                     int3 cellCoord,
+                                     float3 cameraPosition,
+                                     float cellSize,
+                                     uint cellCapacity)
+{
+    if (cellCapacity == 0u)
+    {
+        return SURFEL_PT_INVALID_INDEX;
+    }
+
+    float safeCellSize = max(cellSize, 0.0001);
+    float3 cellCenter = float3(cellCoord) * safeCellSize + cameraPosition;
+    float3 cellMin = cellCenter - float3(safeCellSize * 0.5);
+    float3 localPosition = saturate((surfel.position - cellMin) / safeCellSize);
+    uint3 localBucket = uint3(localPosition.x >= 0.5 ? 1u : 0u,
+                              localPosition.y >= 0.5 ? 1u : 0u,
+                              localPosition.z >= 0.5 ? 1u : 0u);
+    uint spatialBucket = localBucket.x + localBucket.y * 2u + localBucket.z * 4u;
+    uint normalBucket = dominantNormalBucket(unpackNormalOctahedral(surfel.packedNormal));
+    uint bucket = spatialBucket + normalBucket * 8u;
+    return bucket % cellCapacity;
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
@@ -71,6 +110,12 @@ void main(uint3 tid : SV_DispatchThreadID) {
             if (replaceSlot == SURFEL_PT_INVALID_INDEX) {
                 counters.InterlockedAdd(SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET, 1u);
             } else {
+                uint representativeSlot = representativeSlotForCellSurfel(surfel,
+                                                                          cellCoord,
+                                                                          ubo.cameraPos.xyz,
+                                                                          push.cellSize,
+                                                                          cellInfo.surfelCount);
+                replaceSlot = representativeSlot;
                 cellToSurfelBuffer[cellInfo.surfelOffset + replaceSlot] = surfelIndex;
             }
         }

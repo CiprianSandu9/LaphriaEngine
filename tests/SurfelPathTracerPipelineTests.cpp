@@ -608,7 +608,15 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "uint streamLength = cellSlot + 1u;",
 	                        "uint candidate = pcgHash(surfelIndex ^ (cellIndex * 1664525u) ^ cellSlot) % streamLength;",
 	                        "return candidate < cellCapacity ? candidate : SURFEL_PT_INVALID_INDEX;",
+	                        "uint representativeSlotForCellSurfel(SurfelPathTracerSurfel surfel",
+	                        "float3 localPosition = saturate((surfel.position - cellMin) / safeCellSize)",
+	                        "uint spatialBucket = localBucket.x + localBucket.y * 2u + localBucket.z * 4u",
+	                        "uint normalBucket = dominantNormalBucket(unpackNormalOctahedral(surfel.packedNormal))",
+	                        "uint bucket = spatialBucket + normalBucket * 8u",
+	                        "return bucket % cellCapacity",
 	                        "uint replaceSlot = reservoirSlotForCellSurfel(surfelIndex, cellIndex, cellSlot, cellInfo.surfelCount);",
+	                        "uint representativeSlot = representativeSlotForCellSurfel(surfel",
+	                        "replaceSlot = representativeSlot;",
 	                        "cellToSurfelBuffer[cellInfo.surfelOffset + replaceSlot] = surfelIndex;",
 	                        "if (replaceSlot == SURFEL_PT_INVALID_INDEX)"});
 
