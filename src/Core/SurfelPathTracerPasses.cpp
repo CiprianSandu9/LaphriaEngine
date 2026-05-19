@@ -81,6 +81,10 @@ struct SurfelEvaluatePushConstants
 	uint32_t lockSurfels = 0;
 	uint32_t enablePlacement = 1;
 	uint32_t enableRemoval = 1;
+	uint32_t maxSurfelSamplesPerQuery = 1;
+	uint32_t pad0 = 0;
+	uint32_t pad1 = 0;
+	uint32_t pad2 = 0;
 };
 
 struct SurfelReflectionPushConstants
@@ -385,6 +389,7 @@ void SurfelPathTracerPasses::recordEvaluatePass(const vk::raii::CommandBuffer &c
                                                 bool lockSurfels,
                                                 bool enableSurfelPlacement,
                                                 bool enableSurfelRemoval,
+                                                uint32_t maxSurfelSamplesPerQuery,
                                                 vk::Extent2D extent) const
 {
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.evaluatePipeline);
@@ -409,7 +414,8 @@ void SurfelPathTracerPasses::recordEvaluatePass(const vk::raii::CommandBuffer &c
 	    .frameIndex = frameIndex,
 	    .lockSurfels = lockSurfels ? 1u : 0u,
 	    .enablePlacement = enableSurfelPlacement ? 1u : 0u,
-	    .enableRemoval = enableSurfelRemoval ? 1u : 0u};
+	    .enableRemoval = enableSurfelRemoval ? 1u : 0u,
+	    .maxSurfelSamplesPerQuery = std::clamp(maxSurfelSamplesPerQuery, 1u, 128u)};
 	commandBuffer.pushConstants<SurfelEvaluatePushConstants>(*pipelines.computePipelineLayout,
 	                                                         vk::ShaderStageFlagBits::eCompute,
 	                                                         0,

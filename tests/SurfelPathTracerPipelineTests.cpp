@@ -542,6 +542,11 @@ bool testSurfelPathTracerPipelineContractFiles()
 	bool surfelDiffuseGiOk =
 	    containsAllNeedles(evaluateShader,
 	                       {"float3 sampleWeightedSurfelRadiance(float3 position, float3 normal)",
+	                        "uint maxSamples = max(push.maxSurfelSamplesPerQuery, 1u)",
+	                        "for (int shell = 0; shell <= 1; ++shell)",
+	                        "if (max(abs(x), max(abs(y), abs(z))) != shell)",
+	                        "int3 cellCoord = centerCoord + int3(x, y, z)",
+	                        "if (samplesVisited >= maxSamples)",
 	                        "weightedRadiance += clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE) * weight",
 	                        "return weightSum > 0.0001 ? weightedRadiance / weightSum : float3(0.0)",
 	                        "return sampleWeightedSurfelRadiance(position, normal) * saturate(coverage)",
@@ -563,9 +568,22 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "lightingImages[pixel] = float4(albedo, 1.0)",
 	                        "lightingImages[pixel] = float4(rawSurfelRadiance, 1.0)",
 	                        "lightingImages[pixel] = float4(diffuseGi, 1.0)"});
+	bool neighborGatherOk =
+	    containsAllNeedles(evaluateShader,
+	                       {"uint maxSurfelSamplesPerQuery;",
+	                        "uint samplesVisited = 0u;",
+	                        "samplesVisited += 1u;",
+	                        "if (!isCellCoordValid(cellCoord, dim))",
+	                        "uint cellIndex = flattenCameraRelativeCellCoord(cellCoord, dim);"}) &&
+	    containsAllNeedles(passesCpp,
+	                       {"uint32_t maxSurfelSamplesPerQuery = 1;",
+	                        "uint32_t maxSurfelSamplesPerQuery,",
+	                        ".maxSurfelSamplesPerQuery = std::clamp(maxSurfelSamplesPerQuery, 1u, 128u)"}) &&
+	    containsAllNeedles(engineCore,
+	                       {"surfelSettings.maxSurfelSamplesPerQuery,"});
 
 	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok &&
-	       rtPushConstantStagesOk && materialAlbedoOk && surfelDiffuseGiOk && debugViewsOk;
+	       rtPushConstantStagesOk && materialAlbedoOk && surfelDiffuseGiOk && debugViewsOk && neighborGatherOk;
 }
 
 bool testSurfelPathTracerCellAddressBounds()

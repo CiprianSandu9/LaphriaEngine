@@ -28,6 +28,10 @@ struct EvaluatePushConstants {
     uint lockSurfels;
     uint enablePlacement;
     uint enableRemoval;
+    uint maxSurfelSamplesPerQuery;
+    uint pad0;
+    uint pad1;
+    uint pad2;
 };
 
 [[vk::push_constant]] EvaluatePushConstants push;
@@ -57,27 +61,54 @@ float estimateCoverage(float3 position, float3 normal, out uint closestSurfelInd
 
     float coverage = 0.0;
     float bestWeight = 0.0;
-    uint cellIndex = flattenCameraRelativeCellCoord(centerCoord, dim);
-    SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
-    for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
-        uint surfelIndex = cellToSurfelBuffer[cellInfo.surfelOffset + slot];
-        if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= push.maxSurfels) {
-            continue;
-        }
+    uint maxSamples = max(push.maxSurfelSamplesPerQuery, 1u);
+    uint samplesVisited = 0u;
+    for (int shell = 0; shell <= 1; ++shell) {
+        for (int z = -shell; z <= shell; ++z) {
+            for (int y = -shell; y <= shell; ++y) {
+                for (int x = -shell; x <= shell; ++x) {
+                    if (samplesVisited >= maxSamples) {
+                        break;
+                    }
+                    if (max(abs(x), max(abs(y), abs(z))) != shell) {
+                        continue;
+                    }
 
-        SurfelPathTracerSurfel surfel = surfelBuffer[surfelIndex];
-        if (!isActiveSurfel(surfel)) {
-            continue;
-        }
+                    int3 cellCoord = centerCoord + int3(x, y, z);
+                    if (!isCellCoordValid(cellCoord, dim)) {
+                        continue;
+                    }
 
-        float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
-        float normalWeight = saturate(dot(normal, surfelNormal));
-        float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(surfel.radius, 0.0001));
-        float weight = normalWeight * distanceWeight;
-        coverage += weight;
-        if (weight > bestWeight) {
-            bestWeight = weight;
-            closestSurfelIndex = surfelIndex;
+                    uint cellIndex = flattenCameraRelativeCellCoord(cellCoord, dim);
+                    SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
+                    for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
+                        if (samplesVisited >= maxSamples) {
+                            break;
+                        }
+
+                        uint surfelIndex = cellToSurfelBuffer[cellInfo.surfelOffset + slot];
+                        if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= push.maxSurfels) {
+                            continue;
+                        }
+
+                        SurfelPathTracerSurfel surfel = surfelBuffer[surfelIndex];
+                        if (!isActiveSurfel(surfel)) {
+                            continue;
+                        }
+
+                        samplesVisited += 1u;
+                        float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
+                        float normalWeight = saturate(dot(normal, surfelNormal));
+                        float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(surfel.radius, 0.0001));
+                        float weight = normalWeight * distanceWeight;
+                        coverage += weight;
+                        if (weight > bestWeight) {
+                            bestWeight = weight;
+                            closestSurfelIndex = surfelIndex;
+                        }
+                    }
+                }
+            }
         }
     }
     if (stampClosest && closestSurfelIndex != SURFEL_PT_INVALID_INDEX) {
@@ -170,25 +201,52 @@ float3 sampleWeightedSurfelRadiance(float3 position, float3 normal) {
 
     float3 weightedRadiance = float3(0.0);
     float weightSum = 0.0;
-    uint cellIndex = flattenCameraRelativeCellCoord(centerCoord, dim);
-    SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
-    for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
-        uint surfelIndex = cellToSurfelBuffer[cellInfo.surfelOffset + slot];
-        if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= push.maxSurfels) {
-            continue;
-        }
+    uint maxSamples = max(push.maxSurfelSamplesPerQuery, 1u);
+    uint samplesVisited = 0u;
+    for (int shell = 0; shell <= 1; ++shell) {
+        for (int z = -shell; z <= shell; ++z) {
+            for (int y = -shell; y <= shell; ++y) {
+                for (int x = -shell; x <= shell; ++x) {
+                    if (samplesVisited >= maxSamples) {
+                        break;
+                    }
+                    if (max(abs(x), max(abs(y), abs(z))) != shell) {
+                        continue;
+                    }
 
-        SurfelPathTracerSurfel surfel = surfelBuffer[surfelIndex];
-        if (!isActiveSurfel(surfel)) {
-            continue;
-        }
+                    int3 cellCoord = centerCoord + int3(x, y, z);
+                    if (!isCellCoordValid(cellCoord, dim)) {
+                        continue;
+                    }
 
-        float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
-        float normalWeight = saturate(dot(normal, surfelNormal));
-        float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(surfel.radius * 2.0, 0.0001));
-        float weight = normalWeight * distanceWeight * distanceWeight;
-        weightedRadiance += clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE) * weight;
-        weightSum += weight;
+                    uint cellIndex = flattenCameraRelativeCellCoord(cellCoord, dim);
+                    SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
+                    for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
+                        if (samplesVisited >= maxSamples) {
+                            break;
+                        }
+
+                        uint surfelIndex = cellToSurfelBuffer[cellInfo.surfelOffset + slot];
+                        if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= push.maxSurfels) {
+                            continue;
+                        }
+
+                        SurfelPathTracerSurfel surfel = surfelBuffer[surfelIndex];
+                        if (!isActiveSurfel(surfel)) {
+                            continue;
+                        }
+
+                        samplesVisited += 1u;
+                        float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
+                        float normalWeight = saturate(dot(normal, surfelNormal));
+                        float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(surfel.radius * 2.0, 0.0001));
+                        float weight = normalWeight * distanceWeight * distanceWeight;
+                        weightedRadiance += clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE) * weight;
+                        weightSum += weight;
+                    }
+                }
+            }
+        }
     }
 
     return weightSum > 0.0001 ? weightedRadiance / weightSum : float3(0.0);

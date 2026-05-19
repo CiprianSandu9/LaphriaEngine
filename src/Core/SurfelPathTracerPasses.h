@@ -91,6 +91,7 @@ class SurfelPathTracerPasses
 	                        bool lockSurfels,
 	                        bool enableSurfelPlacement,
 	                        bool enableSurfelRemoval,
+	                        uint32_t maxSurfelSamplesPerQuery,
 	                        vk::Extent2D extent) const;
 
 	void recordReflectionPass(const vk::raii::CommandBuffer &commandBuffer,

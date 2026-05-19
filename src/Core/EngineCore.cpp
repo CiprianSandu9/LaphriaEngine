@@ -2217,6 +2217,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                          surfelSettings.lockSurfels,
 		                                          surfelSettings.enableSurfelPlacement,
 		                                          surfelSettings.enableSurfelRemoval,
+		                                          surfelSettings.maxSurfelSamplesPerQuery,
 		                                          swapchain.extent);
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		surfelPathTracerPasses.recordUpdatePass(commandBuffer,
@@ -2281,6 +2282,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                          surfelSettings.lockSurfels,
 	                                          false,
 	                                          false,
+	                                          surfelSettings.maxSurfelSamplesPerQuery,
 	                                          swapchain.extent);
 
 	surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
