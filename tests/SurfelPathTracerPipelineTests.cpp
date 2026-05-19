@@ -581,9 +581,19 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        ".maxSurfelSamplesPerQuery = std::clamp(maxSurfelSamplesPerQuery, 1u, 128u)"}) &&
 	    containsAllNeedles(engineCore,
 	                       {"surfelSettings.maxSurfelSamplesPerQuery,"});
+	bool representativeCellOverflowOk =
+	    containsAllNeedles(cellToSurfelShader,
+	                       {"uint reservoirSlotForCellSurfel(uint surfelIndex, uint cellIndex, uint cellSlot, uint cellCapacity)",
+	                        "uint streamLength = cellSlot + 1u;",
+	                        "uint candidate = pcgHash(surfelIndex ^ (cellIndex * 1664525u) ^ cellSlot) % streamLength;",
+	                        "return candidate < cellCapacity ? candidate : SURFEL_PT_INVALID_INDEX;",
+	                        "uint replaceSlot = reservoirSlotForCellSurfel(surfelIndex, cellIndex, cellSlot, cellInfo.surfelCount);",
+	                        "cellToSurfelBuffer[cellInfo.surfelOffset + replaceSlot] = surfelIndex;",
+	                        "if (replaceSlot == SURFEL_PT_INVALID_INDEX)"});
 
 	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok &&
-	       rtPushConstantStagesOk && materialAlbedoOk && surfelDiffuseGiOk && debugViewsOk && neighborGatherOk;
+	       rtPushConstantStagesOk && materialAlbedoOk && surfelDiffuseGiOk && debugViewsOk && neighborGatherOk &&
+	       representativeCellOverflowOk;
 }
 
 bool testSurfelPathTracerCellAddressBounds()

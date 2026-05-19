@@ -16,6 +16,18 @@ struct CellToSurfelPushConstants {
 
 [[vk::push_constant]] CellToSurfelPushConstants push;
 
+uint reservoirSlotForCellSurfel(uint surfelIndex, uint cellIndex, uint cellSlot, uint cellCapacity)
+{
+    if (cellCapacity == 0u)
+    {
+        return SURFEL_PT_INVALID_INDEX;
+    }
+
+    uint streamLength = cellSlot + 1u;
+    uint candidate = pcgHash(surfelIndex ^ (cellIndex * 1664525u) ^ cellSlot) % streamLength;
+    return candidate < cellCapacity ? candidate : SURFEL_PT_INVALID_INDEX;
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
@@ -55,7 +67,12 @@ void main(uint3 tid : SV_DispatchThreadID) {
         if (cellSlot < cellInfo.surfelCount) {
             cellToSurfelBuffer[cellInfo.surfelOffset + cellSlot] = surfelIndex;
         } else {
-            counters.InterlockedAdd(SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET, 1u);
+            uint replaceSlot = reservoirSlotForCellSurfel(surfelIndex, cellIndex, cellSlot, cellInfo.surfelCount);
+            if (replaceSlot == SURFEL_PT_INVALID_INDEX) {
+                counters.InterlockedAdd(SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET, 1u);
+            } else {
+                cellToSurfelBuffer[cellInfo.surfelOffset + replaceSlot] = surfelIndex;
+            }
         }
     }
 }
