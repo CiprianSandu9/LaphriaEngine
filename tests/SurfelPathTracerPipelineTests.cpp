@@ -559,9 +559,12 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "int3 cellCoord = centerCoord + int3(x, y, z)",
 	                        "if (samplesVisited >= maxSamples)",
 	                        "weightedRadiance += clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE) * weight",
+	                        "float influenceRadius = max(surfel.radius * 2.0, push.cellSize * 0.75)",
+	                        "length(position - surfel.position) / max(influenceRadius, 0.0001)",
 	                        "return weightSum > 0.0001 ? weightedRadiance / weightSum : float3(0.0)",
-	                        "return sampleWeightedSurfelRadiance(position, normal) * saturate(coverage)",
-	                        "outputImage[pixel] = float4(resolveSurfelRadiance(position, normal, coverage, closestSurfelIndex), 1.0)"}) &&
+	                        "float3 resolveSurfelRadiance(float3 position, float3 normal)",
+	                        "return sampleWeightedSurfelRadiance(position, normal)",
+	                        "outputImage[pixel] = float4(resolveSurfelRadiance(position, normal), 1.0)"}) &&
 	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
 	                       {"static const float SURFEL_PT_DIFFUSE_GI_SCALE = 0.35",
 	                        "float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0))",
