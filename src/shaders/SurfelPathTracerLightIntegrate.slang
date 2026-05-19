@@ -98,8 +98,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0));
     float3 diffuseGi = push.enableDiffuseGi != 0u ? albedo * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0);
     float directSun = max(dot(normal, sunDir), 0.0);
+    float sunVisibility = saturate(gBufferNormal[pixel].w);
     float3 skyAmbient = evalSkyColor(normal, sunDir) * 0.25 + evalGroundColor(sunDir) * 0.10;
-    float3 directLighting = SUN_RADIANCE * directSun + skyAmbient;
+    float3 directLighting = SUN_RADIANCE * directSun * sunVisibility + skyAmbient;
     float3 diffuseLighting = albedo * directLighting;
     uint2 reflectionPixel = halfResolutionPixel(pixel);
     float3 reflectionRaw = reflectionImages[reflectionPixel].rgb;

@@ -18,6 +18,31 @@ struct SurfelPathTracerGBufferPayload {
 
 [[vk::binding(0, 2)]] ConstantBuffer<UniformBuffer> ubo;
 
+SurfelPathTracerGBufferPayload makeEmptyGBufferPayload()
+{
+    SurfelPathTracerGBufferPayload payload;
+    payload.hitT = -1.0;
+    payload.modelId = 0u;
+    payload.materialIndex = 0u;
+    payload.worldNormal = float3(0.0, 0.0, 0.0);
+    payload.baseColor = float3(0.0, 0.0, 0.0);
+    return payload;
+}
+
+float traceSunVisibility(float3 position, float3 normal, float3 sunDir)
+{
+    RayDesc shadowRay;
+    float bias = max(SURFEL_PT_RAY_BIAS * 4.0, 0.005);
+    shadowRay.Origin = position + normal * bias;
+    shadowRay.Direction = normalize(sunDir);
+    shadowRay.TMin = bias;
+    shadowRay.TMax = 10000.0;
+
+    SurfelPathTracerGBufferPayload shadowPayload = makeEmptyGBufferPayload();
+    TraceRay(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+    return shadowPayload.hitT < 0.0 ? 1.0 : 0.0;
+}
+
 [shader("raygeneration")]
 void main() {
     uint2 launchID = DispatchRaysIndex().xy;
@@ -36,12 +61,7 @@ void main() {
     ray.TMin = SURFEL_PT_RAY_BIAS;
     ray.TMax = 10000.0;
 
-    SurfelPathTracerGBufferPayload payload;
-    payload.hitT = -1.0;
-    payload.modelId = 0u;
-    payload.materialIndex = 0u;
-    payload.worldNormal = float3(0.0, 0.0, 0.0);
-    payload.baseColor = float3(0.0, 0.0, 0.0);
+    SurfelPathTracerGBufferPayload payload = makeEmptyGBufferPayload();
 
     TraceRay(tlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
 
@@ -62,8 +82,11 @@ void main() {
     float2 motion = unjitteredUV - prevNDC;
 
     float3 normal = normalize(payload.worldNormal);
+    float3 sunDir = normalize(-ubo.lightDir.xyz);
+    float directSun = max(dot(normal, sunDir), 0.0);
+    float sunVisibility = directSun > 0.0 ? traceSunVisibility(hitPos, normal, sunDir) : 0.0;
     outputImage[launchID] = float4(payload.baseColor, 1.0);
-    gBufferNormal[launchID] = float4(normal, 0.0);
+    gBufferNormal[launchID] = float4(normal, sunVisibility);
     gBufferDepth[launchID] = payload.hitT;
     gBufferMotionMaterial[launchID] = float4(motion, float(payload.modelId), float(payload.materialIndex));
     gBufferAlbedo[launchID] = float4(payload.baseColor, 1.0);

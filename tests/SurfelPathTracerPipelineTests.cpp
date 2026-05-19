@@ -615,6 +615,21 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                       {"surfelSettings.cellSize,",
 	                        "surfelPathTracerResources.cellDimensionCapacity(),",
 	                        "surfelPathTracerResources.perCellSurfelLimitCapacity(),"});
+	bool primarySunVisibilityOk =
+	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBuffer.slang", filesOk),
+	                       {"SurfelPathTracerGBufferPayload makeEmptyGBufferPayload()",
+	                        "float traceSunVisibility(float3 position, float3 normal, float3 sunDir)",
+	                        "TraceRay(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH",
+	                        "float sunVisibility = directSun > 0.0 ? traceSunVisibility(hitPos, normal, sunDir) : 0.0",
+	                        "gBufferNormal[launchID] = float4(normal, sunVisibility)"}) &&
+	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
+	                       {"float sunVisibility = saturate(gBufferNormal[pixel].w)",
+	                        "SUN_RADIANCE * directSun * sunVisibility + skyAmbient"}) &&
+	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBufferMiss.slang", filesOk),
+	                       {"float3 baseColor",
+	                        "payload.baseColor = float3(0.0, 0.0, 0.0)"}) &&
+	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBufferAnyHit.slang", filesOk),
+	                       {"float3 baseColor"});
 	bool neighborGatherOk =
 	    containsAllNeedles(evaluateShader,
 	                       {"uint maxSurfelSamplesPerQuery;",
@@ -648,7 +663,8 @@ bool testSurfelPathTracerPipelineContractFiles()
 
 	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok &&
 	       rtPushConstantStagesOk && materialAlbedoOk && surfelDiffuseGiOk && surfelIncidentRadianceOk &&
-	       debugViewsOk && neighborGatherOk && cellOccupancyDebugOk && representativeCellOverflowOk;
+	       debugViewsOk && neighborGatherOk && cellOccupancyDebugOk && primarySunVisibilityOk &&
+	       representativeCellOverflowOk;
 }
 
 bool testSurfelPathTracerCellAddressBounds()
