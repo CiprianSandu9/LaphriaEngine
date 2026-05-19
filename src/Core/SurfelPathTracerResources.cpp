@@ -189,8 +189,9 @@ UISystem::SurfelPathTracerStats SurfelPathTracerResources::readStats() const
 	}
 
 	const auto *counters = static_cast<const SurfelPathTracerCounters *>(mappedCounters);
-	stats.aliveSurfels = counters->aliveSurfels;
-	stats.deadSurfels = counters->deadSurfels;
+	const uint32_t deadSurfels = std::min(counters->deadSurfels, settings_.maxSurfels);
+	stats.deadSurfels = deadSurfels;
+	stats.aliveSurfels = settings_.maxSurfels - deadSurfels;
 	stats.dirtySurfels = counters->dirtySurfels;
 	stats.requestedRays = counters->requestedRays;
 	stats.filledCells = counters->filledCells;

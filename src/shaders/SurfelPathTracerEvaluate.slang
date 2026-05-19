@@ -5,7 +5,6 @@
 [[vk::binding(2, 0)]] RWTexture2D<float> gBufferDepth;
 [[vk::binding(4, 0)]] RWByteAddressBuffer counters;
 [[vk::binding(5, 0)]] RWStructuredBuffer<SurfelPathTracerSurfel> surfelBuffer;
-[[vk::binding(6, 0)]] RWStructuredBuffer<uint> aliveBuffer;
 [[vk::binding(7, 0)]] RWStructuredBuffer<uint> deadBuffer;
 [[vk::binding(8, 0)]] RWStructuredBuffer<uint> dirtyBuffer;
 [[vk::binding(11, 0)]] RWStructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer;
@@ -178,12 +177,6 @@ void allocateSurfel(uint2 pixel, float3 position, float3 normal, float radius, f
     surfelBuffer[surfelIndex] = surfel;
 
     counters.InterlockedAdd(SURFEL_PT_COUNTER_SPAWNED_SURFELS_OFFSET, 1u);
-
-    uint aliveSlot = 0u;
-    counters.InterlockedAdd(SURFEL_PT_COUNTER_ALIVE_SURFELS_OFFSET, 1u, aliveSlot);
-    if (aliveSlot < maxSurfels) {
-        aliveBuffer[aliveSlot] = surfelIndex;
-    }
 
     uint dirtySlot = 0u;
     counters.InterlockedAdd(SURFEL_PT_COUNTER_DIRTY_SURFELS_OFFSET, 1u, dirtySlot);

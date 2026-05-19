@@ -400,6 +400,17 @@ bool testSurfelPathTracerPipelineContractFiles()
 		std::cerr << "SurfelPathTracer lifecycle contract must not decrement aliveSurfels in Update\n";
 		task6Ok = false;
 	}
+	if (containsNeedle(evaluateShader, "SURFEL_PT_COUNTER_ALIVE_SURFELS_OFFSET") ||
+	    containsNeedle(evaluateShader, "aliveBuffer[aliveSlot]"))
+	{
+		std::cerr << "SurfelPathTracer allocation contract must not accumulate aliveSurfels across frames\n";
+		task6Ok = false;
+	}
+	task6Ok = task6Ok &&
+	    containsAllNeedles(readTextFile(root / "src" / "Core" / "SurfelPathTracerResources.cpp", filesOk),
+	                       {"const uint32_t deadSurfels = std::min(counters->deadSurfels, settings_.maxSurfels);",
+	                        "stats.deadSurfels = deadSurfels;",
+	                        "stats.aliveSurfels = settings_.maxSurfels - deadSurfels;"});
 	bool task7Ok =
 	    containsAllNeedles(commonShader,
 	                       {"SURFEL_PT_SURFEL_FLAG_ACTIVE",
