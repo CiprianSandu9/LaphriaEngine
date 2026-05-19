@@ -550,8 +550,18 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "payload.baseColor",
 	                        "gBufferAlbedo[launchID] = float4(payload.baseColor, 1.0)",
 	                        "float3 albedo = max(gBufferAlbedo[pixel].rgb, float3(0.0))",
-	                        "float3 diffuseLighting = albedo * directLighting",
+	                        "float3 diffuseLighting = diffuseBsdf * directLighting",
 	                        "diffuseLighting + diffuseGi + reflection"});
+	const std::string lightIntegrateShader =
+	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk);
+	bool surfelPrimaryLightingUnitsOk =
+	    containsAllNeedles(lightIntegrateShader,
+	                       {"float3 diffuseBsdf = albedo / PI",
+	                        "float3 directLighting = SUN_RADIANCE * directSun * sunVisibility",
+	                        "float3 diffuseLighting = diffuseBsdf * directLighting",
+	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0)"}) &&
+	    !containsNeedle(lightIntegrateShader, "float3 diffuseLighting = albedo * directLighting") &&
+	    !containsNeedle(lightIntegrateShader, "albedo * rawSurfelRadiance");
 	bool surfelDiffuseGiOk =
 	    containsAllNeedles(evaluateShader,
 	                       {"float3 sampleWeightedSurfelRadiance(float3 position, float3 normal)",
@@ -567,10 +577,10 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "float3 resolveSurfelRadiance(float3 position, float3 normal)",
 	                        "return sampleWeightedSurfelRadiance(position, normal)",
 	                        "outputImage[pixel] = float4(resolveSurfelRadiance(position, normal), 1.0)"}) &&
-	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
+	    containsAllNeedles(lightIntegrateShader,
 	                       {"static const float SURFEL_PT_DIFFUSE_GI_SCALE = 0.35",
 	                        "float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0))",
-	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? albedo * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0)"});
+	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0)"});
 	bool surfelIncidentRadianceOk =
 	    containsAllNeedles(surfelClosestHitShader,
 	                       {"float3 incidentLighting = sky + SUN_RADIANCE * direct",
@@ -672,7 +682,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "if (replaceSlot == SURFEL_PT_INVALID_INDEX)"});
 
 	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok &&
-	       rtPushConstantStagesOk && materialAlbedoOk && surfelDiffuseGiOk && surfelIncidentRadianceOk &&
+	       rtPushConstantStagesOk && materialAlbedoOk && surfelPrimaryLightingUnitsOk && surfelDiffuseGiOk && surfelIncidentRadianceOk &&
 	       debugViewsOk && neighborGatherOk && cellOccupancyDebugOk && primarySunVisibilityOk &&
 	       representativeCellOverflowOk;
 }

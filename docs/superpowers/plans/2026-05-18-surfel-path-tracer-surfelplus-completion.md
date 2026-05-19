@@ -19,6 +19,8 @@ This plan corrects the post-review gaps without changing the original intent. Th
 - adaptive ray allocation based on variance, visibility, age, and sleep state;
 - 6x6 directional irradiance/depth atlas per surfel for guided sampling;
 - direct lighting visibility as a first-class contract; unshadowed sun is allowed only as a temporary debug fallback;
+- primary surface lighting must use the same material/color-space conventions as the existing rasterizer and `PathTracer` backend: color textures are decoded through `decodeColorSample`, direct diffuse is `albedo / PI`, direct sun is shadowed, and arbitrary ambient fill is not allowed in production final color;
+- surfel cache radiance is treated as incident lighting at the receiver unless a task explicitly changes that unit contract; receiver-side diffuse transport must apply the current surface BRDF, not add cached surfel radiance directly;
 - dynamic surfel placement and removal based on screen coverage;
 - temporal/spatial filtering to hide low sample counts;
 - debug/reference modes to measure bias and convergence, not to drive the main frame.
@@ -809,6 +811,8 @@ Change the signature to:
 void allocateSurfel(uint2 pixel, float3 position, float3 normal, float radius, float3 seedRadiance, uint materialKey)
 ```
 
+`seedRadiance` must be incident cached lighting in the same unit convention used by Task 9.6 and Task 12. Do not seed a surfel with tonemapped final color, GBuffer albedo, or already-reflected outgoing diffuse radiance. If no incident estimate is available when a surfel is spawned, pass `float3(0.0)` and let Task 12's ray integration/MSME update fill the cache.
+
 - [ ] **Step 3: Use placement/removal thresholds**
 
 In Generate mode:
@@ -817,7 +821,8 @@ In Generate mode:
 if (push.lockSurfels == 0u && push.enablePlacement != 0u && coverage < push.placementThreshold)
 {
     float radius = surfelRadius(depth, push.surfelTargetArea, push.surfelMinRadius, push.cellSize * 2.0);
-    allocateSurfel(pixel, position, normal, radius, resolveSurfelRadiance(pixel, depth, normal), 0u);
+    float3 seedIncidentRadiance = resolveSurfelIncidentRadiance(pixel, depth, normal);
+    allocateSurfel(pixel, position, normal, radius, seedIncidentRadiance, 0u);
 }
 
 if (push.lockSurfels == 0u && push.enableRemoval != 0u &&
@@ -1015,7 +1020,7 @@ bool primarySunVisibilityOk =
                         "gBufferNormal[launchID] = float4(normal, sunVisibility)"}) &&
     containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
                        {"float sunVisibility = saturate(gBufferNormal[pixel].w)",
-                        "SUN_RADIANCE * directSun * sunVisibility + skyAmbient"}) &&
+                        "SUN_RADIANCE * directSun * sunVisibility"}) &&
     containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBufferMiss.slang", filesOk),
                        {"float3 baseColor",
                         "payload.baseColor = float3(0.0, 0.0, 0.0)"}) &&
@@ -1099,10 +1104,10 @@ float sunVisibility = saturate(gBufferNormal[pixel].w);
 Then compose direct light as:
 
 ```hlsl
-float3 directLighting = SUN_RADIANCE * directSun * sunVisibility + skyAmbient;
+float3 directLighting = SUN_RADIANCE * directSun * sunVisibility;
 ```
 
-Sky ambient remains unshadowed in this first slice. The reusable path transport in Task 11 should introduce a shared shadowed direct-light helper for surfel rays, reflections, and the reference path.
+Do not add sky or ground ambient in final primary-surface lighting. The reusable path transport in Task 11 should introduce a shared shadowed direct-light helper for surfel rays, reflections, and the reference path.
 
 - [ ] **Step 6: Verify and commit**
 
@@ -1120,6 +1125,90 @@ Expected: diff check returns `0`, unit target builds, unit executable exits `0`,
 ```powershell
 git add docs/superpowers/plans/2026-05-18-surfel-path-tracer-surfelplus-completion.md src/shaders/SurfelPathTracerGBuffer.slang src/shaders/SurfelPathTracerGBufferMiss.slang src/shaders/SurfelPathTracerGBufferAnyHit.slang src/shaders/SurfelPathTracerLightIntegrate.slang tests/SurfelPathTracerPipelineTests.cpp
 git commit -m "fix: shadow surfel path tracer direct lighting"
+```
+
+### Task 9.6: Align Primary Lighting Units With The Existing Path Tracer
+
+**Files:**
+
+- Modify: `src/shaders/SurfelPathTracerLightIntegrate.slang`
+- Modify: `tests/SurfelPathTracerPipelineTests.cpp`
+- Modify: `docs/superpowers/plans/2026-05-18-surfel-path-tracer-surfelplus-completion.md`
+
+- [x] **Step 1: Add a failing contract test for old-path-tracer diffuse units**
+
+Add a contract block that compares the surfel PT primary composition against the existing `PathTracer` convention. The test must require `albedo / PI` and reject the previous unnormalized diffuse multiplication:
+
+```cpp
+const std::string surfelLightIntegrate =
+    readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk);
+
+bool surfelPrimaryLightingUnitsOk =
+    containsAllNeedles(surfelLightIntegrate,
+                       {"float3 diffuseBsdf = albedo / PI",
+                        "float3 directLighting = SUN_RADIANCE * directSun * sunVisibility",
+                        "float3 diffuseLighting = diffuseBsdf * directLighting",
+                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0)"}) &&
+    !containsNeedle(surfelLightIntegrate, "float3 diffuseLighting = albedo * directLighting") &&
+    !containsNeedle(surfelLightIntegrate, "albedo * rawSurfelRadiance");
+```
+
+Include `surfelPrimaryLightingUnitsOk` in the final contract return value. Keep this test focused on diffuse units only; material-aware `kD`, specular, metallic, and roughness are added later when Task 11 expands the reusable surface payload.
+
+This task is an intermediate correction for the current GBuffer-only final resolve. Task 11 supersedes the simplified direct diffuse path with the material-aware `evaluateShadowedDirectLighting(...)` helper once the surface payload carries `metallic`, `roughness`, and `f0`. Do not keep both direct-light paths active after Task 11; the final resolve should call the shared helper or match its BRDF exactly.
+
+- [x] **Step 2: Verify the test fails**
+
+Run:
+
+```powershell
+cmd /c "call ""C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"" && cmake --build cmake-build-debug --config Debug --target LaphriaEngineUnitTests"
+.\cmake-build-debug\LaphriaEngineUnitTests.exe
+```
+
+Expected: unit executable exits non-zero and reports the missing `diffuseBsdf` contract or the rejected old `albedo * directLighting` pattern.
+
+- [x] **Step 3: Normalize direct diffuse and surfel diffuse GI**
+
+In `SurfelPathTracerLightIntegrate.slang`, replace the current primary diffuse composition:
+
+```hlsl
+float3 diffuseGi = push.enableDiffuseGi != 0u ? albedo * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0);
+float directSun = max(dot(normal, sunDir), 0.0);
+float sunVisibility = saturate(gBufferNormal[pixel].w);
+float3 directLighting = SUN_RADIANCE * directSun * sunVisibility;
+float3 diffuseLighting = albedo * directLighting;
+```
+
+with:
+
+```hlsl
+float3 diffuseBsdf = albedo / PI;
+float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0);
+float directSun = max(dot(normal, sunDir), 0.0);
+float sunVisibility = saturate(gBufferNormal[pixel].w);
+float3 directLighting = SUN_RADIANCE * directSun * sunVisibility;
+float3 diffuseLighting = diffuseBsdf * directLighting;
+```
+
+This treats `rawSurfelRadiance` as incident diffuse lighting at the primary surface. If a later task changes surfels to store already-reflected outgoing radiance, this exact contract must be updated with that new unit definition in the same patch.
+
+- [x] **Step 4: Verify and commit**
+
+Run:
+
+```powershell
+git diff --check
+cmd /c "call ""C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"" && cmake --build cmake-build-debug --config Debug --target LaphriaEngineUnitTests"
+.\cmake-build-debug\LaphriaEngineUnitTests.exe
+cmd /c "call ""C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"" && cmake --build cmake-build-debug --config Debug --target LaphriaEditor"
+```
+
+Expected: diff check returns `0`, unit target builds, unit executable exits `0`, and editor target builds. Manual expected result: `Final Color` is materially darker than the previous washed-out version while `GBuffer Albedo` remains unchanged; `Diffuse GI` remains lower-energy than direct albedo debug rather than matching it.
+
+```powershell
+git add docs/superpowers/plans/2026-05-18-surfel-path-tracer-surfelplus-completion.md src/shaders/SurfelPathTracerLightIntegrate.slang tests/SurfelPathTracerPipelineTests.cpp
+git commit -m "fix: align surfel lighting units with path tracer"
 ```
 
 ### Task 10: Implement Guided Surfel Ray Sampling
@@ -1278,13 +1367,14 @@ struct SurfelPathTracerPayload {
     float3 hitPosition;
     float3 hitNormal;
     float3 baseColor;
+    float3 f0;
     float metallic;
     float roughness;
     uint hitKind;
 };
 ```
 
-Add `makeEmptySurfelPayload()` in each raygen shader that initializes `hitT = -1.0`, `hitKind = 0u`, zero radiance, a safe up normal, black base color, and roughness `1.0`. Closest-hit sets `hitKind = 1u`, fills surface data, and may fill local/direct/emissive radiance. Miss fills sky radiance and leaves `hitKind = 0u`. Any-hit must declare the same payload layout even if it only performs alpha rejection.
+Add `makeEmptySurfelPayload()` in each raygen shader that initializes `hitT = -1.0`, `hitKind = 0u`, zero radiance, a safe up normal, black base color, `f0 = float3(0.04)`, metallic `0.0`, and roughness `1.0`. Closest-hit sets `hitKind = 1u`, sets `hitT = RayTCurrent()`, fills decoded surface data (`baseColor`, `metallic`, `roughness`, and `f0`), and may write only emissive/local emitted radiance into `payload.radiance`. Closest-hit must not add direct sun, sky ambient, or surfel-cache lighting to `payload.radiance`; the ray loop applies those terms so the BSDF and visibility convention is shared. Miss fills environment radiance, leaves `hitKind = 0u`, and keeps `hitT = -1.0`. Any-hit must declare the same payload layout even if it only performs alpha rejection.
 
 - [ ] **Step 1.5: Extend pass bindings and push constants**
 
@@ -1312,21 +1402,61 @@ Reflection uses the same termination helper at one bounce, so extend `Reflection
 
 - [ ] **Step 1.6: Factor reusable shadowed direct lighting**
 
-Move direct sun evaluation behind a shared helper that can be copied locally or included once it is resource-independent:
+Move direct sun evaluation behind a shared helper that can be copied locally or included once it is resource-independent. This helper returns reflected direct lighting, not incident light, so every caller uses the same material and shadow convention as the existing `PathTracer` backend:
 
 ```hlsl
-float3 evaluateShadowedDirectLighting(float3 position,
+float traceSunVisibility(float3 position, float3 normal, float3 sunDir)
+{
+    RayDesc shadowRay;
+    float bias = max(SURFEL_PT_RAY_BIAS * 4.0, 0.005);
+    shadowRay.Origin = position + normal * bias;
+    shadowRay.Direction = normalize(sunDir);
+    shadowRay.TMin = bias;
+    shadowRay.TMax = 10000.0;
+
+    SurfelPathTracerPayload shadowPayload = makeEmptySurfelPayload();
+    TraceRay(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+    return shadowPayload.hitT < 0.0 ? 1.0 : 0.0;
+}
+
+float3 evaluateShadowedDirectLighting(float3 viewDir,
                                       float3 normal,
+                                      float3 baseColor,
+                                      float metallic,
+                                      float roughness,
+                                      float3 f0,
                                       float3 sunDir,
                                       float sunVisibility)
 {
     float directSun = max(dot(normal, sunDir), 0.0);
-    float3 skyAmbient = evalSkyColor(normal, sunDir) * 0.25 + evalGroundColor(sunDir) * 0.10;
-    return SUN_RADIANCE * directSun * sunVisibility + skyAmbient;
+    if (directSun <= 0.0 || sunVisibility <= 0.0)
+    {
+        return float3(0.0);
+    }
+
+    float3 V = normalize(viewDir);
+    float3 L = normalize(sunDir);
+    float3 H = normalize(L + V);
+    float nDotV = max(dot(normal, V), 0.0001);
+    float vDotH = max(dot(V, H), 0.0001);
+    float3 F = fresnelSchlick(vDotH, f0);
+    float D = distributionGGX(normal, H, roughness);
+    float G = geometrySmith(normal, V, L, roughness);
+    float3 kD = (float3(1.0) - F) * (1.0 - metallic);
+    float3 diffuse = kD * baseColor / PI;
+    float3 specular = (D * F * G) / max(4.0 * nDotV * directSun, 0.0001);
+    return (diffuse + specular) * directSun * SUN_RADIANCE * sunVisibility;
 }
 ```
 
-For Task 11 raygen/reflection/reference paths, compute `sunVisibility` with a shadow ray from the current path hit before applying direct sun. Do not reintroduce an unshadowed `SUN_RADIANCE * directSun` production path.
+For Task 11 raygen/reflection/reference paths, compute `sunVisibility` with a shadow ray from the current path hit before applying direct sun. Closest-hit must compute `f0` with the existing path tracer convention:
+
+```hlsl
+payload.hitT = RayTCurrent();
+payload.f0 = lerp(float3(0.04), payload.baseColor, payload.metallic);
+```
+
+Do not reintroduce an unshadowed `SUN_RADIANCE * directSun` production path, and do not add sky/ground ambient at surface hits. Environment radiance belongs only on miss paths.
 
 - [ ] **Step 2: Add surfel termination helper**
 
@@ -1379,7 +1509,7 @@ float3 terminatePathWithSurfels(float3 position,
 }
 ```
 
-Only pure math helpers used by `terminatePathWithSurfels`, such as distance/normal weighting and cell coordinate math, belong in `SurfelPathTracerCommon.slang`.
+`terminatePathWithSurfels(...)` returns incident cached lighting from neighboring surfels. It must not multiply by the receiver material internally, because that would make the helper ambiguous when reused by reflection/reference paths. Only pure math helpers used by `terminatePathWithSurfels`, such as distance/normal weighting and cell coordinate math, belong in `SurfelPathTracerCommon.slang`.
 
 - [ ] **Step 3: Add `traceSurfelPath` loop in Raygen**
 
@@ -1402,19 +1532,32 @@ float3 traceSurfelPath(RayDesc initialRay, uint maxDepth, uint surfelIndex, uint
         }
 
         radiance += throughput * payload.radiance;
+        float3 viewDir = normalize(-ray.Direction);
+        float3 sunDir = normalize(-ubo.lightDir.xyz);
+        float sunVisibility = traceSunVisibility(payload.hitPosition, payload.hitNormal, sunDir);
+        radiance += throughput * evaluateShadowedDirectLighting(viewDir,
+                                                                payload.hitNormal,
+                                                                payload.baseColor,
+                                                                payload.metallic,
+                                                                payload.roughness,
+                                                                payload.f0,
+                                                                sunDir,
+                                                                sunVisibility);
 
         if (push.enableSurfelTermination != 0u && depth + 1u >= maxDepth)
         {
-            radiance += throughput * terminatePathWithSurfels(payload.hitPosition,
-                                                              payload.hitNormal,
-                                                              push.maxSurfelSamplesPerQuery,
-                                                              push.maxSurfels,
-                                                              push.cellSize,
-                                                              push.cellDimension,
-                                                              ubo.cameraPos.xyz,
-                                                              surfelBuffer,
-                                                              cellInfoBuffer,
-                                                              cellToSurfelBuffer);
+            float3 cachedIncident = terminatePathWithSurfels(payload.hitPosition,
+                                                             payload.hitNormal,
+                                                             push.maxSurfelSamplesPerQuery,
+                                                             push.maxSurfels,
+                                                             push.cellSize,
+                                                             push.cellDimension,
+                                                             ubo.cameraPos.xyz,
+                                                             surfelBuffer,
+                                                             cellInfoBuffer,
+                                                             cellToSurfelBuffer);
+            float3 diffuseBrdf = (1.0 - payload.metallic) * payload.baseColor / PI;
+            radiance += throughput * diffuseBrdf * cachedIncident;
             counters.InterlockedAdd(SURFEL_PT_COUNTER_SURFEL_TERMINATED_PATHS_OFFSET, 1u);
             break;
         }
@@ -1426,7 +1569,7 @@ float3 traceSurfelPath(RayDesc initialRay, uint maxDepth, uint surfelIndex, uint
         {
             break;
         }
-        throughput *= saturate(payload.baseColor);
+        throughput *= saturate((1.0 - payload.metallic) * payload.baseColor);
         ray.Origin = payload.hitPosition + payload.hitNormal * SURFEL_PT_RAY_BIAS;
         ray.Direction = normalize(nextDir);
     }
@@ -1531,6 +1674,8 @@ if (luminance(shared) > 1e-5)
     sampleRadiance = lerp(sampleRadiance, shared, 0.25);
 }
 ```
+
+`sampleRadiance`, `shared`, and `surfel.radiance` remain incident lighting/cache-radiance values in this task. Do not multiply them by the surfel's own albedo during integration; receiver-side BRDF application belongs in Task 9.6 final composition and Task 11 path termination.
 
 - [ ] **Step 4: Update atlas from the packed local direction**
 
@@ -1864,7 +2009,7 @@ git commit -m "feat: add surfel path tracer validation views"
 - Modify: `CMakeLists.txt`
 - Modify: `tests/SurfelPathTracerPipelineTests.cpp`
 
-Reference mode is a validation path only. It must use the same material decode, sky, and shadowed direct-light conventions as the production path so its difference view measures surfel-cache bias rather than inconsistent lighting equations.
+Reference mode is a validation path only. It must use the same material decode, environment-miss, BRDF, and shadowed direct-light conventions as the production path so its difference view measures surfel-cache bias rather than inconsistent lighting equations.
 
 - [ ] **Step 1: Add reference output image**
 
@@ -1906,6 +2051,7 @@ struct SurfelPathTracerPayload {
     float3 hitPosition;
     float3 hitNormal;
     float3 baseColor;
+    float3 f0;
     float metallic;
     float roughness;
     uint hitKind;
@@ -1936,6 +2082,7 @@ SurfelPathTracerPayload makeEmptySurfelPayload()
     payload.hitPosition = float3(0.0);
     payload.hitNormal = float3(0.0, 1.0, 0.0);
     payload.baseColor = float3(0.0);
+    payload.f0 = float3(0.04);
     payload.metallic = 0.0;
     payload.roughness = 1.0;
     payload.hitKind = 0u;
@@ -1957,6 +2104,18 @@ float3 traceReferencePath(RayDesc initialRay, uint maxDepth, uint seed)
             break;
         }
 
+        float3 viewDir = normalize(-ray.Direction);
+        float3 sunDir = normalize(-ubo.lightDir.xyz);
+        float sunVisibility = traceSunVisibility(payload.hitPosition, payload.hitNormal, sunDir);
+        radiance += throughput * evaluateShadowedDirectLighting(viewDir,
+                                                                payload.hitNormal,
+                                                                payload.baseColor,
+                                                                payload.metallic,
+                                                                payload.roughness,
+                                                                payload.f0,
+                                                                sunDir,
+                                                                sunVisibility);
+
         float2 xi = float2(randomFloat(seed), randomFloat(seed));
         float3 nextDir = cosineSampleHemisphere(xi, payload.hitNormal);
         float cosTheta = max(dot(payload.hitNormal, nextDir), 0.0);
@@ -1964,7 +2123,7 @@ float3 traceReferencePath(RayDesc initialRay, uint maxDepth, uint seed)
         {
             break;
         }
-        throughput *= saturate(payload.baseColor);
+        throughput *= saturate((1.0 - payload.metallic) * payload.baseColor);
         ray.Origin = payload.hitPosition + payload.hitNormal * SURFEL_PT_RAY_BIAS;
         ray.Direction = normalize(nextDir);
     }
@@ -1996,6 +2155,8 @@ void main()
 }
 ```
 
+The reference shader must provide the same local `traceSunVisibility(...)` and `evaluateShadowedDirectLighting(...)` helpers from Task 11. Do not add sky or ground ambient at surface hits; environment radiance should enter only through `SurfelPathTracerMiss.slang`.
+
 This is a low-sample validation view, not the production renderer. It must be gated by `enableReferenceValidation`, record no work when disabled except clearing/stabilizing the reference image, and expose contract strings that prevent the reference path from being mistaken for the production Surfel PT result:
 
 ```cpp
@@ -2004,6 +2165,8 @@ This is a low-sample validation view, not the production renderer. It must be ga
 "referenceSbt",
 "[shader(\"raygeneration\")]",
 "TraceRay(tlas",
+"evaluateShadowedDirectLighting",
+"traceSunVisibility",
 "referenceImage[pixel]",
 "enableReferenceValidation",
 ```
