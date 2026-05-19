@@ -135,7 +135,9 @@ struct SurfelLightIntegratePushConstants
 	uint32_t enableReflections = 1;
 	uint32_t useBilateralReflection = 0;
 	uint32_t debugView = 0;
-	uint32_t pad0 = 0;
+	float cellSize = 1.0f;
+	uint32_t cellDimension = 1;
+	uint32_t perCellSurfelLimit = 1;
 	uint32_t pad1 = 0;
 };
 
@@ -526,6 +528,9 @@ void SurfelPathTracerPasses::recordLightIntegratePass(const vk::raii::CommandBuf
                                                       bool enableDiffuseGi,
                                                       bool enableReflections,
                                                       bool useBilateralReflection,
+                                                      float cellSize,
+                                                      uint32_t cellDimension,
+                                                      uint32_t perCellSurfelLimit,
                                                       uint32_t debugView,
                                                       vk::Extent2D extent) const
 {
@@ -543,7 +548,10 @@ void SurfelPathTracerPasses::recordLightIntegratePass(const vk::raii::CommandBuf
 	    .enableDiffuseGi = enableDiffuseGi ? 1u : 0u,
 	    .enableReflections = enableReflections ? 1u : 0u,
 	    .useBilateralReflection = useBilateralReflection ? 1u : 0u,
-	    .debugView = debugView};
+	    .debugView = debugView,
+	    .cellSize = std::max(cellSize, 0.0001f),
+	    .cellDimension = std::max(cellDimension, 1u),
+	    .perCellSurfelLimit = std::max(perCellSurfelLimit, 1u)};
 	commandBuffer.pushConstants<SurfelLightIntegratePushConstants>(*pipelines.computePipelineLayout,
 	                                                               vk::ShaderStageFlagBits::eCompute,
 	                                                               0,

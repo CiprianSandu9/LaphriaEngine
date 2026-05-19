@@ -2326,6 +2326,9 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                                surfelSettings.enableDiffuseGi,
 	                                                surfelSettings.enableReflections,
 	                                                useBilateralReflection,
+	                                                surfelSettings.cellSize,
+	                                                surfelPathTracerResources.cellDimensionCapacity(),
+	                                                surfelPathTracerResources.perCellSurfelLimitCapacity(),
 	                                                static_cast<uint32_t>(surfelSettings.debugView),
 	                                                swapchain.extent);
 	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);

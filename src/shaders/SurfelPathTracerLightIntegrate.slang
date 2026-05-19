@@ -7,6 +7,8 @@
 [[vk::binding(17, 0)]] RWTexture2D<float4> filteredReflectionImages;
 [[vk::binding(18, 0)]] RWTexture2D<float4> lightingImages;
 [[vk::binding(20, 0)]] RWTexture2D<float4> gBufferAlbedo;
+[[vk::binding(11, 0)]] RWStructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer;
+[[vk::binding(12, 0)]] RWByteAddressBuffer cellCounterBuffer;
 
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 
@@ -17,7 +19,9 @@ struct LightIntegratePushConstants {
     uint enableReflections;
     uint useBilateralReflection;
     uint debugView;
-    uint pad0;
+    float cellSize;
+    uint cellDimension;
+    uint perCellSurfelLimit;
     uint pad1;
 };
 
@@ -26,6 +30,7 @@ struct LightIntegratePushConstants {
 static const uint SURFEL_DEBUG_FINAL_COLOR = 0u;
 static const uint SURFEL_DEBUG_GBUFFER_NORMAL = 1u;
 static const uint SURFEL_DEBUG_GBUFFER_DEPTH = 2u;
+static const uint SURFEL_DEBUG_CELL_OCCUPANCY = 7u;
 static const uint SURFEL_DEBUG_SURFEL_RADIANCE = 5u;
 static const uint SURFEL_DEBUG_REFLECTION_RAW = 8u;
 static const uint SURFEL_DEBUG_REFLECTION_FILTERED = 9u;
@@ -40,10 +45,34 @@ float3 primaryRayDirection(uint2 pixel) {
     return normalize(mul(ubo.viewInverse, float4(normalize(target.xyz / target.w), 0.0)).xyz);
 }
 
+float3 reconstructWorldPosition(uint2 pixel, float depth) {
+    return ubo.cameraPos.xyz + primaryRayDirection(pixel) * depth;
+}
+
 uint2 halfResolutionPixel(uint2 pixel) {
     uint2 halfPixel = min(pixel / 2u, uint2(max((push.width + 1u) / 2u, 1u) - 1u,
                                            max((push.height + 1u) / 2u, 1u) - 1u));
     return halfPixel;
+}
+
+float3 cellOccupancyDebugColor(float3 worldPosition) {
+    uint cellIndex = cameraRelativeCellIndexForPosition(worldPosition,
+                                                        ubo.cameraPos.xyz,
+                                                        push.cellSize,
+                                                        push.cellDimension);
+    if (cellIndex == SURFEL_PT_INVALID_INDEX) {
+        return float3(0.15, 0.0, 0.3);
+    }
+
+    SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
+    uint storedCount = cellInfo.surfelCount;
+    uint rawCount = cellCounterBuffer.Load((1u + cellIndex) * 4u);
+    rawCount = max(rawCount, storedCount);
+    uint perCellLimit = max(push.perCellSurfelLimit, 1u);
+    float occupancy = saturate(float(storedCount) / float(perCellLimit));
+    float overflow = saturate(float(rawCount - storedCount) / float(perCellLimit));
+    float3 occupancyColor = float3(overflow, occupancy, 1.0 - occupancy);
+    return occupancyColor;
 }
 
 [shader("compute")]
@@ -96,6 +125,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
         lightingImages[pixel] = float4(reflectionFiltered, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_DIFFUSE_GI) {
         lightingImages[pixel] = float4(diffuseGi, 1.0);
+    } else if (push.debugView == SURFEL_DEBUG_CELL_OCCUPANCY) {
+        float3 worldPosition = reconstructWorldPosition(pixel, depth);
+        float3 occupancyColor = cellOccupancyDebugColor(worldPosition);
+        lightingImages[pixel] = float4(occupancyColor, 1.0);
     } else {
         lightingImages[pixel] = float4(lighting, 1.0);
     }

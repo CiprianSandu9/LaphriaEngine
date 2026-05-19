@@ -568,6 +568,27 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "lightingImages[pixel] = float4(albedo, 1.0)",
 	                        "lightingImages[pixel] = float4(rawSurfelRadiance, 1.0)",
 	                        "lightingImages[pixel] = float4(diffuseGi, 1.0)"});
+	bool cellOccupancyDebugOk =
+	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
+	                       {"static const uint SURFEL_DEBUG_CELL_OCCUPANCY = 7u",
+	                        "[[vk::binding(11, 0)]] RWStructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer",
+	                        "[[vk::binding(12, 0)]] RWByteAddressBuffer cellCounterBuffer",
+	                        "uint cellIndex = cameraRelativeCellIndexForPosition(worldPosition",
+	                        "uint rawCount = cellCounterBuffer.Load((1u + cellIndex) * 4u)",
+	                        "float overflow = saturate(float(rawCount - storedCount) / float(perCellLimit))",
+	                        "float3 occupancyColor = float3(overflow, occupancy, 1.0 - occupancy)",
+	                        "lightingImages[pixel] = float4(occupancyColor, 1.0)"}) &&
+	    containsAllNeedles(passesCpp,
+	                       {"float cellSize = 1.0f;",
+	                        "uint32_t cellDimension = 1;",
+	                        "uint32_t perCellSurfelLimit = 1;",
+	                        ".cellSize = std::max(cellSize, 0.0001f)",
+	                        ".cellDimension = std::max(cellDimension, 1u)",
+	                        ".perCellSurfelLimit = std::max(perCellSurfelLimit, 1u)"}) &&
+	    containsAllNeedles(engineCore,
+	                       {"surfelSettings.cellSize,",
+	                        "surfelPathTracerResources.cellDimensionCapacity(),",
+	                        "surfelPathTracerResources.perCellSurfelLimitCapacity(),"});
 	bool neighborGatherOk =
 	    containsAllNeedles(evaluateShader,
 	                       {"uint maxSurfelSamplesPerQuery;",
@@ -593,7 +614,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 
 	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok &&
 	       rtPushConstantStagesOk && materialAlbedoOk && surfelDiffuseGiOk && debugViewsOk && neighborGatherOk &&
-	       representativeCellOverflowOk;
+	       cellOccupancyDebugOk && representativeCellOverflowOk;
 }
 
 bool testSurfelPathTracerCellAddressBounds()

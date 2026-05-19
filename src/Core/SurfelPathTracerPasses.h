@@ -127,6 +127,9 @@ class SurfelPathTracerPasses
 	                              bool enableDiffuseGi,
 	                              bool enableReflections,
 	                              bool useBilateralReflection,
+	                              float cellSize,
+	                              uint32_t cellDimension,
+	                              uint32_t perCellSurfelLimit,
 	                              uint32_t debugView,
 	                              vk::Extent2D extent) const;
 
