@@ -12,7 +12,6 @@ struct BuiltInTriangleIntersectionAttributes {
 [[vk::binding(5, 0)]] ByteAddressBuffer globalVertices[];
 [[vk::binding(6, 0)]] ByteAddressBuffer globalIndices[];
 [[vk::binding(7, 0)]] StructuredBuffer<MaterialData> globalMaterials[];
-[[vk::binding(8, 0)]] Sampler2D globalTextures[];
 
 [[vk::binding(0, 2)]] ConstantBuffer<UniformBuffer> ubo;
 
@@ -59,24 +58,16 @@ void main(inout SurfelPathTracerPayload payload, in BuiltInTriangleIntersectionA
                          attribs.barycentrics.x,
                          attribs.barycentrics.y);
     float3 objectNormal = v0.normal * bary.x + v1.normal * bary.y + v2.normal * bary.z;
-    float2 uv = v0.texCoord * bary.x + v1.texCoord * bary.y + v2.texCoord * bary.z;
-    float3 vertexColor = v0.color * bary.x + v1.color * bary.y + v2.color * bary.z;
     float3 worldNormal = normalize(mul(objectNormal, (float3x3)WorldToObject3x4()));
     if (dot(worldNormal, WorldRayDirection()) > 0.0) {
         worldNormal = -worldNormal;
     }
 
-    float4 baseColorSample = mat.baseColorFactor;
-    if (mat.baseColorIndex >= 0) {
-        float4 sampled = globalTextures[NonUniformResourceIndex(mat.baseColorIndex + mat.globalTextureOffset)].SampleLevel(uv, 0.0);
-        baseColorSample.rgb *= decodeColorSample(sampled.rgb, ubo.textureColorSpaceModel);
-        baseColorSample.a *= sampled.a;
-    }
-    float3 baseColor = max(baseColorSample.rgb * vertexColor, float3(0.0, 0.0, 0.0));
     float3 sunDir = normalize(-ubo.lightDir.xyz);
     float direct = max(dot(worldNormal, sunDir), 0.0);
     float3 sky = evalSkyColor(worldNormal, sunDir) * 0.35 + evalGroundColor(sunDir) * 0.15;
+    float3 incidentLighting = sky + SUN_RADIANCE * direct;
 
-    payload.radiance = clampLuminance(baseColor * (sky + SUN_RADIANCE * direct), SURFEL_PT_MAX_RADIANCE_LUMINANCE);
+    payload.radiance = clampLuminance(incidentLighting, SURFEL_PT_MAX_RADIANCE_LUMINANCE);
     payload.hitT = RayTCurrent();
 }

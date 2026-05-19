@@ -367,6 +367,8 @@ bool testSurfelPathTracerPipelineContractFiles()
 	const std::string commonShader =
 	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerCommon.slang", filesOk);
 	const std::string raygenShader = readTextFile(root / "src" / "shaders" / "SurfelPathTracerRaygen.slang", filesOk);
+	const std::string surfelClosestHitShader =
+	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerClosestHit.slang", filesOk);
 	const std::string integrateShader =
 	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerIntegrate.slang", filesOk);
 	const std::string reflectionShader =
@@ -569,6 +571,16 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                       {"static const float SURFEL_PT_DIFFUSE_GI_SCALE = 0.35",
 	                        "float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0))",
 	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? albedo * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0)"});
+	bool surfelIncidentRadianceOk =
+	    containsAllNeedles(surfelClosestHitShader,
+	                       {"float3 incidentLighting = sky + SUN_RADIANCE * direct",
+	                        "payload.radiance = clampLuminance(incidentLighting, SURFEL_PT_MAX_RADIANCE_LUMINANCE)"});
+	if (containsNeedle(surfelClosestHitShader, "baseColor * (sky + SUN_RADIANCE * direct)") ||
+	    containsNeedle(surfelClosestHitShader, "baseColor * incidentLighting"))
+	{
+		std::cerr << "SurfelPathTracer surfel cache must store incident lighting, not hit-surface outgoing albedo\n";
+		surfelIncidentRadianceOk = false;
+	}
 	bool debugViewsOk =
 	    containsAllNeedles(combined,
 	                       {"GBufferAlbedo = 13",
@@ -635,8 +647,8 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "if (replaceSlot == SURFEL_PT_INVALID_INDEX)"});
 
 	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok &&
-	       rtPushConstantStagesOk && materialAlbedoOk && surfelDiffuseGiOk && debugViewsOk && neighborGatherOk &&
-	       cellOccupancyDebugOk && representativeCellOverflowOk;
+	       rtPushConstantStagesOk && materialAlbedoOk && surfelDiffuseGiOk && surfelIncidentRadianceOk &&
+	       debugViewsOk && neighborGatherOk && cellOccupancyDebugOk && representativeCellOverflowOk;
 }
 
 bool testSurfelPathTracerCellAddressBounds()
