@@ -628,12 +628,18 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "gBufferNormal[launchID] = float4(normal, sunVisibility)"}) &&
 	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
 	                       {"float sunVisibility = saturate(gBufferNormal[pixel].w)",
-	                        "SUN_RADIANCE * directSun * sunVisibility + skyAmbient"}) &&
+	                        "float3 directLighting = SUN_RADIANCE * directSun * sunVisibility;"}) &&
 	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBufferMiss.slang", filesOk),
 	                       {"float3 baseColor",
 	                        "payload.baseColor = float3(0.0, 0.0, 0.0)"}) &&
 	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBufferAnyHit.slang", filesOk),
 	                       {"float3 baseColor"});
+	if (containsNeedle(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
+	                   "skyAmbient"))
+	{
+		std::cerr << "SurfelPathTracer final color must not use fake skyAmbient fill lighting\n";
+		primarySunVisibilityOk = false;
+	}
 	bool neighborGatherOk =
 	    containsAllNeedles(evaluateShader,
 	                       {"uint maxSurfelSamplesPerQuery;",
