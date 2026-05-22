@@ -1347,49 +1347,6 @@ void UISystem::drawPathTracerDebugLab() {
                     pathTracerPerfStats.firstHitProbeSunVisibleContributionAverage);
     }
 
-    if (ImGui::CollapsingHeader("Scenario: Indirect Bounce Box")) {
-        if (ImGui::Button("Load Indirect Bounce Test Scene")) {
-            pathTracerAnalysisSettings.loadIndirectBounceTestScene = true;
-            pathTracerAnalysisSettings.enableAnalysisMode = true;
-            pathTracerSettings.enableEnvironmentNEE = true;
-            pathTracerSettings.blackEnvironment = true;
-            pathTracerSettings.applyFirstHitProbesToFinal = true;
-            pathTracerSettings.environmentNeeSamplingMode = EnvironmentNeeSamplingMode::SkyBiased;
-            pathTracerSettings.firstHitProbeSamplingMode = FirstHitProbeSamplingMode::CandidateRis;
-            pathTracerSettings.firstHitDiffuseSamples = 8;
-            pathTracerSettings.firstHitCandidateCount = 4;
-            pathTracerAnalysisSettings.debugLightPreset = PathTracerDebugLightPreset::HardBounce;
-            pathTracerAnalysisSettings.applyDebugLightPreset = true;
-            pathTracerAnalysisSettings.debugAov = PathTracerDebugAov::PathRawFinalColor;
-        }
-
-        const char *lightPresets[] = {"Hard Bounce", "Medium Bounce", "Easy Bounce"};
-        int lightPresetIdx = static_cast<int>(pathTracerAnalysisSettings.debugLightPreset);
-        if (ImGui::Combo("Light Preset", &lightPresetIdx, lightPresets, IM_ARRAYSIZE(lightPresets))) {
-            pathTracerAnalysisSettings.debugLightPreset = static_cast<PathTracerDebugLightPreset>(lightPresetIdx);
-        }
-        if (ImGui::Button("Apply Light Preset")) {
-            pathTracerAnalysisSettings.applyDebugLightPreset = true;
-            pathTracerAnalysisSettings.enableAnalysisMode = true;
-        }
-
-        ImGui::Text("Target Wall Avg Luma: %.5f (%u px)",
-                    pathTracerPerfStats.targetWallLuminanceAverage,
-                    pathTracerPerfStats.targetWallSampleCount);
-        ImGui::Text("Target Wall Base Luma: %.5f",
-                    pathTracerPerfStats.targetWallBaseLuminanceAverage);
-        ImGui::Text("Target Wall Probe Added Luma: %.5f",
-                    pathTracerPerfStats.targetWallFirstHitProbeContributionAverage);
-
-        if (ImGui::CollapsingHeader("Indirect Box Capture Checklist")) {
-            ImGui::TextWrapped("Record these values after the image stabilizes:");
-            ImGui::Text("Target Wall Avg Luma");
-            ImGui::Text("First-Hit Probe Sun Visible");
-            ImGui::Text("First-Hit Probe Sun-Visible Avg Luma");
-            ImGui::Text("First-Hit Probe Avg Luma");
-        }
-    }
-
     if (ImGui::CollapsingHeader("Scenario: Sponza GI Validation")) {
         const char *sponzaValidationViews[] = {
             "Dark Courtyard",
@@ -1502,12 +1459,6 @@ void UISystem::drawPathTracerStats() {
     ImGui::Text("Sky Hit Ratio: %.2f%% | Firefly Clamp Ratio: %.2f%%",
                 pathTracerPerfStats.skyHitRatio * 100.0f,
                 pathTracerPerfStats.fireflyClampRatio * 100.0f);
-    ImGui::Text("Target Wall Avg Luma: %.5f (%u px)",
-                pathTracerPerfStats.targetWallLuminanceAverage,
-                pathTracerPerfStats.targetWallSampleCount);
-    ImGui::Text("Target Wall Base Luma: %.5f | Probe Added: %.5f",
-                pathTracerPerfStats.targetWallBaseLuminanceAverage,
-                pathTracerPerfStats.targetWallFirstHitProbeContributionAverage);
     ImGui::Text("Camera Motion Factor: %.3f", pathTracerPerfStats.cameraMotionFactor);
 }
 

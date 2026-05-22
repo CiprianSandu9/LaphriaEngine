@@ -2104,13 +2104,11 @@ bool testPathTracerDebugAovContract()
 	    "Path Tracer Diagnostics",
 	    "Core Diagnostics",
 	    "Core Metrics",
-	    "Scenario: Indirect Bounce Box",
 	    "Scenario: Sponza GI Validation",
 	    "Sponza Sweep Warmup",
 	    "Sponza Sweep Samples",
 	    "Benchmark Automation",
 	    "Frame Stats",
-	    "Target Wall Avg Luma",
 	    "First-Hit Probe Rays",
 	    "First-Hit Probe Surface Hits",
 	    "First-Hit Probe Sun Visible",
@@ -2144,16 +2142,6 @@ bool testPathTracerDebugAovContract()
 	    "geometry",
 	    "visibility",
 	    "light",
-	    "Indirect Box Capture Checklist",
-	    "Record these values after the image stabilizes",
-	    "Target Wall Base Luma",
-	    "Target Wall Probe Added Luma",
-	    "Light Preset",
-	    "Hard Bounce",
-	    "Medium Bounce",
-	    "Easy Bounce",
-	    "Apply Light Preset",
-	    "Load Indirect Bounce Test Scene",
 	    "Load Sponza GI Validation Preset",
 	    "Sponza Validation View",
 	    "Apply Sponza Validation View",
@@ -2251,7 +2239,6 @@ bool testPathTracerDebugAovContract()
 	    "DEBUG_AOV_PATH_RESERVOIR_GI_SELECTED_WEIGHT",
 	    "DEBUG_AOV_PATH_RESERVOIR_GI_LOCAL_NO_LIGHT",
 	    "DEBUG_AOV_PATH_RESERVOIR_GI_SELECTED_SOURCE",
-	    "recordTargetWallLuminance",
 	    "recordFirstHitProbeStats",
 	    "FIRST_HIT_PROBE_SAMPLING_SUN_BOUNCE_GUIDED",
 	    "FIRST_HIT_PROBE_SAMPLING_CANDIDATE_SUN_BOUNCE",
@@ -2404,9 +2391,6 @@ bool testPathTracerDebugAovContract()
 	    "combineSpatialReservoirGi",
 	    "isSaneReservoirGiVector",
 	    "sanitizeReservoirGiContribution",
-	    "targetWallFirstHitProbeContributionSum",
-	    "targetWallBaseLuminanceSum",
-	    "recordTargetWallLuminance(radiance",
 	    "candidateCount",
 	    "reservoirGiCandidates",
 	    "reservoirGiAccepted",
@@ -2512,9 +2496,6 @@ bool testPathTracerDebugAovContract()
 	const char *requiredEngineSymbols[] = {
 	    "blackEnvironment",
 	    "applyFirstHitProbesToFinal",
-	    "targetWallLuminanceAverage",
-	    "targetWallBaseLuminanceAverage",
-	    "targetWallFirstHitProbeContributionAverage",
 	    "reservoirGiCandidates",
 	    "reservoirGiAccepted",
 	    "reservoirProposalMode=%d",
@@ -2573,7 +2554,6 @@ bool testPathTracerDebugAovContract()
 	    "settings.reservoirGiDetailedDiagnostics = false",
 	    "settings.reservoirGiTemporalBudgetDivisor",
 	    "settings.reservoirGiSpatialBudgetDivisor",
-	    "targetWallSampleCount",
 	    "firstHitProbeCount",
 	    "firstHitProbeSurfaceHitCount",
 	    "firstHitProbeSunVisibleCount",
@@ -2691,13 +2671,9 @@ bool testPathTracerDebugAovContract()
 	    "packPathTracerMaterialSettings(ui.pathTracerSettings)",
 	    "packPathTracerFlags(ui.pathTracerSettings)",
 	    "settings.blackEnvironment",
-	    "analysis.applyDebugLightPreset",
 	    "updatePathTracerExperimentSweep",
 	    "logPathTracerExperimentRow",
 	    "clearPathTracerExperimentState",
-	    "targetWallBaseLuminanceAverage",
-	    "targetWallFirstHitProbeContributionAverage",
-	    "targetWallLuminanceAverage",
 	    "vulkan.logicalDevice.waitIdle()",
 	    "debugBreakIfDebuggerAttached",
 	    "waitForFenceOrThrow",
@@ -2705,8 +2681,6 @@ bool testPathTracerDebugAovContract()
 	    "Vulkan device lost while waiting for",
 	    "pathTracerStorageBufferBarrier",
 	    "vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite",
-	    "PathTracerDebugLightPreset",
-	    "applyPathTracerDebugLightPreset",
 	    "pathTracerSettings.enableEnvironmentNEE",
 	    "pathTracerSettings.blackEnvironment",
 	    "pathTracerSettings.applyFirstHitProbesToFinal",
@@ -2715,8 +2689,6 @@ bool testPathTracerDebugAovContract()
 	    "pathTracerSettings.firstHitProbeSamplingMode",
 	    "pathTracerSettings.firstHitDiffuseSamples",
 	    "pathTracerSettings.firstHitCandidateCount",
-	    "pathTracerAnalysisSettings.debugLightPreset",
-	    "pathTracerAnalysisSettings.applyDebugLightPreset",
 	    "pathTracerAnalysisSettings.debugAov",
 	    "loadSponzaGiValidationPreset",
 	    "loadPathTracerSponzaGiValidationPresetIfRequested",
@@ -2729,16 +2701,7 @@ bool testPathTracerDebugAovContract()
 	    "MixedCosineHistoryGuided",
 	    "Mixed Cosine + History Guide",
 	    "ui.renderMode",
-	    "sponza_runtime.glb",
-	    "ptIndirectBounceTargetWallModelId",
-	    "loadIndirectBounceTestScene",
-	    "loadPathTracerIndirectBounceTestSceneIfRequested",
-	    "PT_IndirectBounce_Floor",
-	    "PT_IndirectBounce_Wall",
-	    "PT_IndirectBounce_Blocker",
-	    "PT_IndirectBounce_Ceiling",
-	    "PT_IndirectBounce_LeftWall",
-	    "PT_IndirectBounce_RightWall"};
+	    "sponza_runtime.glb"};
 	for (const char *symbol : requiredEngineSymbols)
 	{
 		if (!containsText(uiHeader, symbol) && !containsText(uiSource, symbol) &&
@@ -2746,7 +2709,52 @@ bool testPathTracerDebugAovContract()
 		    !containsText(engineSource, symbol) && !containsText(frameContextHeader, symbol) &&
 		    !containsText(frameContextSource, symbol))
 		{
-			std::cerr << "missing path tracer indirect bounce scene symbol: " << symbol << "\n";
+			std::cerr << "missing path tracer analysis contract symbol: " << symbol << "\n";
+			return false;
+		}
+	}
+
+	const std::string activeSceneCleanupSources =
+	    uiHeader + uiSource + engineHeader + engineSource + engineAuxiliaryHeader + raygen;
+	const char *forbiddenSceneCleanupSymbols[] = {
+	    "Scenario: Indirect " "Bounce Box",
+	    "Target " "Wall Avg Luma",
+	    "Indirect " "Box Capture Checklist",
+	    "Record these values after the image stabilizes",
+	    "Target " "Wall Base Luma",
+	    "Target " "Wall Probe Added Luma",
+	    "Light Preset",
+	    "Hard " "Bounce",
+	    "Medium " "Bounce",
+	    "Easy " "Bounce",
+	    "Hard" "Bounce",
+	    "Medium" "Bounce",
+	    "Easy" "Bounce",
+	    "Apply Light Preset",
+	    "Load Indirect " "Bounce Test Scene",
+	    "record" "Target" "Wall" "Luminance",
+	    "target" "Wall" "First" "HitProbeContributionSum",
+	    "target" "Wall" "Base" "LuminanceSum",
+	    "record" "Target" "Wall" "Luminance(radiance",
+	    "target" "Wall" "Luminance" "Average",
+	    "target" "Wall" "Base" "LuminanceAverage",
+	    "target" "Wall" "First" "HitProbeContributionAverage",
+	    "target" "Wall" "Sample" "Count",
+	    "analysis.apply" "Debug" "LightPreset",
+	    "PathTracer" "Debug" "LightPreset",
+	    "applyPathTracer" "Debug" "LightPreset",
+	    "pathTracerAnalysisSettings.debug" "LightPreset",
+	    "pathTracerAnalysisSettings.apply" "Debug" "LightPreset",
+	    "pt" "Indirect" "Bounce" "Target" "WallModelId",
+	    "load" "Indirect" "Bounce" "TestScene",
+	    "loadPathTracer" "Indirect" "Bounce" "TestSceneIfRequested",
+	    "PT_" "Indirect" "Bounce_"};
+	for (const char *symbol : forbiddenSceneCleanupSymbols)
+	{
+		if (containsText(activeSceneCleanupSources, symbol))
+		{
+			std::cerr << "retired scene diagnostic symbol remains in active path tracer source: "
+			          << symbol << "\n";
 			return false;
 		}
 	}

@@ -61,13 +61,6 @@ public:
         AutoAggressive = 2
     };
 
-    enum class PathTracerDebugLightPreset
-    {
-        HardBounce = 0,
-        MediumBounce = 1,
-        EasyBounce = 2
-    };
-
     enum class EnvironmentNeeSamplingMode
     {
         CosineHemisphere = 0,
@@ -201,10 +194,6 @@ public:
         uint32_t skyHitCount = 0;
         uint32_t fireflyClampCount = 0;
         uint32_t pixelSampleCount = 0;
-        uint32_t targetWallSampleCount = 0;
-        float targetWallLuminanceAverage = 0.0f;
-        float targetWallBaseLuminanceAverage = 0.0f;
-        float targetWallFirstHitProbeContributionAverage = 0.0f;
         uint32_t firstHitProbeCount = 0;
         uint32_t firstHitProbeSurfaceHitCount = 0;
         uint32_t firstHitProbeSunVisibleCount = 0;
@@ -377,12 +366,9 @@ public:
         bool                         runSponzaGiPerfSweep = false;
         bool                         runBrightSurfelShadowEvaluationSweep = false;
         bool                         runBrightSurfelProposalEvaluationSweep = false;
-        bool                         loadIndirectBounceTestScene = false;
         bool                         loadSponzaGiValidationPreset = false;
         PathTracerSponzaValidationView sponzaValidationView = PathTracerSponzaValidationView::DarkCourtyard;
         bool                         applySponzaValidationView = false;
-        PathTracerDebugLightPreset   debugLightPreset = PathTracerDebugLightPreset::HardBounce;
-        bool                         applyDebugLightPreset = false;
         bool                         freezeCameraInputDuringBenchmark = true;
         PathTracerBenchmarkCameraPath cameraPath = PathTracerBenchmarkCameraPath::SlowPan;
         bool                         adaptiveSampling = true;

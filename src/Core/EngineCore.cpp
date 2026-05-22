@@ -579,7 +579,6 @@ void EngineCore::mainLoop()
 		updatePerformanceWindowTitle(deltaTime);
 
 		glfwPollEvents();
-		loadPathTracerIndirectBounceTestSceneIfRequested();
 		loadPathTracerSponzaGiValidationPresetIfRequested();
 		if (ui.pathTracerAnalysisSettings.runSponzaGiPerfSweep)
 		{
@@ -598,7 +597,6 @@ void EngineCore::mainLoop()
 			ui.pathTracerAnalysisSettings.applySponzaValidationView = false;
 			applySponzaValidationPreset(ui.pathTracerAnalysisSettings.sponzaValidationView);
 		}
-		applyPathTracerDebugLightPreset();
 		loadPathTracerBenchmarkSceneIfNeeded();
 		updatePathTracerBenchmark(deltaTime);
 		updatePathTracerPhysicalSanityChecks(deltaTime);
@@ -1806,7 +1804,7 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 
 	ScenePushConstants rtPush{};
 	rtPush.modelMatrix                       = glm::mat4(1.0f);
-	rtPush.cascadeIndex                      = ptIndirectBounceTargetWallModelId;
+	rtPush.cascadeIndex                      = -1;
 	const uint32_t packedPathTracerMaterialIndex = packPathTracerMaterialSettings(ui.pathTracerSettings);
 	rtPush.materialIndex = static_cast<int>(packedPathTracerMaterialIndex);
 	rtPush.padding2      = debugAov;
@@ -2552,19 +2550,6 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	ui.pathTracerPerfStats.skyHitCount           = counters->skyHitCount;
 	ui.pathTracerPerfStats.fireflyClampCount     = counters->fireflyClampCount;
 	ui.pathTracerPerfStats.pixelSampleCount      = counters->pixelCount;
-	ui.pathTracerPerfStats.targetWallSampleCount = counters->targetWallSampleCount;
-	ui.pathTracerPerfStats.targetWallLuminanceAverage =
-	    (counters->targetWallSampleCount > 0) ? static_cast<float>(counters->targetWallLuminanceSum) /
-	                                                (static_cast<float>(counters->targetWallSampleCount) * 64.0f) :
-	                                            0.0f;
-	ui.pathTracerPerfStats.targetWallBaseLuminanceAverage =
-	    (counters->targetWallSampleCount > 0) ? static_cast<float>(counters->targetWallBaseLuminanceSum) /
-	                                                (static_cast<float>(counters->targetWallSampleCount) * 64.0f) :
-	                                            0.0f;
-	ui.pathTracerPerfStats.targetWallFirstHitProbeContributionAverage =
-	    (counters->targetWallSampleCount > 0) ? static_cast<float>(counters->targetWallFirstHitProbeContributionSum) /
-	                                                (static_cast<float>(counters->targetWallSampleCount) * 64.0f) :
-	                                            0.0f;
 	ui.pathTracerPerfStats.firstHitProbeCount           = counters->firstHitProbeCount;
 	ui.pathTracerPerfStats.firstHitProbeSurfaceHitCount = counters->firstHitProbeSurfaceHitCount;
 	ui.pathTracerPerfStats.firstHitProbeSunVisibleCount = counters->firstHitProbeSunVisibleCount;
@@ -2990,7 +2975,6 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 	analysis.lockBenchmarkScene    = true;
 	analysis.benchmarkActive       = false;
 	analysis.runBaselineSweep      = false;
-	analysis.applyDebugLightPreset = false;
 	ui.renderMode                  = RenderMode::PathTracer;
 	vulkan.logicalDevice.waitIdle();
 	clearPathTracerExperimentState();
@@ -3017,7 +3001,6 @@ void EngineCore::startPathTracerSponzaGiPerfSweep()
 		applyScenarioPreset(row, scenario);
 		row.probeMode                          = UISystem::FirstHitProbeSamplingMode::CandidateRis;
 		row.blackEnvironment                   = false;
-		row.applyDebugLightPreset              = false;
 		row.reservoirGiMode                    = UISystem::PathTracerReservoirGiMode::SingleFrame;
 		row.reservoirGiProposalMode            = proposalMode;
 		row.firstHitDiffuseSamples             = 2;
@@ -3116,7 +3099,6 @@ void EngineCore::startPathTracerBrightSurfelShadowEvaluationSweep()
 	analysis.lockBenchmarkScene = true;
 	analysis.benchmarkActive = false;
 	analysis.runBaselineSweep = false;
-	analysis.applyDebugLightPreset = false;
 	ui.renderMode = RenderMode::PathTracer;
 	vulkan.logicalDevice.waitIdle();
 	clearPathTracerExperimentState();
@@ -3139,7 +3121,6 @@ void EngineCore::startPathTracerBrightSurfelShadowEvaluationSweep()
 		applyScenarioPreset(row, scenario);
 		row.probeMode = UISystem::FirstHitProbeSamplingMode::CandidateRis;
 		row.blackEnvironment = false;
-		row.applyDebugLightPreset = false;
 		row.reservoirGiMode = UISystem::PathTracerReservoirGiMode::SingleFrame;
 		row.reservoirGiProposalMode =
 		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
@@ -3210,7 +3191,6 @@ void EngineCore::startPathTracerBrightSurfelProposalEvaluationSweep()
 	analysis.lockBenchmarkScene = true;
 	analysis.benchmarkActive = false;
 	analysis.runBaselineSweep = false;
-	analysis.applyDebugLightPreset = false;
 	ui.renderMode = RenderMode::PathTracer;
 	vulkan.logicalDevice.waitIdle();
 	clearPathTracerExperimentState();
@@ -3233,7 +3213,6 @@ void EngineCore::startPathTracerBrightSurfelProposalEvaluationSweep()
 		applyScenarioPreset(row, scenario);
 		row.probeMode = UISystem::FirstHitProbeSamplingMode::CandidateRis;
 		row.blackEnvironment = false;
-		row.applyDebugLightPreset = false;
 		row.reservoirGiMode = UISystem::PathTracerReservoirGiMode::SingleFrame;
 		row.reservoirGiProposalMode =
 		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
@@ -3363,15 +3342,9 @@ void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row
 	ptPrevYaw                      = camera.yaw;
 	ui.lightDirection              = glm::normalize(row.lightDirection);
 	ptForceHistoryReset            = true;
-	analysis.debugLightPreset      = row.lightPreset;
-	analysis.applyDebugLightPreset = row.applyDebugLightPreset;
 	analysis.debugAov              = row.debugAov;
 	analysis.debugAtrousIteration  = 0;
 	analysis.enableAnalysisMode    = true;
-	if (row.applyDebugLightPreset)
-	{
-		applyPathTracerDebugLightPreset();
-	}
 }
 
 void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow         &row,
@@ -3543,9 +3516,6 @@ void EngineCore::updatePathTracerExperimentSweep()
 	}
 
 	const auto &stats = ui.pathTracerPerfStats;
-	ptExperimentAccum.targetWallLuma += stats.targetWallLuminanceAverage;
-	ptExperimentAccum.targetWallBaseLuma += stats.targetWallBaseLuminanceAverage;
-	ptExperimentAccum.targetWallProbeAddedLuma += stats.targetWallFirstHitProbeContributionAverage;
 	ptExperimentAccum.firstHitProbeAvgLuma += stats.firstHitProbeContributionAverage;
 	ptExperimentAccum.firstHitProbeSunVisibleAvgLuma += stats.firstHitProbeSunVisibleContributionAverage;
 	ptExperimentAccum.reservoirGiCandidates +=
@@ -3874,110 +3844,6 @@ void EngineCore::updatePathTracerPhysicalSanityChecks(float /*deltaTimeSeconds*/
 	}
 }
 
-void EngineCore::applyPathTracerDebugLightPreset()
-{
-	auto &analysis = ui.pathTracerAnalysisSettings;
-	if (!analysis.applyDebugLightPreset)
-	{
-		return;
-	}
-	analysis.applyDebugLightPreset = false;
-
-	switch (analysis.debugLightPreset)
-	{
-		case UISystem::PathTracerDebugLightPreset::HardBounce:
-			ui.lightDirection = glm::normalize(glm::vec3(-0.353f, -0.784f, 0.510f));
-			break;
-		case UISystem::PathTracerDebugLightPreset::MediumBounce:
-			ui.lightDirection = glm::normalize(glm::vec3(-0.353f, -2.054f, 0.510f));
-			break;
-		case UISystem::PathTracerDebugLightPreset::EasyBounce:
-			ui.lightDirection = glm::normalize(glm::vec3(-0.353f, -13.954f, -9.810f));
-			break;
-	}
-}
-
-void EngineCore::loadPathTracerIndirectBounceTestSceneIfRequested()
-{
-	auto &analysis = ui.pathTracerAnalysisSettings;
-	if (!analysis.loadIndirectBounceTestScene)
-	{
-		return;
-	}
-	analysis.loadIndirectBounceTestScene = false;
-
-	if (!scene || !resourceManager)
-	{
-		return;
-	}
-
-	analysis.lockBenchmarkScene      = false;
-	analysis.benchmarkActive         = false;
-	analysis.runBaselineSweep        = false;
-	analysis.runPhysicalSanityChecks = false;
-	analysis.physicalSanityActive    = false;
-	ptBenchmarkSceneLoaded           = false;
-	ptSanitySceneCreated             = false;
-
-	scene->clearScene();
-	ptIndirectBounceTargetWallModelId = -1;
-
-	Laphria::MaterialData whiteDiffuse{};
-	whiteDiffuse.baseColorFactor = glm::vec4(0.92f, 0.92f, 0.90f, 1.0f);
-	whiteDiffuse.metallicFactor  = 0.0f;
-	whiteDiffuse.roughnessFactor = 0.85f;
-	whiteDiffuse.emissiveFactor  = glm::vec3(0.0f);
-
-	Laphria::MaterialData darkDiffuse{};
-	darkDiffuse.baseColorFactor = glm::vec4(0.22f, 0.22f, 0.22f, 1.0f);
-	darkDiffuse.metallicFactor  = 0.0f;
-	darkDiffuse.roughnessFactor = 0.90f;
-	darkDiffuse.emissiveFactor  = glm::vec3(0.0f);
-
-	auto addCube = [this](const char                  *name,
-	                      const Laphria::MaterialData &material,
-	                      const glm::vec3             &position,
-	                      const glm::vec3             &scale) -> SceneNode::Ptr {
-		SceneNode::Ptr node = resourceManager->createCubeModel(1.0f, *pipelines.descriptorSetLayoutMaterial, material);
-		if (!node)
-		{
-			return nullptr;
-		}
-		node->name = name;
-		node->setPosition(position);
-		node->setScale(scale);
-		scene->addNode(node, scene->getRoot());
-		return node;
-	};
-
-	addCube("PT_IndirectBounce_Floor", whiteDiffuse, glm::vec3(0.0f, -0.05f, -0.8f), glm::vec3(6.0f, 0.10f, 4.6f));
-	if (SceneNode::Ptr wall = addCube("PT_IndirectBounce_Wall", whiteDiffuse, glm::vec3(0.0f, 1.45f, -3.1f), glm::vec3(6.0f, 3.0f, 0.10f)))
-	{
-		ptIndirectBounceTargetWallModelId = wall->modelId;
-	}
-	addCube("PT_IndirectBounce_Blocker", darkDiffuse, glm::vec3(-2.35f, 1.15f, -1.0f), glm::vec3(0.16f, 2.4f, 3.4f));
-	addCube("PT_IndirectBounce_Ceiling", whiteDiffuse, glm::vec3(0.0f, 2.55f, -1.55f), glm::vec3(6.0f, 0.12f, 3.1f));
-	addCube("PT_IndirectBounce_LeftWall", whiteDiffuse, glm::vec3(-3.05f, 1.25f, -1.55f), glm::vec3(0.12f, 2.6f, 3.1f));
-	addCube("PT_IndirectBounce_RightWall", whiteDiffuse, glm::vec3(3.05f, 1.25f, -1.55f), glm::vec3(0.12f, 2.6f, 3.1f));
-
-	ui.renderMode                                         = RenderMode::PathTracer;
-	ui.exposure                                           = 0.75f;
-	ui.lightDirection                                     = glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f));
-	ui.pathTracerSettings.enableEnvironmentNEE            = true;
-	ui.pathTracerSettings.blackEnvironment                = true;
-	ui.pathTracerSettings.firstHitDiffuseSamples          = 1;
-	ui.pathTracerAnalysisSettings.debugAov                = UISystem::PathTracerDebugAov::PathRawFinalColor;
-
-	camera.position = glm::vec3(0.0f, 1.05f, 2.25f);
-	camera.pitch    = glm::radians(6.0f);
-	camera.yaw      = 0.0f;
-	camera.processInput(0.0f, 0.0f, 0.0f);
-	ptPrevCameraPos     = camera.position;
-	ptPrevPitch         = camera.pitch;
-	ptPrevYaw           = camera.yaw;
-	ptForceHistoryReset = true;
-}
-
 void EngineCore::applySponzaValidationPreset(UISystem::PathTracerSponzaValidationView view)
 {
 	const SponzaScenarioPreset &preset = sponzaScenarioPresetForView(view);
@@ -3991,7 +3857,6 @@ void EngineCore::applySponzaValidationPreset(UISystem::PathTracerSponzaValidatio
 	analysis.runBaselineSweep         = false;
 	analysis.runPhysicalSanityChecks  = false;
 	analysis.physicalSanityActive     = false;
-	analysis.applyDebugLightPreset    = false;
 	analysis.cameraPath               = UISystem::PathTracerBenchmarkCameraPath::Static;
 	analysis.debugAov                 = UISystem::PathTracerDebugAov::PathRawFinalColor;
 
@@ -4048,13 +3913,11 @@ void EngineCore::loadPathTracerSponzaGiValidationPresetIfRequested()
 
 	scene->clearScene();
 	ptBenchmarkSceneLoaded            = false;
-	ptIndirectBounceTargetWallModelId = -1;
 	ptExperimentSweepActive           = false;
 	ptExperimentRows.clear();
 
 	ptBenchmarkClockSeconds         = 0.0f;
 	ptBenchmarkTeleportClockSeconds = 0.0f;
-	pathTracerAnalysisSettings.loadIndirectBounceTestScene = false;
 	applySponzaValidationPreset(pathTracerAnalysisSettings.sponzaValidationView);
 }
 

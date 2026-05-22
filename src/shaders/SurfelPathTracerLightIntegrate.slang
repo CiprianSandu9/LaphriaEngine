@@ -34,6 +34,7 @@ static const uint SURFEL_DEBUG_CELL_OCCUPANCY = 7u;
 static const uint SURFEL_DEBUG_SURFEL_RADIANCE = 5u;
 static const uint SURFEL_DEBUG_REFLECTION_RAW = 8u;
 static const uint SURFEL_DEBUG_REFLECTION_FILTERED = 9u;
+static const uint SURFEL_DEBUG_SURFEL_COVERAGE = 10u;
 static const uint SURFEL_DEBUG_GBUFFER_ALBEDO = 13u;
 static const uint SURFEL_DEBUG_DIFFUSE_GI = 14u;
 static const uint SURFEL_DEBUG_SUN_VISIBILITY = 15u;
@@ -97,6 +98,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 normal = normalize(normalRaw);
     float3 albedo = max(gBufferAlbedo[pixel].rgb, float3(0.0));
     float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0));
+    float surfelCoverage = max(outputImage[pixel].a, 0.0);
     float3 diffuseBsdf = albedo / PI;
     float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0);
     float directSun = max(dot(normal, sunDir), 0.0);
@@ -125,6 +127,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
         lightingImages[pixel] = float4(reflectionRaw, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_REFLECTION_FILTERED) {
         lightingImages[pixel] = float4(reflectionFiltered, 1.0);
+    } else if (push.debugView == SURFEL_DEBUG_SURFEL_COVERAGE) {
+        lightingImages[pixel] = float4(surfelCoverage.xxx, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_DIFFUSE_GI) {
         lightingImages[pixel] = float4(diffuseGi, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_SUN_VISIBILITY) {

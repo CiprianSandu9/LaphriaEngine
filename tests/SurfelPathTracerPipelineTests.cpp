@@ -576,7 +576,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "return weightSum > 0.0001 ? weightedRadiance / weightSum : float3(0.0)",
 	                        "float3 resolveSurfelRadiance(float3 position, float3 normal)",
 	                        "return sampleWeightedSurfelRadiance(position, normal)",
-	                        "outputImage[pixel] = float4(resolveSurfelRadiance(position, normal), 1.0)"}) &&
+	                        "outputImage[pixel] = float4(resolveSurfelRadiance(position, normal), coverage)"}) &&
 	    containsAllNeedles(lightIntegrateShader,
 	                       {"static const float SURFEL_PT_DIFFUSE_GI_SCALE = 0.35",
 	                        "float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0))",
@@ -604,10 +604,14 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "static const uint SURFEL_DEBUG_GBUFFER_ALBEDO = 13u",
 	                        "static const uint SURFEL_DEBUG_DIFFUSE_GI = 14u",
 	                        "static const uint SURFEL_DEBUG_SUN_VISIBILITY = 15u",
+	                        "static const uint SURFEL_DEBUG_SURFEL_COVERAGE = 10u",
+	                        "float surfelCoverage = max(outputImage[pixel].a, 0.0)",
 	                        "lightingImages[pixel] = float4(albedo, 1.0)",
 	                        "lightingImages[pixel] = float4(rawSurfelRadiance, 1.0)",
 	                        "lightingImages[pixel] = float4(diffuseGi, 1.0)",
-	                        "lightingImages[pixel] = float4(sunVisibility.xxx, 1.0)"});
+	                        "lightingImages[pixel] = float4(sunVisibility.xxx, 1.0)",
+	                        "lightingImages[pixel] = float4(surfelCoverage.xxx, 1.0)",
+	                        "outputImage[pixel] = float4(resolveSurfelRadiance(position, normal), coverage)"});
 	bool cellOccupancyDebugOk =
 	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
 	                       {"static const uint SURFEL_DEBUG_CELL_OCCUPANCY = 7u",

@@ -201,8 +201,6 @@ static const int ReservoirEstimatorAuditOff = 0;
 static const int ReservoirEstimatorAuditCurrent = 1;
 static const int ReservoirEstimatorAuditNoProbeScale = 2;
 static const uint PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = PT_FLAGS_APPLY_FIRST_HIT_PROBES_BIT;
-static const uint targetWallFirstHitProbeContributionSumOffset = 52u;
-static const uint targetWallBaseLuminanceSumOffset = 56u;
 static const uint reservoirGiCandidatesOffset = 60u;
 static const uint reservoirGiAcceptedOffset = 64u;
 static const uint reservoirGiLumaScaledSumOffset = 68u;
@@ -471,33 +469,6 @@ float pathTracerLuminance(float3 c)
 bool isFinitePositive(float value)
 {
     return value > 0.0 && abs(value) < 3.402823e+38;
-}
-
-void recordTargetWallLuminance(float3 color,
-                               float3 firstHitProbeContribution,
-                               uint primaryInstanceID,
-                               bool primarySurfaceHit)
-{
-    if (!primarySurfaceHit || push.cascadeIndex < 0) {
-        return;
-    }
-
-    uint primaryModelId = primaryInstanceID >> 14;
-    if (primaryModelId != uint(push.cascadeIndex)) {
-        return;
-    }
-
-    float luma = clamp(pathTracerLuminance(color), 0.0, 8.0);
-    float probeLuma = clamp(pathTracerLuminance(firstHitProbeContribution), 0.0, 8.0);
-    float3 baseColor = max(color - firstHitProbeContribution, float3(0.0, 0.0, 0.0));
-    float baseLuma = clamp(pathTracerLuminance(baseColor), 0.0, 8.0);
-    uint scaledLuma = uint(luma * 64.0 + 0.5);
-    uint scaledProbeLuma = uint(probeLuma * 64.0 + 0.5);
-    uint scaledBaseLuma = uint(baseLuma * 64.0 + 0.5);
-    ptAnalysisCounters.InterlockedAdd(20, 1u);
-    ptAnalysisCounters.InterlockedAdd(24, scaledLuma);
-    ptAnalysisCounters.InterlockedAdd(targetWallFirstHitProbeContributionSumOffset, scaledProbeLuma);
-    ptAnalysisCounters.InterlockedAdd(targetWallBaseLuminanceSumOffset, scaledBaseLuma);
 }
 
 void recordFirstHitProbeStats(bool surfaceHit, bool sunVisible, float3 contribution)
@@ -3976,8 +3947,6 @@ void main() {
     float  debugReservoirGiSelectedSource = -1.0;
     float  debugShadowVisibility = 0.0;
     int    debugBounceCount = 0;
-    uint   primaryInstanceID = 0;
-    bool   primarySurfaceHit = false;
     float  pendingSkyMissMisWeight = 1.0;
     uint   packedPathTracerFlags = push.padding3;
     bool   environmentNeeEnabled = (packedPathTracerFlags & PT_FLAGS_ENVIRONMENT_NEE_BIT) != 0;
@@ -4087,11 +4056,6 @@ void main() {
             debugBaselineContinuationContribution += emissiveContribution;
         }
         debugBounceCount = bounce + 1;
-        if (bounce == 0) {
-            primarySurfaceHit = true;
-            primaryInstanceID = payload.instanceID;
-        }
-
         float3 N2 = payload.worldNormal;
         float3 V2 = -ray.Direction;
 
@@ -4366,8 +4330,5 @@ void main() {
             outputColor = float3(1.0, 1.0, 1.0);
         }
     }
-    float3 appliedFirstHitProbeContribution =
-        applyFirstHitProbesToFinal ? debugFirstHitBounceContribution : float3(0.0, 0.0, 0.0);
-    recordTargetWallLuminance(radiance, appliedFirstHitProbeContribution, primaryInstanceID, primarySurfaceHit);
     noisyColorOutput[launchID] = float4(outputColor, 1.0);
 }

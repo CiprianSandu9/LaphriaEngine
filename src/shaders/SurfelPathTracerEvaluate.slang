@@ -292,5 +292,5 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     float coverage = estimateCoverage(position, normal, closestSurfelIndex, true);
-    outputImage[pixel] = float4(resolveSurfelRadiance(position, normal), 1.0);
+    outputImage[pixel] = float4(resolveSurfelRadiance(position, normal), coverage);
 }

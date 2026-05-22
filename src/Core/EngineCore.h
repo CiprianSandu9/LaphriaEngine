@@ -150,18 +150,13 @@ class EngineCore
 		int directSunBounceMode = 0;
 		int reservoirGiCandidateEvaluationMode = 2;
 		bool blackEnvironment = true;
-		bool applyDebugLightPreset = true;
 		int firstHitDiffuseSamples = 8;
 		int firstHitCandidateCount = 4;
-		UISystem::PathTracerDebugLightPreset lightPreset = UISystem::PathTracerDebugLightPreset::HardBounce;
 		UISystem::PathTracerDebugAov debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor;
 	};
 	struct PathTracerExperimentAccumulator
 	{
 		uint32_t sampleCount = 0;
-		double targetWallLuma = 0.0;
-		double targetWallBaseLuma = 0.0;
-		double targetWallProbeAddedLuma = 0.0;
 		double firstHitProbeAvgLuma = 0.0;
 		double firstHitProbeSunVisibleAvgLuma = 0.0;
 		double reservoirGiCandidates = 0.0;
@@ -279,7 +274,6 @@ class EngineCore
 	SceneNode::Ptr ptSanityWhiteDiffuseNode;
 	SceneNode::Ptr ptSanityRoughMetalNode;
 	SceneNode::Ptr ptSanityEmissiveNode;
-	int            ptIndirectBounceTargetWallModelId{-1};
 	RenderMode lastSubmittedRenderMode{RenderMode::Rasterizer};
 	bool       renderModeInitialized{false};
 	std::chrono::high_resolution_clock::time_point lastFrameTime{};
@@ -345,8 +339,6 @@ class EngineCore
 	void logPathTracerExperimentRow(const PathTracerExperimentRow &row,
 	                                const PathTracerExperimentAccumulator &accum) const;
 	void ensurePathTracerSanityScene();
-	void applyPathTracerDebugLightPreset();
-	void loadPathTracerIndirectBounceTestSceneIfRequested();
 	void loadPathTracerSponzaGiValidationPresetIfRequested();
 	void updatePathTracerPhysicalSanityChecks(float deltaTimeSeconds);
 	void writePathTracerBacklogCsv();
