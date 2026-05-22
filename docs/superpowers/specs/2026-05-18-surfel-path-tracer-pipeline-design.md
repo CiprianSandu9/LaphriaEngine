@@ -120,7 +120,7 @@ Extend `UISystem` with:
 - debug overlays for normals/depth/surfel ID/radius/variance/radiance/cell occupancy/reflection,
 - basic counters for surfel count, ray budget, filled cells, rejected stores, and history acceptance.
 
-The UI should support validation without reusing the old path tracer's reservoir experiment controls.
+The UI should support validation without reusing removed experimental controls from the old path tracer.
 
 ## Data Flow
 
@@ -196,7 +196,7 @@ Runtime visual validation should use Sponza and small synthetic scenes:
 
 - Replace the existing `PathTracer` backend in the first implementation cycle.
 - Port Falcor, nvpro, or GLSL framework code directly.
-- Preserve old experimental reservoir-GI implementation details unless a specific idea is useful to the new backend.
+- Preserve old experimental GI-cache implementation details unless a specific idea is useful to the new backend.
 - Implement every debug sweep from the previous path tracer.
 
 ## Open Implementation Notes

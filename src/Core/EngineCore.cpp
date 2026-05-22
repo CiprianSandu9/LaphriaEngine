@@ -59,10 +59,6 @@ constexpr uint32_t    kPtFlagsFirstHitProbeSamplingShift     = 13u;
 constexpr uint32_t    kPtFlagsFirstHitProbeSamplingMask      = 0x7u;
 constexpr uint32_t    kPtFlagsEnvironmentBounceShift         = 21u;
 constexpr uint32_t    kPtFlagsEnvironmentBounceMask          = 0x3u;
-constexpr uint32_t    RESERVOIR_GI_RECEIVER_CACHE_CURRENT_BINDING = 14u;
-constexpr uint32_t    RESERVOIR_GI_RECEIVER_CACHE_HISTORY_BINDING = 15u;
-constexpr uint32_t    RESERVOIR_GI_BRIGHT_SURFEL_CURRENT_BINDING = 16u;
-constexpr uint32_t    RESERVOIR_GI_BRIGHT_SURFEL_HISTORY_BINDING = 17u;
 constexpr int         PATH_TRACER_BLACK_ENVIRONMENT_BIT      = static_cast<int>(kPtFlagsBlackEnvironmentBit);
 constexpr int         PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = static_cast<int>(kPtFlagsApplyFirstHitProbesBit);
 constexpr double      kWindowTitleUpdateIntervalSeconds      = 0.5;
@@ -825,81 +821,6 @@ void EngineCore::createRayTracingDescriptorSets()
 		    .range  = sizeof(Laphria::PathTracerAnalysisCounters)};
 		vk::WriteDescriptorSet analysisCounterWrite{
 		    .dstSet = *rtDescriptorSets[i], .dstBinding = 9, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &analysisCounterInfo};
-		vk::DescriptorBufferInfo reservoirGiCurrentInfo{
-		    .buffer = *frames.reservoirGiCurrentBuffers[i],
-		    .offset = 0,
-		    .range  = frames.reservoirGiCurrentBufferSize};
-		// Temporal reservoir history aliases the previous frame slot's current buffer.
-		// This keeps the capped reservoir capacity/record size identical without
-		// allocating a duplicate history buffer set.
-		const size_t reservoirGiHistoryIndex =
-		    frames.reservoirGiCurrentBuffers.empty() ? i : (i + frames.reservoirGiCurrentBuffers.size() - 1) % frames.reservoirGiCurrentBuffers.size();
-		vk::DescriptorBufferInfo reservoirGiHistoryInfo{
-		    .buffer = *frames.reservoirGiCurrentBuffers[reservoirGiHistoryIndex],
-		    .offset = 0,
-		    .range  = frames.reservoirGiCurrentBufferSize};
-		vk::DescriptorBufferInfo reservoirGiReceiverCacheCurrentInfo{
-		    .buffer = *frames.reservoirGiReceiverCacheBuffers[i],
-		    .offset = 0,
-		    .range  = frames.reservoirGiReceiverCacheBufferSize};
-		const size_t reservoirGiReceiverCacheHistoryIndex =
-		    frames.reservoirGiReceiverCacheBuffers.empty() ? i : (i + frames.reservoirGiReceiverCacheBuffers.size() - 1) % frames.reservoirGiReceiverCacheBuffers.size();
-		vk::DescriptorBufferInfo reservoirGiReceiverCacheHistoryInfo{
-		    .buffer = *frames.reservoirGiReceiverCacheBuffers[reservoirGiReceiverCacheHistoryIndex],
-		    .offset = 0,
-		    .range  = frames.reservoirGiReceiverCacheBufferSize};
-		vk::DescriptorBufferInfo reservoirGiBrightSurfelCurrentInfo{
-		    .buffer = *frames.reservoirGiBrightSurfelBuffers[i],
-		    .offset = 0,
-		    .range  = frames.reservoirGiBrightSurfelBufferSize};
-		const size_t reservoirGiBrightSurfelHistoryIndex =
-		    frames.reservoirGiBrightSurfelBuffers.empty() ? i : (i + frames.reservoirGiBrightSurfelBuffers.size() - 1) % frames.reservoirGiBrightSurfelBuffers.size();
-		vk::DescriptorBufferInfo reservoirGiBrightSurfelHistoryInfo{
-		    .buffer = *frames.reservoirGiBrightSurfelBuffers[reservoirGiBrightSurfelHistoryIndex],
-		    .offset = 0,
-		    .range  = frames.reservoirGiBrightSurfelBufferSize};
-		vk::WriteDescriptorSet reservoirGiCurrentWrite{
-		    .dstSet          = *rtDescriptorSets[i],
-		    .dstBinding      = 12,
-		    .dstArrayElement = 0,
-		    .descriptorCount = 1,
-		    .descriptorType  = vk::DescriptorType::eStorageBuffer,
-		    .pBufferInfo     = &reservoirGiCurrentInfo};
-		vk::WriteDescriptorSet reservoirGiHistoryWrite{
-		    .dstSet          = *rtDescriptorSets[i],
-		    .dstBinding      = 13,
-		    .dstArrayElement = 0,
-		    .descriptorCount = 1,
-		    .descriptorType  = vk::DescriptorType::eStorageBuffer,
-		    .pBufferInfo     = &reservoirGiHistoryInfo};
-		vk::WriteDescriptorSet reservoirGiReceiverCacheCurrentWrite{
-		    .dstSet          = *rtDescriptorSets[i],
-		    .dstBinding      = RESERVOIR_GI_RECEIVER_CACHE_CURRENT_BINDING,
-		    .dstArrayElement = 0,
-		    .descriptorCount = 1,
-		    .descriptorType  = vk::DescriptorType::eStorageBuffer,
-		    .pBufferInfo     = &reservoirGiReceiverCacheCurrentInfo};
-		vk::WriteDescriptorSet reservoirGiReceiverCacheHistoryWrite{
-		    .dstSet          = *rtDescriptorSets[i],
-		    .dstBinding      = RESERVOIR_GI_RECEIVER_CACHE_HISTORY_BINDING,
-		    .dstArrayElement = 0,
-		    .descriptorCount = 1,
-		    .descriptorType  = vk::DescriptorType::eStorageBuffer,
-		    .pBufferInfo     = &reservoirGiReceiverCacheHistoryInfo};
-		vk::WriteDescriptorSet reservoirGiBrightSurfelCurrentWrite{
-		    .dstSet          = *rtDescriptorSets[i],
-		    .dstBinding      = RESERVOIR_GI_BRIGHT_SURFEL_CURRENT_BINDING,
-		    .dstArrayElement = 0,
-		    .descriptorCount = 1,
-		    .descriptorType  = vk::DescriptorType::eStorageBuffer,
-		    .pBufferInfo     = &reservoirGiBrightSurfelCurrentInfo};
-		vk::WriteDescriptorSet reservoirGiBrightSurfelHistoryWrite{
-		    .dstSet          = *rtDescriptorSets[i],
-		    .dstBinding      = RESERVOIR_GI_BRIGHT_SURFEL_HISTORY_BINDING,
-		    .dstArrayElement = 0,
-		    .descriptorCount = 1,
-		    .descriptorType  = vk::DescriptorType::eStorageBuffer,
-		    .pBufferInfo     = &reservoirGiBrightSurfelHistoryInfo};
 
 		std::vector<vk::WriteDescriptorSet> descriptorWrites;
 		descriptorWrites.push_back(tlasWrite);
@@ -908,12 +829,6 @@ void EngineCore::createRayTracingDescriptorSets()
 		descriptorWrites.push_back(depthWrite);
 		descriptorWrites.push_back(mvWrite);
 		descriptorWrites.push_back(analysisCounterWrite);
-		descriptorWrites.push_back(reservoirGiCurrentWrite);
-		descriptorWrites.push_back(reservoirGiHistoryWrite);
-		descriptorWrites.push_back(reservoirGiReceiverCacheCurrentWrite);
-		descriptorWrites.push_back(reservoirGiReceiverCacheHistoryWrite);
-		descriptorWrites.push_back(reservoirGiBrightSurfelCurrentWrite);
-		descriptorWrites.push_back(reservoirGiBrightSurfelHistoryWrite);
 
 		// Now we extract ALL global vertices, indices, materials, and textures
 		// across all Scene Nodes that have been uploaded into VRAM by ResourceManager
@@ -1670,7 +1585,7 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 		std::memset(frames.ptAnalysisCounterMapped[fi], 0, sizeof(Laphria::PathTracerAnalysisCounters));
 	}
 
-	// PT analysis/reservoir buffers are host-cleared and also persist shader writes across
+	// PT analysis buffers are host-cleared and also persist shader writes across
 	// submissions. Make those writes visible before the next raygen reads or updates them.
 	vk::MemoryBarrier2 pathTracerStorageBufferBarrier{
 	    .srcStageMask  = vk::PipelineStageFlagBits2::eHost | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
@@ -2681,31 +2596,6 @@ void EngineCore::resetPathTracerAnalysisCounters(uint32_t frameSlot)
 	std::memset(frames.ptAnalysisCounterMapped[frameSlot], 0, sizeof(Laphria::PathTracerAnalysisCounters));
 }
 
-void EngineCore::clearPathTracerExperimentState()
-{
-	for (void *mapped : frames.reservoirGiCurrentMapped)
-	{
-		if (mapped)
-		{
-			std::memset(mapped, 0, static_cast<size_t>(frames.reservoirGiCurrentBufferSize));
-		}
-	}
-	for (void *mapped : frames.reservoirGiReceiverCacheMapped)
-	{
-		if (mapped)
-		{
-			std::memset(mapped, 0, static_cast<size_t>(frames.reservoirGiReceiverCacheBufferSize));
-		}
-	}
-	for (void *mapped : frames.reservoirGiBrightSurfelMapped)
-	{
-		if (mapped)
-		{
-			std::memset(mapped, 0, static_cast<size_t>(frames.reservoirGiBrightSurfelBufferSize));
-		}
-	}
-}
-
 void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row)
 {
 	auto &settings                         = ui.pathTracerSettings;
@@ -2797,8 +2687,6 @@ void EngineCore::updatePathTracerExperimentSweep()
 	ptExperimentWarmupRemaining = std::max(1, ptExperimentWarmupFrames);
 	ptExperimentSampleRemaining = std::max(1, ptExperimentSampleFrames);
 	ptExperimentAccum           = {};
-	vulkan.logicalDevice.waitIdle();
-	clearPathTracerExperimentState();
 	applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
 }
 void EngineCore::ensurePathTracerSanityScene()

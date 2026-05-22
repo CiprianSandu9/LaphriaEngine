@@ -223,7 +223,6 @@ class EngineCore
 	void updatePathTracerTimingPercentiles();
 	void resetPathTracerAnalysisCounters(uint32_t frameSlot);
 	void collectPathTracerAnalysisCounters(uint32_t frameSlot);
-	void clearPathTracerExperimentState();
 	void updatePathTracerExperimentSweep();
 	void applyPathTracerExperimentRow(const PathTracerExperimentRow &row);
 	void logPathTracerExperimentRow(const PathTracerExperimentRow &row,

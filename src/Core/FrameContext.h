@@ -96,26 +96,6 @@ class FrameContext
 	std::vector<Laphria::VulkanUtils::VmaBuffer> ptAnalysisCounterBuffers;
 	std::vector<void *>                          ptAnalysisCounterMapped;
 
-	static constexpr vk::DeviceSize kReservoirGiHeaderSize = 16;
-	static constexpr vk::DeviceSize kReservoirGiRecordSize = 160;
-	static constexpr uint32_t       kReservoirGiCurrentCapacity = 262144;
-	static constexpr vk::DeviceSize kReservoirGiReceiverCacheHeaderSize = 16;
-	static constexpr vk::DeviceSize kReservoirGiReceiverCacheRecordSize = 96;
-	static constexpr uint32_t       kReservoirGiReceiverCacheCapacity = 65536;
-	static constexpr vk::DeviceSize kReservoirGiBrightSurfelHeaderSize = 16;
-	static constexpr vk::DeviceSize kReservoirGiBrightSurfelRecordSize = 128;
-	static constexpr uint32_t       kReservoirGiBrightSurfelCapacity = 65536;
-	vk::DeviceSize reservoirGiCurrentBufferSize = kReservoirGiHeaderSize;
-	uint32_t       reservoirGiCurrentCapacity = 0;
-	std::vector<Laphria::VulkanUtils::VmaBuffer> reservoirGiCurrentBuffers;
-	std::vector<void *>                          reservoirGiCurrentMapped;
-	vk::DeviceSize reservoirGiReceiverCacheBufferSize = kReservoirGiReceiverCacheHeaderSize;
-	std::vector<Laphria::VulkanUtils::VmaBuffer> reservoirGiReceiverCacheBuffers;
-	std::vector<void *>                          reservoirGiReceiverCacheMapped;
-	vk::DeviceSize reservoirGiBrightSurfelBufferSize = kReservoirGiBrightSurfelHeaderSize;
-	std::vector<Laphria::VulkanUtils::VmaBuffer> reservoirGiBrightSurfelBuffers;
-	std::vector<void *>                          reservoirGiBrightSurfelMapped;
-
 	// ── Temporal tracking (updated each frame by updateUniformBuffer) ────────
 	glm::mat4 prevViewProj{1.0f};   // VP matrix of the last submitted frame
 	uint32_t  frameCount = 0;       // monotonically increasing, seeds per-pixel RNG
@@ -148,9 +128,6 @@ class FrameContext
 	void createAtrousResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
 	void createPathTracerAnalysisResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
 	void createPathTracerAnalysisBuffers(const VulkanDevice &dev);
-	void createReservoirGiCurrentBuffers(const VulkanDevice &dev, const SwapchainManager &swapchain);
-	void createReservoirGiReceiverCacheBuffers(const VulkanDevice &dev);
-	void createReservoirGiBrightSurfelBuffers(const VulkanDevice &dev);
 
 	void createUniformBuffers(const VulkanDevice &dev);
 	void createTLASResources(VulkanDevice &dev);

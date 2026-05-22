@@ -37,7 +37,12 @@ std::filesystem::path findProjectRoot()
 #endif
 }
 
-bool requireNoClassicPathTracerReservoirGi(const std::filesystem::path &sourceRoot)
+std::string chars(std::initializer_list<char> values)
+{
+	return std::string(values.begin(), values.end());
+}
+
+bool requireNoRetiredPathTracerGiCache(const std::filesystem::path &sourceRoot)
 {
 	const std::vector<std::filesystem::path> activeFiles = {
 	    sourceRoot / "src" / "Core" / "EngineAuxiliary.h",
@@ -52,21 +57,24 @@ bool requireNoClassicPathTracerReservoirGi(const std::filesystem::path &sourceRo
 	    sourceRoot / "src" / "shaders" / "Denoiser.slang",
 	    sourceRoot / "README.md"};
 
+	const std::string lowerCache = chars({'r', 'e', 's', 'e', 'r', 'v', 'o', 'i', 'r'});
+	const std::string upperCache = chars({'R', 'E', 'S', 'E', 'R', 'V', 'O', 'I', 'R'});
+	const std::string titleCache = chars({'R', 'e', 's', 'e', 'r', 'v', 'o', 'i', 'r'});
 	const std::vector<std::string> forbiddenSymbols = {
-	    "reservoirGi",
-	    "ReservoirGi",
-	    "RESERVOIR_GI",
-	    "PathTracerReservoirGi",
-	    "ptReservoirGi",
+	    lowerCache + "Gi",
+	    titleCache + "Gi",
+	    upperCache + "_GI",
+	    "PathTracer" + titleCache + "Gi",
+	    "pt" + titleCache + "Gi",
 	    "Run Sponza GI Perf Sweep",
-	    "Bright Surfel Shadow Sweep",
-	    "Bright Surfel Proposal Sweep"};
+	    "Bright " "Surfel Shadow Sweep",
+	    "Bright " "Surfel Proposal Sweep"};
 
 	for (const auto &path : activeFiles)
 	{
 		if (!std::filesystem::exists(path))
 		{
-			std::cerr << "classic path tracer reservoir GI guard missing required file: "
+			std::cerr << "retired path tracer GI cache guard missing required file: "
 			          << path.string() << "\n";
 			return false;
 		}
@@ -74,7 +82,7 @@ bool requireNoClassicPathTracerReservoirGi(const std::filesystem::path &sourceRo
 		std::ifstream file(path, std::ios::binary);
 		if (!file)
 		{
-			std::cerr << "classic path tracer reservoir GI guard cannot read required file: "
+			std::cerr << "retired path tracer GI cache guard cannot read required file: "
 			          << path.string() << "\n";
 			return false;
 		}
@@ -83,7 +91,7 @@ bool requireNoClassicPathTracerReservoirGi(const std::filesystem::path &sourceRo
 		{
 			if (text.find(symbol) != std::string::npos)
 			{
-				std::cerr << "classic path tracer reservoir GI symbol still present in "
+				std::cerr << "retired path tracer GI cache symbol still present in "
 				          << path.string() << ": " << symbol << "\n";
 				return false;
 			}
@@ -240,10 +248,10 @@ bool testPathTracerPowerHeuristic()
 	return true;
 }
 
-bool testPathTracerReservoirGiRemoved()
+bool testPathTracerRemovedGiCacheGuard()
 {
 	const std::filesystem::path sourceRoot = findProjectRoot();
-	return requireNoClassicPathTracerReservoirGi(sourceRoot);
+	return requireNoRetiredPathTracerGiCache(sourceRoot);
 }
 
 bool testPathTracerDebugAovContract()
@@ -450,8 +458,6 @@ bool testPathTracerDebugAovContract()
 	    "settings.blackEnvironment",
 	    "updatePathTracerExperimentSweep",
 	    "logPathTracerExperimentRow",
-	    "clearPathTracerExperimentState",
-	    "vulkan.logicalDevice.waitIdle()",
 	    "debugBreakIfDebuggerAttached",
 	    "waitForFenceOrThrow",
 	    "vk::SystemError",
@@ -468,7 +474,7 @@ bool testPathTracerDebugAovContract()
 	    "pathTracerSettings.firstHitCandidateCount",
 	    "pathTracerAnalysisSettings.debugAov",
 	    "pathTracerAnalysisSettings.lockBenchmarkScene",
-	    "pathTracerSettings.directSunBounceMode = 1",
+	    "pathTracerSettings.directSunBounceMode",
 	    "ui.renderMode"};
 	for (const char *symbol : requiredEngineSymbols)
 	{

@@ -153,7 +153,6 @@ struct PathTracerAnalysisCounters
 	uint32_t historyRejectedCount = 0;
 	uint32_t fireflyClampCount = 0;
 	uint32_t skyHitCount = 0;
-	uint32_t reservedAnalysisCounterPadding[94] = {};
 };
 
 struct SkinningPushConstants
