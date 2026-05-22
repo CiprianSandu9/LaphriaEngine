@@ -157,8 +157,6 @@ class EngineCore
 	struct PathTracerExperimentAccumulator
 	{
 		uint32_t sampleCount = 0;
-		double firstHitProbeAvgLuma = 0.0;
-		double firstHitProbeSunVisibleAvgLuma = 0.0;
 		double reservoirGiCandidates = 0.0;
 		double reservoirGiAccepted = 0.0;
 		double reservoirGiAcceptedAvgLuma = 0.0;

@@ -194,13 +194,6 @@ public:
         uint32_t skyHitCount = 0;
         uint32_t fireflyClampCount = 0;
         uint32_t pixelSampleCount = 0;
-        uint32_t firstHitProbeCount = 0;
-        uint32_t firstHitProbeSurfaceHitCount = 0;
-        uint32_t firstHitProbeSunVisibleCount = 0;
-        float firstHitProbeSurfaceHitRatio = 0.0f;
-        float firstHitProbeSunVisibleRatio = 0.0f;
-        float firstHitProbeContributionAverage = 0.0f;
-        float firstHitProbeSunVisibleContributionAverage = 0.0f;
         uint32_t reservoirGiCandidates = 0;
         uint32_t reservoirGiAccepted = 0;
         uint32_t reservoirGiCandidateSurfaceHits = 0;

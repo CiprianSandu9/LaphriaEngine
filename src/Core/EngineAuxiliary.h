@@ -156,13 +156,6 @@ struct PathTracerAnalysisCounters
 	uint32_t _reservedCounter20 = 0;
 	uint32_t _reservedCounter24 = 0;
 	uint32_t _pad2 = 0;
-	uint32_t firstHitProbeCount = 0;
-	uint32_t firstHitProbeSurfaceHitCount = 0;
-	uint32_t firstHitProbeSunVisibleCount = 0;
-	uint32_t firstHitProbeContributionSum = 0;
-	uint32_t firstHitProbeSunVisibleContributionSum = 0;
-	uint32_t _reservedCounter52 = 0;
-	uint32_t _reservedCounter56 = 0;
 	uint32_t reservoirGiCandidates = 0;
 	uint32_t reservoirGiAccepted = 0;
 	uint32_t reservoirGiLumaScaledSum = 0;

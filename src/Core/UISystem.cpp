@@ -1333,20 +1333,6 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::Text("Reservoir GI Accepted Luma Sum: %.1f", pathTracerPerfStats.reservoirGiAcceptedLumaSum);
     }
 
-    if (ImGui::CollapsingHeader("Core Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Text("First-Hit Probe Rays: %u", pathTracerPerfStats.firstHitProbeCount);
-        ImGui::Text("First-Hit Probe Surface Hits: %u (%.2f%%)",
-                    pathTracerPerfStats.firstHitProbeSurfaceHitCount,
-                    pathTracerPerfStats.firstHitProbeSurfaceHitRatio * 100.0f);
-        ImGui::Text("First-Hit Probe Sun Visible: %u (%.2f%%)",
-                    pathTracerPerfStats.firstHitProbeSunVisibleCount,
-                    pathTracerPerfStats.firstHitProbeSunVisibleRatio * 100.0f);
-        ImGui::Text("First-Hit Probe Avg Luma: %.5f",
-                    pathTracerPerfStats.firstHitProbeContributionAverage);
-        ImGui::Text("First-Hit Probe Sun-Visible Avg Luma: %.5f",
-                    pathTracerPerfStats.firstHitProbeSunVisibleContributionAverage);
-    }
-
     if (ImGui::CollapsingHeader("Scenario: Sponza GI Validation")) {
         const char *sponzaValidationViews[] = {
             "Dark Courtyard",

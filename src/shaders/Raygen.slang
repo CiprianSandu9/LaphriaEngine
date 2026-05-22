@@ -201,98 +201,98 @@ static const int ReservoirEstimatorAuditOff = 0;
 static const int ReservoirEstimatorAuditCurrent = 1;
 static const int ReservoirEstimatorAuditNoProbeScale = 2;
 static const uint PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = PT_FLAGS_APPLY_FIRST_HIT_PROBES_BIT;
-static const uint reservoirGiCandidatesOffset = 60u;
-static const uint reservoirGiAcceptedOffset = 64u;
-static const uint reservoirGiLumaScaledSumOffset = 68u;
-static const uint reservoirGiTemporalAcceptedOffset = 72u;
-static const uint reservoirGiTemporalRejectedOffset = 76u;
-static const uint reservoirGiSpatialAcceptedOffset = 80u;
-static const uint reservoirGiSpatialRejectedOffset = 84u;
-static const uint reservoirGiCandidateSurfaceHitsOffset = 88u;
-static const uint reservoirGiCandidateSunVisibleOffset = 92u;
-static const uint reservoirGiCandidatePositiveWeightOffset = 96u;
-static const uint reservoirGiZeroWeightOffset = 100u;
-static const uint reservoirGiSelectedWeightScaledSumOffset = 104u;
-static const uint reservoirGiTemporalReuseAttemptsOffset = 108u;
-static const uint reservoirGiTemporalRejectGeometryOffset = 112u;
-static const uint reservoirGiTemporalRejectVisibilityOffset = 116u;
-static const uint reservoirGiTemporalRejectLightOffset = 120u;
-static const uint reservoirGiTargetWeightScaledSumOffset = 124u;
-static const uint reservoirGiSelectedLocalOffset = 128u;
-static const uint reservoirGiSelectedTemporalOffset = 132u;
-static const uint reservoirGiSelectedSpatialOffset = 136u;
-static const uint reservoirGiConfidenceMScaledSumOffset = 140u;
-static const uint reservoirGiLocalSurfaceHitsOffset = 144u;
-static const uint reservoirGiLocalValidSamplesOffset = 148u;
-static const uint reservoirGiLocalMissCandidatesOffset = 152u;
-static const uint reservoirGiLocalMissPositiveWeightOffset = 156u;
-static const uint reservoirGiLocalSurfaceInvalidOffset = 160u;
-static const uint reservoirGiAcceptedLocalSurfaceOffset = 164u;
-static const uint reservoirGiAcceptedLocalMissOffset = 168u;
-static const uint reservoirGiLocalShadowRaysOffset = 172u;
-static const uint reservoirGiTemporalReconnectRaysOffset = 176u;
-static const uint reservoirGiTemporalShadowRaysOffset = 180u;
-static const uint reservoirGiHistoryGuideUsedOffset = 184u;
-static const uint reservoirGiHistoryGuideRejectedLowWeightOffset = 188u;
-static const uint reservoirGiHistoryGuideFallbackCosineOffset = 192u;
-static const uint reservoirGiHistoryGuideRejectReprojectionOffset = 196u;
-static const uint reservoirGiHistoryGuideRejectLoadOffset = 200u;
-static const uint reservoirGiHistoryGuideRejectGeometryOffset = 204u;
-static const uint reservoirGiHistoryGuideNeighborSearchesOffset = 208u;
-static const uint reservoirGiHistoryGuideNeighborHitsOffset = 212u;
-static const uint reservoirGiHistoryGuideNeighborMissesOffset = 216u;
-static const uint reservoirGiLocalRejectGeometryOffset = 220u;
-static const uint reservoirGiLocalRejectNoLightOffset = 224u;
-static const uint reservoirGiLocalRejectZeroTargetOffset = 228u;
-static const uint reservoirGiLocalRejectBadPdfOffset = 232u;
-static const uint reservoirGiReceiverCacheStoreOffset = 236u;
-static const uint reservoirGiReceiverCacheAttemptOffset = 240u;
-static const uint reservoirGiReceiverCacheHitOffset = 244u;
-static const uint reservoirGiReceiverCacheMissOffset = 248u;
-static const uint reservoirGiReceiverCacheRejectNoLightOffset = 252u;
-static const uint reservoirGiReceiverCacheAcceptedOffset = 256u;
-static const uint reservoirGiSelectedCacheOffset = 260u;
-static const uint reservoirGiReceiverReconnectAttemptOffset = 264u;
-static const uint reservoirGiReceiverReconnectHitOffset = 268u;
-static const uint reservoirGiReceiverReconnectMissOffset = 272u;
-static const uint reservoirGiReceiverReconnectRejectVisibilityOffset = 276u;
-static const uint reservoirGiReceiverReconnectRejectTargetOffset = 280u;
-static const uint reservoirGiReceiverReconnectAcceptedOffset = 284u;
-static const uint reservoirGiSelectedCacheReconnectOffset = 288u;
-static const uint reservoirGiReceiverCacheContinuationAttemptOffset = 292u;
-static const uint reservoirGiReceiverCacheContinuationHitOffset = 296u;
-static const uint reservoirGiReceiverCacheContinuationMissOffset = 300u;
-static const uint reservoirGiReceiverCacheContinuationAcceptedOffset = 304u;
-static const uint reservoirGiBrightSurfelStoreOffset = 308u;
-static const uint reservoirGiBrightSurfelAttemptOffset = 312u;
-static const uint reservoirGiBrightSurfelHitOffset = 316u;
-static const uint reservoirGiBrightSurfelMissOffset = 320u;
-static const uint reservoirGiBrightSurfelRejectVisibilityOffset = 324u;
-static const uint reservoirGiBrightSurfelRejectGeometryOffset = 328u;
-static const uint reservoirGiBrightSurfelRejectTargetOffset = 332u;
-static const uint reservoirGiBrightSurfelAcceptedOffset = 336u;
-static const uint reservoirGiSelectedBrightSurfelOffset = 340u;
-static const uint reservoirGiBrightSurfelPrecheckRejectTargetOffset = 344u;
-static const uint reservoirGiBrightSurfelTrainingAttemptOffset = 348u;
-static const uint reservoirGiBrightSurfelTrainingStoreOffset = 352u;
-static const uint reservoirGiBrightSurfelTrainingRejectGeometryOffset = 356u;
-static const uint reservoirGiBrightSurfelTrainingRejectTargetOffset = 360u;
-static const uint reservoirGiBrightSurfelSelectorRejectGeometryOffset = 364u;
-static const uint reservoirGiBrightSurfelSelectorRejectTargetOffset = 368u;
-static const uint reservoirGiBrightSurfelSelectorViableOffset = 372u;
-static const uint reservoirGiBrightSurfelIndexedQueryOffset = 376u;
-static const uint reservoirGiBrightSurfelIndexedEmptyOffset = 380u;
-static const uint reservoirGiBrightSurfelIndexedProbeOffset = 384u;
-static const uint reservoirGiBrightSurfelSelectorRejectDistanceOffset = 388u;
-static const uint reservoirGiBrightSurfelSelectorRejectReceiverHemisphereOffset = 392u;
-static const uint reservoirGiBrightSurfelSelectorRejectSurfelHemisphereOffset = 396u;
-static const uint reservoirGiBrightSurfelSelectorRejectInvalidVectorOffset = 400u;
-static const uint reservoirGiAuditCurrentLumaScaledSumOffset = 404u;
-static const uint reservoirGiAuditReferenceLumaScaledSumOffset = 408u;
-static const uint reservoirGiAuditRelativeErrorScaledSumOffset = 412u;
-static const uint reservoirGiAuditProbeScaleOffset = 416u;
+static const uint reservoirGiCandidatesOffset = 32u;
+static const uint reservoirGiAcceptedOffset = 36u;
+static const uint reservoirGiLumaScaledSumOffset = 40u;
+static const uint reservoirGiTemporalAcceptedOffset = 44u;
+static const uint reservoirGiTemporalRejectedOffset = 48u;
+static const uint reservoirGiSpatialAcceptedOffset = 52u;
+static const uint reservoirGiSpatialRejectedOffset = 56u;
+static const uint reservoirGiCandidateSurfaceHitsOffset = 60u;
+static const uint reservoirGiCandidateSunVisibleOffset = 64u;
+static const uint reservoirGiCandidatePositiveWeightOffset = 68u;
+static const uint reservoirGiZeroWeightOffset = 72u;
+static const uint reservoirGiSelectedWeightScaledSumOffset = 76u;
+static const uint reservoirGiTemporalReuseAttemptsOffset = 80u;
+static const uint reservoirGiTemporalRejectGeometryOffset = 84u;
+static const uint reservoirGiTemporalRejectVisibilityOffset = 88u;
+static const uint reservoirGiTemporalRejectLightOffset = 92u;
+static const uint reservoirGiTargetWeightScaledSumOffset = 96u;
+static const uint reservoirGiSelectedLocalOffset = 100u;
+static const uint reservoirGiSelectedTemporalOffset = 104u;
+static const uint reservoirGiSelectedSpatialOffset = 108u;
+static const uint reservoirGiConfidenceMScaledSumOffset = 112u;
+static const uint reservoirGiLocalSurfaceHitsOffset = 116u;
+static const uint reservoirGiLocalValidSamplesOffset = 120u;
+static const uint reservoirGiLocalMissCandidatesOffset = 124u;
+static const uint reservoirGiLocalMissPositiveWeightOffset = 128u;
+static const uint reservoirGiLocalSurfaceInvalidOffset = 132u;
+static const uint reservoirGiAcceptedLocalSurfaceOffset = 136u;
+static const uint reservoirGiAcceptedLocalMissOffset = 140u;
+static const uint reservoirGiLocalShadowRaysOffset = 144u;
+static const uint reservoirGiTemporalReconnectRaysOffset = 148u;
+static const uint reservoirGiTemporalShadowRaysOffset = 152u;
+static const uint reservoirGiHistoryGuideUsedOffset = 156u;
+static const uint reservoirGiHistoryGuideRejectedLowWeightOffset = 160u;
+static const uint reservoirGiHistoryGuideFallbackCosineOffset = 164u;
+static const uint reservoirGiHistoryGuideRejectReprojectionOffset = 168u;
+static const uint reservoirGiHistoryGuideRejectLoadOffset = 172u;
+static const uint reservoirGiHistoryGuideRejectGeometryOffset = 176u;
+static const uint reservoirGiHistoryGuideNeighborSearchesOffset = 180u;
+static const uint reservoirGiHistoryGuideNeighborHitsOffset = 184u;
+static const uint reservoirGiHistoryGuideNeighborMissesOffset = 188u;
+static const uint reservoirGiLocalRejectGeometryOffset = 192u;
+static const uint reservoirGiLocalRejectNoLightOffset = 196u;
+static const uint reservoirGiLocalRejectZeroTargetOffset = 200u;
+static const uint reservoirGiLocalRejectBadPdfOffset = 204u;
+static const uint reservoirGiReceiverCacheStoreOffset = 208u;
+static const uint reservoirGiReceiverCacheAttemptOffset = 212u;
+static const uint reservoirGiReceiverCacheHitOffset = 216u;
+static const uint reservoirGiReceiverCacheMissOffset = 220u;
+static const uint reservoirGiReceiverCacheRejectNoLightOffset = 224u;
+static const uint reservoirGiReceiverCacheAcceptedOffset = 228u;
+static const uint reservoirGiSelectedCacheOffset = 232u;
+static const uint reservoirGiReceiverReconnectAttemptOffset = 236u;
+static const uint reservoirGiReceiverReconnectHitOffset = 240u;
+static const uint reservoirGiReceiverReconnectMissOffset = 244u;
+static const uint reservoirGiReceiverReconnectRejectVisibilityOffset = 248u;
+static const uint reservoirGiReceiverReconnectRejectTargetOffset = 252u;
+static const uint reservoirGiReceiverReconnectAcceptedOffset = 256u;
+static const uint reservoirGiSelectedCacheReconnectOffset = 260u;
+static const uint reservoirGiReceiverCacheContinuationAttemptOffset = 264u;
+static const uint reservoirGiReceiverCacheContinuationHitOffset = 268u;
+static const uint reservoirGiReceiverCacheContinuationMissOffset = 272u;
+static const uint reservoirGiReceiverCacheContinuationAcceptedOffset = 276u;
+static const uint reservoirGiBrightSurfelStoreOffset = 280u;
+static const uint reservoirGiBrightSurfelAttemptOffset = 284u;
+static const uint reservoirGiBrightSurfelHitOffset = 288u;
+static const uint reservoirGiBrightSurfelMissOffset = 292u;
+static const uint reservoirGiBrightSurfelRejectVisibilityOffset = 296u;
+static const uint reservoirGiBrightSurfelRejectGeometryOffset = 300u;
+static const uint reservoirGiBrightSurfelRejectTargetOffset = 304u;
+static const uint reservoirGiBrightSurfelAcceptedOffset = 308u;
+static const uint reservoirGiSelectedBrightSurfelOffset = 312u;
+static const uint reservoirGiBrightSurfelPrecheckRejectTargetOffset = 316u;
+static const uint reservoirGiBrightSurfelTrainingAttemptOffset = 320u;
+static const uint reservoirGiBrightSurfelTrainingStoreOffset = 324u;
+static const uint reservoirGiBrightSurfelTrainingRejectGeometryOffset = 328u;
+static const uint reservoirGiBrightSurfelTrainingRejectTargetOffset = 332u;
+static const uint reservoirGiBrightSurfelSelectorRejectGeometryOffset = 336u;
+static const uint reservoirGiBrightSurfelSelectorRejectTargetOffset = 340u;
+static const uint reservoirGiBrightSurfelSelectorViableOffset = 344u;
+static const uint reservoirGiBrightSurfelIndexedQueryOffset = 348u;
+static const uint reservoirGiBrightSurfelIndexedEmptyOffset = 352u;
+static const uint reservoirGiBrightSurfelIndexedProbeOffset = 356u;
+static const uint reservoirGiBrightSurfelSelectorRejectDistanceOffset = 360u;
+static const uint reservoirGiBrightSurfelSelectorRejectReceiverHemisphereOffset = 364u;
+static const uint reservoirGiBrightSurfelSelectorRejectSurfelHemisphereOffset = 368u;
+static const uint reservoirGiBrightSurfelSelectorRejectInvalidVectorOffset = 372u;
+static const uint reservoirGiAuditCurrentLumaScaledSumOffset = 376u;
+static const uint reservoirGiAuditReferenceLumaScaledSumOffset = 380u;
+static const uint reservoirGiAuditRelativeErrorScaledSumOffset = 384u;
+static const uint reservoirGiAuditProbeScaleOffset = 388u;
 static const uint reservoirGiAuditProbeScaleScaledSumOffset = reservoirGiAuditProbeScaleOffset;
-static const uint reservoirGiAuditSampleCountOffset = 420u;
+static const uint reservoirGiAuditSampleCountOffset = 392u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_NONE = 0u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_GEOMETRY = 1u;
 static const uint RESERVOIR_GI_LOCAL_REJECT_NO_LIGHT = 2u;
@@ -469,21 +469,6 @@ float pathTracerLuminance(float3 c)
 bool isFinitePositive(float value)
 {
     return value > 0.0 && abs(value) < 3.402823e+38;
-}
-
-void recordFirstHitProbeStats(bool surfaceHit, bool sunVisible, float3 contribution)
-{
-    float luma = clamp(pathTracerLuminance(contribution), 0.0, 8.0);
-    uint scaledLuma = uint(luma * 64.0 + 0.5);
-    ptAnalysisCounters.InterlockedAdd(32, 1u);
-    if (surfaceHit) {
-        ptAnalysisCounters.InterlockedAdd(36, 1u);
-    }
-    if (sunVisible) {
-        ptAnalysisCounters.InterlockedAdd(40, 1u);
-        ptAnalysisCounters.InterlockedAdd(48, scaledLuma);
-    }
-    ptAnalysisCounters.InterlockedAdd(44, scaledLuma);
 }
 
 void recordReservoirGiEstimatorAudit(float currentLuma,
@@ -3004,7 +2989,6 @@ FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N,
         float3 bounceDir = bounceSample.direction;
         float NdotBounce = max(dot(N, bounceDir), 0.0);
         if (NdotBounce <= 0.0 || bounceSample.pdf <= 0.0) {
-            recordFirstHitProbeStats(false, false, float3(0.0, 0.0, 0.0));
             continue;
         }
         float3 firstLegThroughput = diffuseBsdf * NdotBounce / max(bounceSample.pdf, 0.0001);
@@ -3021,7 +3005,6 @@ FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N,
         if (bouncePayload.hitT < 0.0) {
             float3 skyContribution = firstLegThroughput * bouncePayload.emission;
             result.totalContribution += skyContribution;
-            recordFirstHitProbeStats(false, false, skyContribution);
         } else {
             float3 secondaryV = -bounceDir;
             float3 emissiveContribution = firstLegThroughput * bouncePayload.emission;
@@ -3031,7 +3014,6 @@ FirstHitDiffuseBounceResult sampleFirstHitDiffuseBounce(float3 hitPos, float3 N,
                                                                    firstLegThroughput,
                                                                    bouncePayload);
             bool secondarySunVisible = pathTracerLuminance(secondaryDirect) > 0.000001;
-            recordFirstHitProbeStats(true, secondarySunVisible, emissiveContribution + secondaryDirect);
             result.secondaryDirectSunContribution += secondaryDirect;
             result.totalContribution += emissiveContribution + secondaryDirect;
         }
@@ -3122,7 +3104,6 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateSunBounce(float3 hitPos, floa
 
         float3 weightedBestTotal = bestTotal / float(candidateCount);
         float3 weightedBestSecondarySun = bestSecondarySun / float(candidateCount);
-        recordFirstHitProbeStats(bestSurfaceHit, bestSunVisible, weightedBestTotal);
         result.totalContribution += weightedBestTotal;
         result.secondaryDirectSunContribution += weightedBestSecondarySun;
     }
@@ -3207,7 +3188,6 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateAverageReference(float3 hitPo
 
         averagedTotal /= float(candidateCount);
         averagedSecondarySun /= float(candidateCount);
-        recordFirstHitProbeStats(anySurfaceHit, anySunVisible, averagedTotal);
         result.totalContribution += averagedTotal;
         result.secondaryDirectSunContribution += averagedSecondarySun;
     }
@@ -3301,7 +3281,6 @@ FirstHitDiffuseBounceResult sampleFirstHitCandidateRis(float3 hitPos, float3 N, 
         float risScale = 1.0 / (float(candidateCount) * max(selectedCandidateProbability, 0.000001));
         float3 risTotal = selectedTotal * risScale;
         float3 risSecondarySun = selectedSecondarySun * risScale;
-        recordFirstHitProbeStats(selectedSurfaceHit, selectedSunVisible, risTotal);
         result.totalContribution += risTotal;
         result.secondaryDirectSunContribution += risSecondarySun;
     }
@@ -3794,7 +3773,6 @@ FirstHitDiffuseBounceResult sampleFirstHitReservoirGiSingleFrame(float3 hitPos, 
         ptAnalysisCounters.InterlockedAdd(reservoirGiTargetWeightScaledSumOffset, scaledTargetWeight);
         uint scaledConfidenceM = uint(clamp(selectedConfidenceM, 0.0, 1024.0) * 64.0 + 0.5);
         ptAnalysisCounters.InterlockedAdd(reservoirGiConfidenceMScaledSumOffset, scaledConfidenceM);
-        recordFirstHitProbeStats(selectedSurfaceHit, selectedSunVisible, reservoirTotal);
     } else {
         if (reservoirGiDetailedDiagnostics) {
             ptAnalysisCounters.InterlockedAdd(reservoirGiZeroWeightOffset, 1u);

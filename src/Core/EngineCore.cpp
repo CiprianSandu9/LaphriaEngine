@@ -2550,17 +2550,6 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	ui.pathTracerPerfStats.skyHitCount           = counters->skyHitCount;
 	ui.pathTracerPerfStats.fireflyClampCount     = counters->fireflyClampCount;
 	ui.pathTracerPerfStats.pixelSampleCount      = counters->pixelCount;
-	ui.pathTracerPerfStats.firstHitProbeCount           = counters->firstHitProbeCount;
-	ui.pathTracerPerfStats.firstHitProbeSurfaceHitCount = counters->firstHitProbeSurfaceHitCount;
-	ui.pathTracerPerfStats.firstHitProbeSunVisibleCount = counters->firstHitProbeSunVisibleCount;
-	ui.pathTracerPerfStats.firstHitProbeContributionAverage =
-	    (counters->firstHitProbeCount > 0) ? static_cast<float>(counters->firstHitProbeContributionSum) /
-	                                             (static_cast<float>(counters->firstHitProbeCount) * 64.0f) :
-	                                         0.0f;
-	ui.pathTracerPerfStats.firstHitProbeSunVisibleContributionAverage =
-	    (counters->firstHitProbeSunVisibleCount > 0) ? static_cast<float>(counters->firstHitProbeSunVisibleContributionSum) /
-	                                                       (static_cast<float>(counters->firstHitProbeSunVisibleCount) * 64.0f) :
-	                                                   0.0f;
 	ui.pathTracerPerfStats.reservoirGiCandidates                  = counters->reservoirGiCandidates;
 	ui.pathTracerPerfStats.reservoirGiAccepted                    = counters->reservoirGiAccepted;
 	ui.pathTracerPerfStats.reservoirGiCandidateSurfaceHits        = counters->reservoirGiCandidateSurfaceHits;
@@ -2738,11 +2727,6 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	const float pixelTotal                   = static_cast<float>(std::max(counters->pixelCount, 1u));
 	ui.pathTracerPerfStats.skyHitRatio       = static_cast<float>(counters->skyHitCount) / pixelTotal;
 	ui.pathTracerPerfStats.fireflyClampRatio = static_cast<float>(counters->fireflyClampCount) / pixelTotal;
-	const float firstHitProbeTotal           = static_cast<float>(std::max(counters->firstHitProbeCount, 1u));
-	ui.pathTracerPerfStats.firstHitProbeSurfaceHitRatio =
-	    static_cast<float>(counters->firstHitProbeSurfaceHitCount) / firstHitProbeTotal;
-	ui.pathTracerPerfStats.firstHitProbeSunVisibleRatio =
-	    static_cast<float>(counters->firstHitProbeSunVisibleCount) / firstHitProbeTotal;
 
 	auto &analysis = ui.pathTracerAnalysisSettings;
 	if (!(analysis.enableAnalysisMode && analysis.benchmarkActive && analysis.runBaselineSweep))
@@ -3355,7 +3339,6 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     "maxBounces=%d, directSunMode=%d, environmentNeeMode=%d, reservoirEvalMode=%d, "
 	     "reservoirGiMode=%d, reservoirProposalMode=%d, reservoirCandidates=%d, reservoirUseRis=%d, "
 	     "reservoirTemporalBudget=%d, reservoirSpatialBudget=%d, "
-	     "firstHitProbeAvgLuma=%.5f, firstHitSunVisibleAvgLuma=%.5f, "
 	     "reservoirGiCandidateRays=%.1f, reservoirGiAccepted=%.1f, "
 	     "localSurfaceHits=%.1f, localValid=%.1f, localMiss=%.1f, localMissPositive=%.1f, "
 	     "localSurfaceInvalid=%.1f, localRejectGeometry=%.1f, localRejectNoLight=%.1f, "
@@ -3409,8 +3392,6 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     row.reservoirGiUseCandidateRis ? 1 : 0,
 	     row.reservoirGiTemporalBudgetDivisor,
 	     row.reservoirGiSpatialBudgetDivisor,
-	     accum.firstHitProbeAvgLuma * invSamples,
-	     accum.firstHitProbeSunVisibleAvgLuma * invSamples,
 	     accum.reservoirGiCandidates * invSamples,
 	     accum.reservoirGiAccepted * invSamples,
 	     accum.reservoirGiLocalSurfaceHits * invSamples,
@@ -3516,8 +3497,6 @@ void EngineCore::updatePathTracerExperimentSweep()
 	}
 
 	const auto &stats = ui.pathTracerPerfStats;
-	ptExperimentAccum.firstHitProbeAvgLuma += stats.firstHitProbeContributionAverage;
-	ptExperimentAccum.firstHitProbeSunVisibleAvgLuma += stats.firstHitProbeSunVisibleContributionAverage;
 	ptExperimentAccum.reservoirGiCandidates +=
 	    static_cast<double>(stats.reservoirGiCandidates);
 	ptExperimentAccum.reservoirGiAccepted +=
