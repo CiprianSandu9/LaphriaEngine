@@ -135,6 +135,18 @@ float worldUnitsPerPixel(float cameraDistance, float verticalFovRadians, float v
     const float visibleHeight = 2.0f * std::tan(verticalFovRadians * 0.5f) * std::max(cameraDistance, 0.01f);
     return visibleHeight / viewportHeightPixels;
 }
+
+template <typename DrawFunc>
+void withDisabledControl(bool disabled, const char *tooltip, DrawFunc drawFunc)
+{
+    ImGui::BeginDisabled(disabled);
+    drawFunc();
+    ImGui::EndDisabled();
+    if (disabled && tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+}
 } // namespace
 
 void UISystem::init(VulkanDevice &dev, GLFWwindow *window,
@@ -1073,36 +1085,8 @@ void UISystem::drawPathTracerDebugLab() {
     }
 
     if (ImGui::CollapsingHeader("Core Diagnostics", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextUnformatted("Analysis Output");
         ImGui::Checkbox("Enable Analysis Mode", &pathTracerAnalysisSettings.enableAnalysisMode);
-        ImGui::Checkbox("Environment NEE", &pathTracerSettings.enableEnvironmentNEE);
-        ImGui::Checkbox("Black Environment", &pathTracerSettings.blackEnvironment);
-        ImGui::Checkbox("Apply First-Hit Probes", &pathTracerSettings.applyFirstHitProbesToFinal);
-
-        const char *envNeeBounceModes[] = {"First Only", "First Two", "All Bounces"};
-        ImGui::Combo("Env NEE Bounces", &pathTracerSettings.environmentNeeBounceMode,
-                     envNeeBounceModes, IM_ARRAYSIZE(envNeeBounceModes));
-        pathTracerSettings.environmentNeeBounceMode = std::clamp(pathTracerSettings.environmentNeeBounceMode, 0, 2);
-
-        const char *envNeeSamplingModes[] = {"Cosine Hemisphere", "Sky Biased"};
-        int envNeeSamplingMode = static_cast<int>(pathTracerSettings.environmentNeeSamplingMode);
-        if (ImGui::Combo("Env NEE Sampling", &envNeeSamplingMode, envNeeSamplingModes, IM_ARRAYSIZE(envNeeSamplingModes))) {
-            pathTracerSettings.environmentNeeSamplingMode = static_cast<EnvironmentNeeSamplingMode>(envNeeSamplingMode);
-        }
-        const char *firstHitProbeSamplingModes[] = {
-            "Cosine Hemisphere",
-            "Naive Sun Guide",
-            "Candidate Sun Bounce",
-            "Candidate Average Reference",
-            "Candidate RIS"};
-        int firstHitProbeSamplingMode = static_cast<int>(pathTracerSettings.firstHitProbeSamplingMode);
-        if (ImGui::Combo("First-Hit Probe Sampling", &firstHitProbeSamplingMode,
-                         firstHitProbeSamplingModes, IM_ARRAYSIZE(firstHitProbeSamplingModes))) {
-            pathTracerSettings.firstHitProbeSamplingMode =
-                static_cast<FirstHitProbeSamplingMode>(firstHitProbeSamplingMode);
-        }
-        ImGui::SliderInt("First-Hit Diffuse Samples", &pathTracerSettings.firstHitDiffuseSamples, 1, 8);
-        ImGui::SliderInt("First-Hit Candidate Count", &pathTracerSettings.firstHitCandidateCount, 2, 16);
-
         const char *debugAovs[] = {
             "Final Color",
             "Reprojection Validity",
@@ -1122,11 +1106,81 @@ void UISystem::drawPathTracerDebugLab() {
             "Secondary Direct Sun Contribution",
             "Baseline Continuation Contribution"};
         int debugAovIdx = static_cast<int>(pathTracerAnalysisSettings.debugAov);
-        if (ImGui::Combo("Debug AOV", &debugAovIdx, debugAovs, IM_ARRAYSIZE(debugAovs))) {
-            pathTracerAnalysisSettings.debugAov = static_cast<PathTracerDebugAov>(debugAovIdx);
-        }
+        withDisabledControl(!pathTracerAnalysisSettings.enableAnalysisMode,
+                            "Debug AOV requires analysis mode",
+                            [&]() {
+                                if (ImGui::Combo("Debug AOV", &debugAovIdx, debugAovs, IM_ARRAYSIZE(debugAovs))) {
+                                    pathTracerAnalysisSettings.debugAov = static_cast<PathTracerDebugAov>(debugAovIdx);
+                                }
+                            });
 
-        ImGui::SliderInt("Debug A-Trous Iteration", &pathTracerAnalysisSettings.debugAtrousIteration, 0, 4);
+        const bool canSelectAtrousIteration =
+            pathTracerAnalysisSettings.enableAnalysisMode &&
+            pathTracerAnalysisSettings.debugAov == PathTracerDebugAov::AtrousIteration &&
+            pathTracerSettings.enableDenoiser &&
+            pathTracerSettings.denoiserIterations > 1;
+        withDisabledControl(!canSelectAtrousIteration,
+                            "A-Trous iteration is only selectable when analysis mode, the A-Trous debug AOV, and multiple denoiser iterations are active",
+                            [&]() {
+                                ImGui::SliderInt("Debug A-Trous Iteration", &pathTracerAnalysisSettings.debugAtrousIteration, 0, 4);
+                            });
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Environment Lighting");
+        ImGui::Checkbox("Environment NEE", &pathTracerSettings.enableEnvironmentNEE);
+        ImGui::Checkbox("Black Environment", &pathTracerSettings.blackEnvironment);
+
+        const char *envNeeBounceModes[] = {"First Only", "First Two", "All Bounces"};
+        withDisabledControl(!pathTracerSettings.enableEnvironmentNEE,
+                            "Environment NEE bounces only apply when Environment NEE is enabled",
+                            [&]() {
+                                ImGui::Combo("Env NEE Bounces", &pathTracerSettings.environmentNeeBounceMode,
+                                             envNeeBounceModes, IM_ARRAYSIZE(envNeeBounceModes));
+                            });
+        pathTracerSettings.environmentNeeBounceMode = std::clamp(pathTracerSettings.environmentNeeBounceMode, 0, 2);
+
+        const char *envNeeSamplingModes[] = {"Cosine Hemisphere", "Sky Biased"};
+        int envNeeSamplingMode = static_cast<int>(pathTracerSettings.environmentNeeSamplingMode);
+        withDisabledControl(!pathTracerSettings.enableEnvironmentNEE,
+                            "Environment NEE sampling only applies when Environment NEE is enabled",
+                            [&]() {
+                                if (ImGui::Combo("Env NEE Sampling", &envNeeSamplingMode, envNeeSamplingModes, IM_ARRAYSIZE(envNeeSamplingModes))) {
+                                    pathTracerSettings.environmentNeeSamplingMode = static_cast<EnvironmentNeeSamplingMode>(envNeeSamplingMode);
+                                }
+                            });
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("First-Hit Probe Experiment");
+        ImGui::Checkbox("Apply First-Hit Probes", &pathTracerSettings.applyFirstHitProbesToFinal);
+        ImGui::SliderInt("First-Hit Diffuse Samples", &pathTracerSettings.firstHitDiffuseSamples, 1, 8);
+
+        const char *firstHitProbeSamplingModes[] = {
+            "Cosine Hemisphere",
+            "Naive Sun Guide",
+            "Candidate Sun Bounce",
+            "Candidate Average Reference",
+            "Candidate RIS"};
+        int firstHitProbeSamplingMode = static_cast<int>(pathTracerSettings.firstHitProbeSamplingMode);
+        const bool hasFirstHitProbeSamples = pathTracerSettings.firstHitDiffuseSamples > 1;
+        withDisabledControl(!hasFirstHitProbeSamples,
+                            "First-hit probe sampling only applies when First-Hit Diffuse Samples is greater than 1",
+                            [&]() {
+                                if (ImGui::Combo("First-Hit Probe Sampling", &firstHitProbeSamplingMode,
+                                                 firstHitProbeSamplingModes, IM_ARRAYSIZE(firstHitProbeSamplingModes))) {
+                                    pathTracerSettings.firstHitProbeSamplingMode =
+                                        static_cast<FirstHitProbeSamplingMode>(firstHitProbeSamplingMode);
+                                }
+                            });
+
+        const bool usesCandidateProbeMode =
+            pathTracerSettings.firstHitProbeSamplingMode == FirstHitProbeSamplingMode::CandidateSunBounce ||
+            pathTracerSettings.firstHitProbeSamplingMode == FirstHitProbeSamplingMode::CandidateAverageReference ||
+            pathTracerSettings.firstHitProbeSamplingMode == FirstHitProbeSamplingMode::CandidateRis;
+        withDisabledControl(!hasFirstHitProbeSamples || !usesCandidateProbeMode,
+                            "Candidate count only applies to candidate probe sampling modes",
+                            [&]() {
+                                ImGui::SliderInt("First-Hit Candidate Count", &pathTracerSettings.firstHitCandidateCount, 2, 16);
+                            });
     }
 
 }
