@@ -5,7 +5,7 @@ bool testPathTracerBaselineSweepMatrix();
 bool testPathTracerPercentiles();
 bool testPathTracerScoreBudgetGate();
 bool testPathTracerDebugAovContract();
-bool testPathTracerReservoirGiMeasurementContract();
+bool testPathTracerReservoirGiRemoved();
 bool testPathTracerHistoryClampPreservesDimIndirectHistory();
 bool testPathTracerPowerHeuristic();
 
