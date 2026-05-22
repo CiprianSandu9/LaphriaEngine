@@ -1120,15 +1120,7 @@ void UISystem::drawPathTracerDebugLab() {
             "Environment NEE Contribution",
             "First-Hit Bounce Contribution",
             "Secondary Direct Sun Contribution",
-            "Baseline Continuation Contribution",
-            "Reservoir GI Contribution",
-            "Reservoir GI Accepted Luma",
-            "Reservoir GI Candidate Surface Hit",
-            "Reservoir GI Candidate Sun Visible",
-            "Reservoir GI Candidate Positive Weight",
-            "Reservoir GI Selected Weight",
-            "Reservoir GI Local No Light",
-            "Reservoir GI Selected Source"};
+            "Baseline Continuation Contribution"};
         int debugAovIdx = static_cast<int>(pathTracerAnalysisSettings.debugAov);
         if (ImGui::Combo("Debug AOV", &debugAovIdx, debugAovs, IM_ARRAYSIZE(debugAovs))) {
             pathTracerAnalysisSettings.debugAov = static_cast<PathTracerDebugAov>(debugAovIdx);
@@ -1137,243 +1129,6 @@ void UISystem::drawPathTracerDebugLab() {
         ImGui::SliderInt("Debug A-Trous Iteration", &pathTracerAnalysisSettings.debugAtrousIteration, 0, 4);
     }
 
-    if (ImGui::CollapsingHeader("Reservoir GI")) {
-        const char *reservoirGiModes[] = {"Off", "Single Frame", "Temporal", "Temporal + Spatial"};
-        int reservoirGiMode = static_cast<int>(pathTracerSettings.reservoirGiMode);
-        if (ImGui::Combo("Reservoir GI Mode", &reservoirGiMode,
-                         reservoirGiModes, IM_ARRAYSIZE(reservoirGiModes))) {
-            pathTracerSettings.reservoirGiMode =
-                static_cast<PathTracerReservoirGiMode>(reservoirGiMode);
-        }
-        const char *reservoirGiProposalModes[] = {
-            "Cosine",
-            "Sun Guided",
-            "Mixed Cosine + Sun Guided",
-            "Mixed Cosine + History Guide",
-            "Mixed Cosine + Sun Receiver Guide",
-            "Mixed Cosine + Dual Sun Guide",
-            "Mixed Cosine + Sun Receiver + Cache Guide",
-            "Mixed Cosine + Sun Receiver + Cache Reconnect",
-            "Mixed Cosine + Sun Receiver + Bright Surfel"};
-        int reservoirGiProposalMode = static_cast<int>(pathTracerSettings.reservoirGiProposalMode);
-        if (ImGui::Combo("Reservoir GI Proposal", &reservoirGiProposalMode,
-                         reservoirGiProposalModes, IM_ARRAYSIZE(reservoirGiProposalModes))) {
-            pathTracerSettings.reservoirGiProposalMode =
-                static_cast<PathTracerReservoirGiProposalMode>(reservoirGiProposalMode);
-        }
-        const char *reservoirGiCandidateEvaluationModes[] = {
-            "Trace Only",
-            "Unshadowed Sun",
-            "Shadowed Sun",
-            "Shadowed Sun + Cache Continuation"};
-        if (ImGui::Combo("Reservoir GI Candidate Eval", &pathTracerSettings.reservoirGiCandidateEvaluationMode,
-                         reservoirGiCandidateEvaluationModes, IM_ARRAYSIZE(reservoirGiCandidateEvaluationModes))) {
-            pathTracerSettings.reservoirGiCandidateEvaluationMode =
-                std::clamp(pathTracerSettings.reservoirGiCandidateEvaluationMode, 0, 3);
-        }
-        ImGui::SliderInt("Reservoir GI Candidates", &pathTracerSettings.reservoirGiCandidateCount, 1, 4);
-        ImGui::SliderInt("Reservoir Spatial Neighbors", &pathTracerSettings.reservoirGiSpatialNeighborCount, 1, 8);
-        ImGui::Checkbox("Reservoir GI Candidate RIS", &pathTracerSettings.reservoirGiUseCandidateRis);
-        ImGui::Checkbox("Detailed Reservoir Diagnostics", &pathTracerSettings.reservoirGiDetailedDiagnostics);
-        ImGui::Checkbox("Bright Surfel Shadow Only", &pathTracerSettings.reservoirGiBrightSurfelShadowOnly);
-        const char *reservoirAuditModes[] = {
-            "Off",
-            "Current",
-            "No Probe Scale"};
-        int reservoirAuditMode = static_cast<int>(pathTracerSettings.reservoirGiEstimatorAuditMode);
-        if (ImGui::Combo("Reservoir Estimator Audit", &reservoirAuditMode,
-                         reservoirAuditModes, IM_ARRAYSIZE(reservoirAuditModes))) {
-            pathTracerSettings.reservoirGiEstimatorAuditMode =
-                static_cast<PathTracerReservoirGiEstimatorAuditMode>(reservoirAuditMode);
-        }
-        ImGui::SliderInt("Temporal Reuse Budget Divisor", &pathTracerSettings.reservoirGiTemporalBudgetDivisor, 1, 4);
-        ImGui::SliderInt("Spatial Reuse Budget Divisor", &pathTracerSettings.reservoirGiSpatialBudgetDivisor, 1, 4);
-        pathTracerSettings.reservoirGiTemporalBudgetDivisor =
-            std::clamp(pathTracerSettings.reservoirGiTemporalBudgetDivisor, 1, 4);
-        pathTracerSettings.reservoirGiSpatialBudgetDivisor =
-            std::clamp(pathTracerSettings.reservoirGiSpatialBudgetDivisor, 1, 4);
-        ImGui::Text("Reservoir GI Candidates: %u", pathTracerPerfStats.reservoirGiCandidates);
-        ImGui::Text("Reservoir GI Accepted: %u", pathTracerPerfStats.reservoirGiAccepted);
-        ImGui::Text("Reservoir Candidate Surface Hits: %u (%.2f%%)",
-                    pathTracerPerfStats.reservoirGiCandidateSurfaceHits,
-                    pathTracerPerfStats.reservoirGiCandidateSurfaceHitRatio * 100.0f);
-        ImGui::Text("Reservoir Candidate Sun Visible: %u (%.2f%%)",
-                    pathTracerPerfStats.reservoirGiCandidateSunVisible,
-                    pathTracerPerfStats.reservoirGiCandidateSunVisibleRatio * 100.0f);
-        ImGui::Text("Reservoir Candidate Positive Weight: %u (%.2f%%)",
-                    pathTracerPerfStats.reservoirGiCandidatePositiveWeight,
-                    pathTracerPerfStats.reservoirGiCandidatePositiveWeightRatio * 100.0f);
-        ImGui::Text("Reservoir GI Zero Weight: %u", pathTracerPerfStats.reservoirGiZeroWeight);
-        ImGui::Text("Reservoir GI Selected Weight Avg: %.5f", pathTracerPerfStats.reservoirGiSelectedWeightAverage);
-        ImGui::Text("Reservoir GI Target Weight Avg: %.5f", pathTracerPerfStats.reservoirGiTargetWeightAverage);
-        ImGui::Text("Reservoir GI Confidence M Avg: %.5f", pathTracerPerfStats.reservoirGiConfidenceMAvg);
-        ImGui::Text("Reservoir GI Audit Current Luma: %.5f", pathTracerPerfStats.reservoirGiAuditCurrentLuma);
-        ImGui::Text("Reservoir GI Audit Reference Luma: %.5f", pathTracerPerfStats.reservoirGiAuditReferenceLuma);
-        ImGui::Text("Reservoir GI Audit Relative Error: %.2f%%",
-                    pathTracerPerfStats.reservoirGiAuditRelativeErrorPct);
-        ImGui::Text("Reservoir GI Audit Probe Scale: %.5f", pathTracerPerfStats.reservoirGiAuditProbeScale);
-        ImGui::Text("Reservoir GI Selected Local: %u", pathTracerPerfStats.reservoirGiSelectedLocal);
-        ImGui::Text("Reservoir GI Selected Temporal: %u", pathTracerPerfStats.reservoirGiSelectedTemporal);
-        ImGui::Text("Reservoir GI Selected Spatial: %u", pathTracerPerfStats.reservoirGiSelectedSpatial);
-        ImGui::Text("Reservoir GI Selected Cache: %u", pathTracerPerfStats.reservoirGiSelectedCache);
-        ImGui::Text("Reservoir GI Selected Cache Reconnect: %u",
-                    pathTracerPerfStats.reservoirGiSelectedCacheReconnect);
-        ImGui::Text("Reservoir GI Local Valid: %u / %u (%.2f%%)",
-                    pathTracerPerfStats.reservoirGiLocalValidSamples,
-                    pathTracerPerfStats.reservoirGiCandidates,
-                    pathTracerPerfStats.reservoirGiLocalValidRatio * 100.0f);
-        ImGui::Text("Reservoir GI Local Miss: %u | positive %u",
-                    pathTracerPerfStats.reservoirGiLocalMissCandidates,
-                    pathTracerPerfStats.reservoirGiLocalMissPositiveWeight);
-        ImGui::Text("Reservoir GI Local Surface Invalid: %u", pathTracerPerfStats.reservoirGiLocalSurfaceInvalid);
-        ImGui::Text("Reservoir GI Local Reject Geometry: %u", pathTracerPerfStats.reservoirGiLocalRejectGeometry);
-        ImGui::Text("Reservoir GI Local Reject No Light: %u", pathTracerPerfStats.reservoirGiLocalRejectNoLight);
-        ImGui::Text("Reservoir GI Local Reject Zero Target: %u", pathTracerPerfStats.reservoirGiLocalRejectZeroTarget);
-        ImGui::Text("Reservoir GI Local Reject Bad PDF: %u", pathTracerPerfStats.reservoirGiLocalRejectBadPdf);
-        ImGui::Text("Reservoir GI Accepted Local Surface: %u", pathTracerPerfStats.reservoirGiAcceptedLocalSurface);
-        ImGui::Text("Reservoir GI Accepted Local Miss: %u", pathTracerPerfStats.reservoirGiAcceptedLocalMiss);
-        ImGui::Text("Reservoir GI Local Shadow Rays: %u", pathTracerPerfStats.reservoirGiLocalShadowRays);
-        ImGui::Text("Reservoir GI Temporal Reconnect Rays: %u", pathTracerPerfStats.reservoirGiTemporalReconnectRays);
-        ImGui::Text("Reservoir GI Temporal Shadow Rays: %u", pathTracerPerfStats.reservoirGiTemporalShadowRays);
-        ImGui::Text("Reservoir GI History Guide Used: %u", pathTracerPerfStats.reservoirGiHistoryGuideUsed);
-        ImGui::Text("Reservoir GI History Guide Rejected Low Weight: %u",
-                    pathTracerPerfStats.reservoirGiHistoryGuideRejectedLowWeight);
-        ImGui::Text("Reservoir GI History Guide Fallback Cosine: %u",
-                    pathTracerPerfStats.reservoirGiHistoryGuideFallbackCosine);
-        ImGui::Text("Reservoir GI History Guide Reject Reprojection: %u",
-                    pathTracerPerfStats.reservoirGiHistoryGuideRejectReprojection);
-        ImGui::Text("Reservoir GI History Guide Reject Load: %u",
-                    pathTracerPerfStats.reservoirGiHistoryGuideRejectLoad);
-        ImGui::Text("Reservoir GI History Guide Reject Geometry: %u",
-                    pathTracerPerfStats.reservoirGiHistoryGuideRejectGeometry);
-        ImGui::Text("Reservoir GI History Guide Neighbor Searches: %u",
-                    pathTracerPerfStats.reservoirGiHistoryGuideNeighborSearches);
-        ImGui::Text("Reservoir GI History Guide Neighbor Hits: %u",
-                    pathTracerPerfStats.reservoirGiHistoryGuideNeighborHits);
-        ImGui::Text("Reservoir GI History Guide Neighbor Misses: %u",
-                    pathTracerPerfStats.reservoirGiHistoryGuideNeighborMisses);
-        ImGui::Text("Reservoir GI Receiver Cache Store: %u", pathTracerPerfStats.reservoirGiReceiverCacheStore);
-        ImGui::Text("Reservoir GI Receiver Cache Attempts: %u", pathTracerPerfStats.reservoirGiReceiverCacheAttempt);
-        ImGui::Text("Reservoir GI Receiver Cache Hits: %u", pathTracerPerfStats.reservoirGiReceiverCacheHit);
-        ImGui::Text("Reservoir GI Receiver Cache Misses: %u", pathTracerPerfStats.reservoirGiReceiverCacheMiss);
-        ImGui::Text("Reservoir GI Receiver Cache No Light: %u",
-                    pathTracerPerfStats.reservoirGiReceiverCacheRejectNoLight);
-        ImGui::Text("Reservoir GI Receiver Cache Accepted: %u", pathTracerPerfStats.reservoirGiReceiverCacheAccepted);
-        ImGui::Text("Reservoir GI Receiver Reconnect Attempts: %u",
-                    pathTracerPerfStats.reservoirGiReceiverReconnectAttempt);
-        ImGui::Text("Reservoir GI Receiver Reconnect Hits: %u",
-                    pathTracerPerfStats.reservoirGiReceiverReconnectHit);
-        ImGui::Text("Reservoir GI Receiver Reconnect Misses: %u",
-                    pathTracerPerfStats.reservoirGiReceiverReconnectMiss);
-        ImGui::Text("Reservoir GI Receiver Reconnect Reject Visibility: %u",
-                    pathTracerPerfStats.reservoirGiReceiverReconnectRejectVisibility);
-        ImGui::Text("Reservoir GI Receiver Reconnect Reject Target: %u",
-                    pathTracerPerfStats.reservoirGiReceiverReconnectRejectTarget);
-        ImGui::Text("Reservoir GI Receiver Reconnect Accepted: %u",
-                    pathTracerPerfStats.reservoirGiReceiverReconnectAccepted);
-        ImGui::Text("Reservoir GI Receiver Cache Continuation Attempts: %u",
-                    pathTracerPerfStats.reservoirGiReceiverCacheContinuationAttempt);
-        ImGui::Text("Reservoir GI Receiver Cache Continuation Hits: %u",
-                    pathTracerPerfStats.reservoirGiReceiverCacheContinuationHit);
-        ImGui::Text("Reservoir GI Receiver Cache Continuation Misses: %u",
-                    pathTracerPerfStats.reservoirGiReceiverCacheContinuationMiss);
-        ImGui::Text("Reservoir GI Receiver Cache Continuation Accepted: %u",
-                    pathTracerPerfStats.reservoirGiReceiverCacheContinuationAccepted);
-        ImGui::Text("Reservoir GI Selected Bright Surfel: %u", pathTracerPerfStats.reservoirGiSelectedBrightSurfel);
-        ImGui::Text("Reservoir GI Bright Surfel Store: %u", pathTracerPerfStats.reservoirGiBrightSurfelStore);
-        ImGui::Text("Reservoir GI Bright Surfel Attempts: %u", pathTracerPerfStats.reservoirGiBrightSurfelAttempt);
-        ImGui::Text("Reservoir GI Bright Surfel Hits: %u", pathTracerPerfStats.reservoirGiBrightSurfelHit);
-        ImGui::Text("Reservoir GI Bright Surfel Misses: %u", pathTracerPerfStats.reservoirGiBrightSurfelMiss);
-        ImGui::Text("Reservoir GI Bright Surfel Reject Visibility: %u", pathTracerPerfStats.reservoirGiBrightSurfelRejectVisibility);
-        ImGui::Text("Reservoir GI Bright Surfel Reject Geometry: %u", pathTracerPerfStats.reservoirGiBrightSurfelRejectGeometry);
-        ImGui::Text("Reservoir GI Bright Surfel Reject Target: %u", pathTracerPerfStats.reservoirGiBrightSurfelRejectTarget);
-        ImGui::Text("Reservoir GI Bright Surfel Accepted: %u", pathTracerPerfStats.reservoirGiBrightSurfelAccepted);
-        ImGui::Text("Reservoir GI Bright Surfel Precheck Reject Target: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelPrecheckRejectTarget);
-        ImGui::Text("Reservoir GI Bright Surfel Training Attempts: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelTrainingAttempt);
-        ImGui::Text("Reservoir GI Bright Surfel Training Stores: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelTrainingStore);
-        ImGui::Text("Reservoir GI Bright Surfel Training Reject Geometry: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelTrainingRejectGeometry);
-        ImGui::Text("Reservoir GI Bright Surfel Training Reject Target: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelTrainingRejectTarget);
-        ImGui::Text("Reservoir GI Bright Surfel Selector Reject Geometry: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectGeometry);
-        ImGui::Text("Reservoir GI Bright Surfel Selector Reject Target: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectTarget);
-        ImGui::Text("Reservoir GI Bright Surfel Selector Viable: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelSelectorViable);
-        ImGui::Text("Reservoir GI Bright Surfel Indexed Query: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelIndexedQuery);
-        ImGui::Text("Reservoir GI Bright Surfel Indexed Empty: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelIndexedEmpty);
-        ImGui::Text("Reservoir GI Bright Surfel Indexed Probe: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelIndexedProbe);
-        ImGui::Text("Reservoir GI Bright Surfel Selector Reject Distance: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectDistance);
-        ImGui::Text("Reservoir GI Bright Surfel Selector Reject Receiver Hemisphere: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectReceiverHemisphere);
-        ImGui::Text("Reservoir GI Bright Surfel Selector Reject Surfel Hemisphere: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectSurfelHemisphere);
-        ImGui::Text("Reservoir GI Bright Surfel Selector Reject Invalid Vector: %u",
-                    pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectInvalidVector);
-        ImGui::Text("Reservoir GI Temporal: accepted %u | rejected %u",
-                    pathTracerPerfStats.reservoirGiTemporalAccepted,
-                    pathTracerPerfStats.reservoirGiTemporalRejected);
-        ImGui::Text("Reservoir GI Temporal Reuse: attempts %u | geometry %u | visibility %u | light %u",
-                    pathTracerPerfStats.reservoirGiTemporalReuseAttempts,
-                    pathTracerPerfStats.reservoirGiTemporalRejectGeometry,
-                    pathTracerPerfStats.reservoirGiTemporalRejectVisibility,
-                    pathTracerPerfStats.reservoirGiTemporalRejectLight);
-        ImGui::Text("Reservoir GI Spatial: accepted %u | rejected %u",
-                    pathTracerPerfStats.reservoirGiSpatialAccepted,
-                    pathTracerPerfStats.reservoirGiSpatialRejected);
-        ImGui::Text("Reservoir GI Accepted Avg Luma: %.5f", pathTracerPerfStats.reservoirGiAcceptedAvgLuma);
-        ImGui::Text("Reservoir GI Accepted Luma Sum: %.1f", pathTracerPerfStats.reservoirGiAcceptedLumaSum);
-    }
-
-    if (ImGui::CollapsingHeader("Scenario: Sponza GI Validation")) {
-        const char *sponzaValidationViews[] = {
-            "Dark Courtyard",
-            "Sunlit Courtyard Wall",
-            "Mid-Depth Interior"};
-        int sponzaValidationView = static_cast<int>(pathTracerAnalysisSettings.sponzaValidationView);
-        if (ImGui::Combo("Sponza Validation View",
-                         &sponzaValidationView,
-                         sponzaValidationViews,
-                         IM_ARRAYSIZE(sponzaValidationViews))) {
-            pathTracerAnalysisSettings.sponzaValidationView =
-                static_cast<PathTracerSponzaValidationView>(sponzaValidationView);
-        }
-        if (ImGui::Button("Apply Sponza Validation View")) {
-            pathTracerAnalysisSettings.applySponzaValidationView = true;
-            pathTracerAnalysisSettings.enableAnalysisMode = true;
-        }
-        if (ImGui::Button("Load Sponza GI Validation Preset")) {
-            pathTracerAnalysisSettings.loadSponzaGiValidationPreset = true;
-            pathTracerAnalysisSettings.applySponzaValidationView = true;
-            pathTracerAnalysisSettings.enableAnalysisMode = true;
-        }
-        if (ImGui::Button("Run Sponza GI Perf Sweep")) {
-            pathTracerAnalysisSettings.loadSponzaGiValidationPreset = true;
-            pathTracerAnalysisSettings.runSponzaGiPerfSweep = true;
-            pathTracerAnalysisSettings.enableAnalysisMode = true;
-        }
-        if (ImGui::Button("Run Bright Surfel Shadow Sweep")) {
-            pathTracerAnalysisSettings.loadSponzaGiValidationPreset = true;
-            pathTracerAnalysisSettings.runBrightSurfelShadowEvaluationSweep = true;
-            pathTracerAnalysisSettings.enableAnalysisMode = true;
-        }
-        if (ImGui::Button("Run Bright Surfel Proposal Sweep")) {
-            pathTracerAnalysisSettings.loadSponzaGiValidationPreset = true;
-            pathTracerAnalysisSettings.runBrightSurfelProposalEvaluationSweep = true;
-            pathTracerAnalysisSettings.enableAnalysisMode = true;
-        }
-        ImGui::SliderInt("Sponza Sweep Warmup", &pathTracerAnalysisSettings.sponzaGiSweepWarmupFrames, 1, 60);
-        ImGui::SliderInt("Sponza Sweep Samples", &pathTracerAnalysisSettings.sponzaGiSweepSampleFrames, 4, 240);
-        ImGui::Checkbox("Lock Benchmark Scene (sponza_runtime.glb)", &pathTracerAnalysisSettings.lockBenchmarkScene);
-    }
 }
 
 void UISystem::drawPathTracerBenchmarkControls() {
@@ -1383,6 +1138,7 @@ void UISystem::drawPathTracerBenchmarkControls() {
 
     ImGui::Checkbox("Benchmark Active", &pathTracerAnalysisSettings.benchmarkActive);
     ImGui::Checkbox("Run Baseline Sweep", &pathTracerAnalysisSettings.runBaselineSweep);
+    ImGui::Checkbox("Lock Benchmark Scene", &pathTracerAnalysisSettings.lockBenchmarkScene);
     ImGui::Checkbox("Run Physical Sanity Checks", &pathTracerAnalysisSettings.runPhysicalSanityChecks);
     ImGui::Checkbox("Freeze Camera Input During Benchmark", &pathTracerAnalysisSettings.freezeCameraInputDuringBenchmark);
     ImGui::Checkbox("Adaptive Sampling", &pathTracerAnalysisSettings.adaptiveSampling);
@@ -1481,8 +1237,6 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         pathTracerSettings.firstHitCandidateCount = std::clamp(pathTracerSettings.firstHitCandidateCount, 2, 16);
         pathTracerAnalysisSettings.warmupFrames = std::clamp(pathTracerAnalysisSettings.warmupFrames, 30, 600);
         pathTracerAnalysisSettings.sampleFrames = std::clamp(pathTracerAnalysisSettings.sampleFrames, 60, 1200);
-        pathTracerAnalysisSettings.sponzaGiSweepWarmupFrames = std::clamp(pathTracerAnalysisSettings.sponzaGiSweepWarmupFrames, 1, 60);
-        pathTracerAnalysisSettings.sponzaGiSweepSampleFrames = std::clamp(pathTracerAnalysisSettings.sponzaGiSweepSampleFrames, 4, 240);
         pathTracerAnalysisSettings.minSampleFrames = std::clamp(pathTracerAnalysisSettings.minSampleFrames, 60, pathTracerAnalysisSettings.sampleFrames);
         pathTracerAnalysisSettings.convergenceWindowFrames = std::clamp(pathTracerAnalysisSettings.convergenceWindowFrames, 20, 240);
         pathTracerAnalysisSettings.p95ConvergenceThreshold = std::clamp(pathTracerAnalysisSettings.p95ConvergenceThreshold, 0.005f, 0.10f);

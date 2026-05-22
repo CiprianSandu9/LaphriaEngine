@@ -42,21 +42,10 @@ using namespace Laphria;
 namespace
 {
 constexpr uint32_t    kPtTimestampQueryCountPerFrame         = 8;
-constexpr uint32_t    kPtMaterialReservoirProposalShift      = 0u;
-constexpr uint32_t    kPtMaterialReservoirProposalMask       = 0xFu;
-constexpr uint32_t    kPtMaterialReservoirModeShift          = 18u;
-constexpr uint32_t    kPtMaterialReservoirModeMask           = 0x3u;
-constexpr uint32_t    kPtMaterialReservoirCandidateShift     = 20u;
-constexpr uint32_t    kPtMaterialReservoirCandidateMask      = 0x3u;
-constexpr uint32_t    kPtMaterialReservoirRisShift           = 22u;
-constexpr uint32_t    kPtMaterialReservoirSpatialShift       = 23u;
-constexpr uint32_t    kPtMaterialReservoirSpatialMask        = 0x7u;
 constexpr uint32_t    kPtMaterialMaxBounceShift              = 26u;
 constexpr uint32_t    kPtMaterialMaxBounceMask               = 0x3u;
 constexpr uint32_t    kPtMaterialDirectSunShift              = 28u;
 constexpr uint32_t    kPtMaterialDirectSunMask               = 0x3u;
-constexpr uint32_t    kPtMaterialReservoirEvalShift          = 30u;
-constexpr uint32_t    kPtMaterialReservoirEvalMask           = 0x3u;
 constexpr uint32_t    kPtFlagsEnvironmentNeeBit              = 1u << 0u;
 constexpr uint32_t    kPtFlagsBlackEnvironmentBit            = 1u << 1u;
 constexpr uint32_t    kPtFlagsApplyFirstHitProbesBit         = 1u << 2u;
@@ -68,16 +57,8 @@ constexpr uint32_t    kPtFlagsFirstHitCandidateCountShift    = 9u;
 constexpr uint32_t    kPtFlagsFirstHitCandidateCountMask     = 0xFu;
 constexpr uint32_t    kPtFlagsFirstHitProbeSamplingShift     = 13u;
 constexpr uint32_t    kPtFlagsFirstHitProbeSamplingMask      = 0x7u;
-constexpr uint32_t    kPtFlagsReservoirGiDetailedDiagnosticsBit = 1u << 16u;
-constexpr uint32_t    kPtFlagsReservoirTemporalBudgetShift   = 17u;
-constexpr uint32_t    kPtFlagsReservoirTemporalBudgetMask    = 0x3u;
-constexpr uint32_t    kPtFlagsReservoirSpatialBudgetShift    = 19u;
-constexpr uint32_t    kPtFlagsReservoirSpatialBudgetMask     = 0x3u;
 constexpr uint32_t    kPtFlagsEnvironmentBounceShift         = 21u;
 constexpr uint32_t    kPtFlagsEnvironmentBounceMask          = 0x3u;
-constexpr uint32_t    kPtFlagsReservoirEstimatorAuditShift   = 23u;
-constexpr uint32_t    kPtFlagsReservoirEstimatorAuditMask    = 0x3u;
-constexpr uint32_t    kPtFlagsReservoirBrightSurfelShadowOnlyBit = 1u << 25u;
 constexpr uint32_t    RESERVOIR_GI_RECEIVER_CACHE_CURRENT_BINDING = 14u;
 constexpr uint32_t    RESERVOIR_GI_RECEIVER_CACHE_HISTORY_BINDING = 15u;
 constexpr uint32_t    RESERVOIR_GI_BRIGHT_SURFEL_CURRENT_BINDING = 16u;
@@ -106,57 +87,14 @@ uint32_t encodePathTracerMaxBounceCode(int maxBounces)
 	return 2u;
 }
 
-uint32_t encodeReservoirGiBudgetDivisor(int divisor)
-{
-	if (divisor <= 1)
-	{
-		return 0u;
-	}
-	if (divisor <= 2)
-	{
-		return 1u;
-	}
-	if (divisor <= 3)
-	{
-		return 2u;
-	}
-	return 3u;
-}
-
-UISystem::PathTracerReservoirGiProposalMode
-normalizeReservoirGiProposalMode(UISystem::PathTracerReservoirGiProposalMode mode)
-{
-	const int maxMode = static_cast<int>(
-	    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverBrightSurfel);
-	const int clamped = std::clamp(static_cast<int>(mode), 0, maxMode);
-	return static_cast<UISystem::PathTracerReservoirGiProposalMode>(clamped);
-}
-
 uint32_t packPathTracerMaterialSettings(const UISystem::PathTracerSettings &settings)
 {
-	const auto reservoirProposalMode = normalizeReservoirGiProposalMode(settings.reservoirGiProposalMode);
-	return packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.reservoirGiCandidateEvaluationMode, 0, 3)),
-	                          kPtMaterialReservoirEvalShift,
-	                          kPtMaterialReservoirEvalMask) |
-	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.directSunBounceMode, 0, 2)),
+	return packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.directSunBounceMode, 0, 2)),
 	                          kPtMaterialDirectSunShift,
 	                          kPtMaterialDirectSunMask) |
 	       packPathTracerBits(encodePathTracerMaxBounceCode(settings.pathTracerMaxBounces),
 	                          kPtMaterialMaxBounceShift,
-	                          kPtMaterialMaxBounceMask) |
-	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.reservoirGiSpatialNeighborCount, 1, 8) - 1),
-	                          kPtMaterialReservoirSpatialShift,
-	                          kPtMaterialReservoirSpatialMask) |
-	       (settings.reservoirGiUseCandidateRis ? (1u << kPtMaterialReservoirRisShift) : 0u) |
-	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.reservoirGiCandidateCount, 1, 4) - 1),
-	                          kPtMaterialReservoirCandidateShift,
-	                          kPtMaterialReservoirCandidateMask) |
-	       packPathTracerBits(static_cast<uint32_t>(settings.reservoirGiMode),
-	                          kPtMaterialReservoirModeShift,
-	                          kPtMaterialReservoirModeMask) |
-	       packPathTracerBits(static_cast<uint32_t>(reservoirProposalMode),
-	                          kPtMaterialReservoirProposalShift,
-	                          kPtMaterialReservoirProposalMask);
+	                          kPtMaterialMaxBounceMask);
 }
 
 uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
@@ -166,7 +104,6 @@ uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
 	return (settings.enableEnvironmentNEE ? kPtFlagsEnvironmentNeeBit : 0u) |
 	       (settings.blackEnvironment ? kPtFlagsBlackEnvironmentBit : 0u) |
 	       (settings.applyFirstHitProbesToFinal ? kPtFlagsApplyFirstHitProbesBit : 0u) |
-	       (settings.reservoirGiDetailedDiagnostics ? kPtFlagsReservoirGiDetailedDiagnosticsBit : 0u) |
 	       packPathTracerBits(static_cast<uint32_t>(settings.environmentNeeSamplingMode),
 	                          kPtFlagsEnvironmentSamplingShift,
 	                          kPtFlagsEnvironmentSamplingMask) |
@@ -179,20 +116,9 @@ uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
 	       packPathTracerBits(static_cast<uint32_t>(settings.firstHitProbeSamplingMode),
 	                          kPtFlagsFirstHitProbeSamplingShift,
 	                          kPtFlagsFirstHitProbeSamplingMask) |
-	       packPathTracerBits(encodeReservoirGiBudgetDivisor(settings.reservoirGiTemporalBudgetDivisor),
-	                          kPtFlagsReservoirTemporalBudgetShift,
-	                          kPtFlagsReservoirTemporalBudgetMask) |
-	       packPathTracerBits(encodeReservoirGiBudgetDivisor(settings.reservoirGiSpatialBudgetDivisor),
-	                          kPtFlagsReservoirSpatialBudgetShift,
-	                          kPtFlagsReservoirSpatialBudgetMask) |
 	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.environmentNeeBounceMode, 0, 2)),
 	                          kPtFlagsEnvironmentBounceShift,
-	                          kPtFlagsEnvironmentBounceMask) |
-	       (settings.reservoirGiBrightSurfelShadowOnly ? kPtFlagsReservoirBrightSurfelShadowOnlyBit : 0u) |
-	       packPathTracerBits(static_cast<uint32_t>(
-	                              std::clamp(static_cast<int>(settings.reservoirGiEstimatorAuditMode), 0, 2)),
-	                          kPtFlagsReservoirEstimatorAuditShift,
-	                          kPtFlagsReservoirEstimatorAuditMask);
+	                          kPtFlagsEnvironmentBounceMask);
 }
 
 std::filesystem::path resolveProjectRootPath()
@@ -310,13 +236,6 @@ const std::array<SponzaScenarioPreset, 3> &sponzaScenarioPresets()
 	        glm::radians(180.0f),
 	        glm::normalize(glm::vec3(-0.35f, -1.0f, 0.45f))}};
 	return presets;
-}
-
-const SponzaScenarioPreset &sponzaScenarioPresetForView(UISystem::PathTracerSponzaValidationView view)
-{
-	const auto &presets = sponzaScenarioPresets();
-	const int   index   = std::clamp(static_cast<int>(view), 0, static_cast<int>(presets.size() - 1));
-	return presets[static_cast<size_t>(index)];
 }
 
 SurfelPathTracerStaticSettingsSnapshot makeSurfelPathTracerStaticSettingsSnapshot(
@@ -579,24 +498,6 @@ void EngineCore::mainLoop()
 		updatePerformanceWindowTitle(deltaTime);
 
 		glfwPollEvents();
-		loadPathTracerSponzaGiValidationPresetIfRequested();
-		if (ui.pathTracerAnalysisSettings.runSponzaGiPerfSweep)
-		{
-			startPathTracerSponzaGiPerfSweep();
-		}
-		if (ui.pathTracerAnalysisSettings.runBrightSurfelShadowEvaluationSweep)
-		{
-			startPathTracerBrightSurfelShadowEvaluationSweep();
-		}
-		if (ui.pathTracerAnalysisSettings.runBrightSurfelProposalEvaluationSweep)
-		{
-			startPathTracerBrightSurfelProposalEvaluationSweep();
-		}
-		if (ui.pathTracerAnalysisSettings.applySponzaValidationView)
-		{
-			ui.pathTracerAnalysisSettings.applySponzaValidationView = false;
-			applySponzaValidationPreset(ui.pathTracerAnalysisSettings.sponzaValidationView);
-		}
 		loadPathTracerBenchmarkSceneIfNeeded();
 		updatePathTracerBenchmark(deltaTime);
 		updatePathTracerPhysicalSanityChecks(deltaTime);
@@ -2550,175 +2451,6 @@ void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
 	ui.pathTracerPerfStats.skyHitCount           = counters->skyHitCount;
 	ui.pathTracerPerfStats.fireflyClampCount     = counters->fireflyClampCount;
 	ui.pathTracerPerfStats.pixelSampleCount      = counters->pixelCount;
-	ui.pathTracerPerfStats.reservoirGiCandidates                  = counters->reservoirGiCandidates;
-	ui.pathTracerPerfStats.reservoirGiAccepted                    = counters->reservoirGiAccepted;
-	ui.pathTracerPerfStats.reservoirGiCandidateSurfaceHits        = counters->reservoirGiCandidateSurfaceHits;
-	ui.pathTracerPerfStats.reservoirGiCandidateSunVisible         = counters->reservoirGiCandidateSunVisible;
-	ui.pathTracerPerfStats.reservoirGiCandidatePositiveWeight     = counters->reservoirGiCandidatePositiveWeight;
-	ui.pathTracerPerfStats.reservoirGiZeroWeight                  = counters->reservoirGiZeroWeight;
-	ui.pathTracerPerfStats.reservoirGiTemporalAccepted            = counters->reservoirGiTemporalAccepted;
-	ui.pathTracerPerfStats.reservoirGiTemporalRejected            = counters->reservoirGiTemporalRejected;
-	ui.pathTracerPerfStats.reservoirGiTemporalReuseAttempts       = counters->reservoirGiTemporalReuseAttempts;
-	ui.pathTracerPerfStats.reservoirGiTemporalRejectGeometry      = counters->reservoirGiTemporalRejectGeometry;
-	ui.pathTracerPerfStats.reservoirGiTemporalRejectVisibility    = counters->reservoirGiTemporalRejectVisibility;
-	ui.pathTracerPerfStats.reservoirGiTemporalRejectLight         = counters->reservoirGiTemporalRejectLight;
-	ui.pathTracerPerfStats.reservoirGiSpatialAccepted             = counters->reservoirGiSpatialAccepted;
-	ui.pathTracerPerfStats.reservoirGiSpatialRejected             = counters->reservoirGiSpatialRejected;
-	ui.pathTracerPerfStats.reservoirGiSelectedLocal               = counters->reservoirGiSelectedLocal;
-	ui.pathTracerPerfStats.reservoirGiSelectedTemporal            = counters->reservoirGiSelectedTemporal;
-	ui.pathTracerPerfStats.reservoirGiSelectedSpatial             = counters->reservoirGiSelectedSpatial;
-	ui.pathTracerPerfStats.reservoirGiSelectedCache               = counters->reservoirGiSelectedCache;
-	ui.pathTracerPerfStats.reservoirGiSelectedCacheReconnect      = counters->reservoirGiSelectedCacheReconnect;
-	ui.pathTracerPerfStats.reservoirGiLocalSurfaceHits            = counters->reservoirGiLocalSurfaceHits;
-	ui.pathTracerPerfStats.reservoirGiLocalValidSamples           = counters->reservoirGiLocalValidSamples;
-	ui.pathTracerPerfStats.reservoirGiLocalMissCandidates         = counters->reservoirGiLocalMissCandidates;
-	ui.pathTracerPerfStats.reservoirGiLocalMissPositiveWeight     = counters->reservoirGiLocalMissPositiveWeight;
-	ui.pathTracerPerfStats.reservoirGiLocalSurfaceInvalid         = counters->reservoirGiLocalSurfaceInvalid;
-	ui.pathTracerPerfStats.reservoirGiLocalRejectGeometry         = counters->reservoirGiLocalRejectGeometry;
-	ui.pathTracerPerfStats.reservoirGiLocalRejectNoLight          = counters->reservoirGiLocalRejectNoLight;
-	ui.pathTracerPerfStats.reservoirGiLocalRejectZeroTarget       = counters->reservoirGiLocalRejectZeroTarget;
-	ui.pathTracerPerfStats.reservoirGiLocalRejectBadPdf           = counters->reservoirGiLocalRejectBadPdf;
-	ui.pathTracerPerfStats.reservoirGiAcceptedLocalSurface        = counters->reservoirGiAcceptedLocalSurface;
-	ui.pathTracerPerfStats.reservoirGiAcceptedLocalMiss           = counters->reservoirGiAcceptedLocalMiss;
-	ui.pathTracerPerfStats.reservoirGiLocalShadowRays             = counters->reservoirGiLocalShadowRays;
-	ui.pathTracerPerfStats.reservoirGiTemporalReconnectRays       = counters->reservoirGiTemporalReconnectRays;
-	ui.pathTracerPerfStats.reservoirGiTemporalShadowRays          = counters->reservoirGiTemporalShadowRays;
-	ui.pathTracerPerfStats.reservoirGiHistoryGuideUsed            = counters->reservoirGiHistoryGuideUsed;
-	ui.pathTracerPerfStats.reservoirGiHistoryGuideRejectedLowWeight =
-	    counters->reservoirGiHistoryGuideRejectedLowWeight;
-	ui.pathTracerPerfStats.reservoirGiHistoryGuideFallbackCosine =
-	    counters->reservoirGiHistoryGuideFallbackCosine;
-	ui.pathTracerPerfStats.reservoirGiHistoryGuideRejectReprojection =
-	    counters->reservoirGiHistoryGuideRejectReprojection;
-	ui.pathTracerPerfStats.reservoirGiHistoryGuideRejectLoad =
-	    counters->reservoirGiHistoryGuideRejectLoad;
-	ui.pathTracerPerfStats.reservoirGiHistoryGuideRejectGeometry =
-	    counters->reservoirGiHistoryGuideRejectGeometry;
-	ui.pathTracerPerfStats.reservoirGiHistoryGuideNeighborSearches =
-	    counters->reservoirGiHistoryGuideNeighborSearches;
-	ui.pathTracerPerfStats.reservoirGiHistoryGuideNeighborHits =
-	    counters->reservoirGiHistoryGuideNeighborHits;
-	ui.pathTracerPerfStats.reservoirGiHistoryGuideNeighborMisses =
-	    counters->reservoirGiHistoryGuideNeighborMisses;
-	ui.pathTracerPerfStats.reservoirGiReceiverCacheStore =
-	    counters->reservoirGiReceiverCacheStore;
-	ui.pathTracerPerfStats.reservoirGiReceiverCacheAttempt =
-	    counters->reservoirGiReceiverCacheAttempt;
-	ui.pathTracerPerfStats.reservoirGiReceiverCacheHit =
-	    counters->reservoirGiReceiverCacheHit;
-	ui.pathTracerPerfStats.reservoirGiReceiverCacheMiss =
-	    counters->reservoirGiReceiverCacheMiss;
-	ui.pathTracerPerfStats.reservoirGiReceiverCacheRejectNoLight =
-	    counters->reservoirGiReceiverCacheRejectNoLight;
-	ui.pathTracerPerfStats.reservoirGiReceiverCacheAccepted =
-	    counters->reservoirGiReceiverCacheAccepted;
-	ui.pathTracerPerfStats.reservoirGiReceiverReconnectAttempt =
-	    counters->reservoirGiReceiverReconnectAttempt;
-	ui.pathTracerPerfStats.reservoirGiReceiverReconnectHit =
-	    counters->reservoirGiReceiverReconnectHit;
-	ui.pathTracerPerfStats.reservoirGiReceiverReconnectMiss =
-	    counters->reservoirGiReceiverReconnectMiss;
-	ui.pathTracerPerfStats.reservoirGiReceiverReconnectRejectVisibility =
-	    counters->reservoirGiReceiverReconnectRejectVisibility;
-	ui.pathTracerPerfStats.reservoirGiReceiverReconnectRejectTarget =
-	    counters->reservoirGiReceiverReconnectRejectTarget;
-	ui.pathTracerPerfStats.reservoirGiReceiverReconnectAccepted =
-	    counters->reservoirGiReceiverReconnectAccepted;
-	ui.pathTracerPerfStats.reservoirGiReceiverCacheContinuationAttempt =
-	    counters->reservoirGiReceiverCacheContinuationAttempt;
-	ui.pathTracerPerfStats.reservoirGiReceiverCacheContinuationHit =
-	    counters->reservoirGiReceiverCacheContinuationHit;
-	ui.pathTracerPerfStats.reservoirGiReceiverCacheContinuationMiss =
-	    counters->reservoirGiReceiverCacheContinuationMiss;
-	ui.pathTracerPerfStats.reservoirGiReceiverCacheContinuationAccepted =
-	    counters->reservoirGiReceiverCacheContinuationAccepted;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelStore =
-	    counters->reservoirGiBrightSurfelStore;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelAttempt =
-	    counters->reservoirGiBrightSurfelAttempt;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelHit =
-	    counters->reservoirGiBrightSurfelHit;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelMiss =
-	    counters->reservoirGiBrightSurfelMiss;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelRejectVisibility =
-	    counters->reservoirGiBrightSurfelRejectVisibility;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelRejectGeometry =
-	    counters->reservoirGiBrightSurfelRejectGeometry;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelRejectTarget =
-	    counters->reservoirGiBrightSurfelRejectTarget;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelAccepted =
-	    counters->reservoirGiBrightSurfelAccepted;
-	ui.pathTracerPerfStats.reservoirGiSelectedBrightSurfel =
-	    counters->reservoirGiSelectedBrightSurfel;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelPrecheckRejectTarget =
-	    counters->reservoirGiBrightSurfelPrecheckRejectTarget;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelTrainingAttempt =
-	    counters->reservoirGiBrightSurfelTrainingAttempt;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelTrainingStore =
-	    counters->reservoirGiBrightSurfelTrainingStore;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelTrainingRejectGeometry =
-	    counters->reservoirGiBrightSurfelTrainingRejectGeometry;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelTrainingRejectTarget =
-	    counters->reservoirGiBrightSurfelTrainingRejectTarget;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectGeometry =
-	    counters->reservoirGiBrightSurfelSelectorRejectGeometry;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectTarget =
-	    counters->reservoirGiBrightSurfelSelectorRejectTarget;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorViable =
-	    counters->reservoirGiBrightSurfelSelectorViable;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelIndexedQuery =
-	    counters->reservoirGiBrightSurfelIndexedQuery;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelIndexedEmpty =
-	    counters->reservoirGiBrightSurfelIndexedEmpty;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelIndexedProbe =
-	    counters->reservoirGiBrightSurfelIndexedProbe;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectDistance =
-	    counters->reservoirGiBrightSurfelSelectorRejectDistance;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectReceiverHemisphere =
-	    counters->reservoirGiBrightSurfelSelectorRejectReceiverHemisphere;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectSurfelHemisphere =
-	    counters->reservoirGiBrightSurfelSelectorRejectSurfelHemisphere;
-	ui.pathTracerPerfStats.reservoirGiBrightSurfelSelectorRejectInvalidVector =
-	    counters->reservoirGiBrightSurfelSelectorRejectInvalidVector;
-	ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum =
-	    static_cast<float>(counters->reservoirGiLumaScaledSum) / 64.0f;
-	ui.pathTracerPerfStats.reservoirGiAcceptedAvgLuma =
-	    (counters->reservoirGiAccepted > 0) ? ui.pathTracerPerfStats.reservoirGiAcceptedLumaSum /
-	                                              static_cast<float>(counters->reservoirGiAccepted) :
-	                                          0.0f;
-	const float reservoirCandidateTotal = static_cast<float>(std::max(counters->reservoirGiCandidates, 1u));
-	ui.pathTracerPerfStats.reservoirGiCandidateSurfaceHitRatio =
-	    static_cast<float>(counters->reservoirGiCandidateSurfaceHits) / reservoirCandidateTotal;
-	ui.pathTracerPerfStats.reservoirGiCandidateSunVisibleRatio =
-	    static_cast<float>(counters->reservoirGiCandidateSunVisible) / reservoirCandidateTotal;
-	ui.pathTracerPerfStats.reservoirGiCandidatePositiveWeightRatio =
-	    static_cast<float>(counters->reservoirGiCandidatePositiveWeight) / reservoirCandidateTotal;
-	ui.pathTracerPerfStats.reservoirGiLocalValidRatio =
-	    static_cast<float>(counters->reservoirGiLocalValidSamples) / reservoirCandidateTotal;
-	ui.pathTracerPerfStats.reservoirGiSelectedWeightAverage =
-	    (counters->reservoirGiAccepted > 0) ? static_cast<float>(counters->reservoirGiSelectedWeightScaledSum) /
-	                                              (static_cast<float>(counters->reservoirGiAccepted) * 64.0f) :
-	                                          0.0f;
-	ui.pathTracerPerfStats.reservoirGiTargetWeightAverage =
-	    (counters->reservoirGiAccepted > 0) ? static_cast<float>(counters->reservoirGiTargetWeightScaledSum) /
-	                                              (static_cast<float>(counters->reservoirGiAccepted) * 64.0f) :
-	                                          0.0f;
-	ui.pathTracerPerfStats.reservoirGiConfidenceMAvg =
-	    (counters->reservoirGiAccepted > 0) ? static_cast<float>(counters->reservoirGiConfidenceMScaledSum) /
-	                                              (static_cast<float>(counters->reservoirGiAccepted) * 64.0f) :
-	                                          0.0f;
-	const float reservoirAuditInvSamples =
-	    counters->reservoirGiAuditSampleCount > 0 ?
-	        1.0f / static_cast<float>(counters->reservoirGiAuditSampleCount) :
-	        0.0f;
-	ui.pathTracerPerfStats.reservoirGiAuditCurrentLuma =
-	    static_cast<float>(counters->reservoirGiAuditCurrentLumaScaledSum) * reservoirAuditInvSamples / 64.0f;
-	ui.pathTracerPerfStats.reservoirGiAuditReferenceLuma =
-	    static_cast<float>(counters->reservoirGiAuditReferenceLumaScaledSum) * reservoirAuditInvSamples / 64.0f;
-	ui.pathTracerPerfStats.reservoirGiAuditRelativeErrorPct =
-	    static_cast<float>(counters->reservoirGiAuditRelativeErrorScaledSum) * reservoirAuditInvSamples / 64.0f;
-	ui.pathTracerPerfStats.reservoirGiAuditProbeScale =
-	    static_cast<float>(counters->reservoirGiAuditProbeScaleScaledSum) * reservoirAuditInvSamples / 64.0f;
 
 	const float historyTotal                      = static_cast<float>(counters->historyAcceptedCount + counters->historyRejectedCount);
 	ui.pathTracerPerfStats.historyAcceptanceRatio = (historyTotal > 0.0f) ? static_cast<float>(counters->historyAcceptedCount) / historyTotal : 0.0f;
@@ -2949,321 +2681,6 @@ void EngineCore::resetPathTracerAnalysisCounters(uint32_t frameSlot)
 	std::memset(frames.ptAnalysisCounterMapped[frameSlot], 0, sizeof(Laphria::PathTracerAnalysisCounters));
 }
 
-void EngineCore::startPathTracerSponzaGiPerfSweep()
-{
-	auto &analysis                 = ui.pathTracerAnalysisSettings;
-	analysis.runSponzaGiPerfSweep  = false;
-	analysis.runBrightSurfelShadowEvaluationSweep = false;
-	analysis.runBrightSurfelProposalEvaluationSweep = false;
-	analysis.enableAnalysisMode    = true;
-	analysis.lockBenchmarkScene    = true;
-	analysis.benchmarkActive       = false;
-	analysis.runBaselineSweep      = false;
-	ui.renderMode                  = RenderMode::PathTracer;
-	vulkan.logicalDevice.waitIdle();
-	clearPathTracerExperimentState();
-
-	auto makeScenarioRowName = [](const SponzaScenarioPreset &scenario, const char *variant) {
-		return std::string("Sponza / ") + scenario.name + " / " + variant;
-	};
-	auto applyScenarioPreset = [](PathTracerExperimentRow    &row,
-	                              const SponzaScenarioPreset &scenario) {
-		row.scenarioName                  = scenario.name;
-		row.cameraPosition                = scenario.cameraPosition;
-		row.cameraPitch                   = scenario.cameraPitch;
-		row.cameraYaw                     = scenario.cameraYaw;
-		row.lightDirection                = scenario.lightDirection;
-	};
-
-	auto makeReservoirRow = [&](const SponzaScenarioPreset &scenario,
-	                            const char                 *variant,
-	                            int                         directSunMode,
-	                            UISystem::PathTracerReservoirGiProposalMode proposalMode =
-	                                UISystem::PathTracerReservoirGiProposalMode::Cosine) {
-		PathTracerExperimentRow row{};
-		row.name = makeScenarioRowName(scenario, variant);
-		applyScenarioPreset(row, scenario);
-		row.probeMode                          = UISystem::FirstHitProbeSamplingMode::CandidateRis;
-		row.blackEnvironment                   = false;
-		row.reservoirGiMode                    = UISystem::PathTracerReservoirGiMode::SingleFrame;
-		row.reservoirGiProposalMode            = proposalMode;
-		row.firstHitDiffuseSamples             = 2;
-		row.firstHitCandidateCount             = 4;
-		row.reservoirGiCandidateCount          = 1;
-		row.reservoirGiUseCandidateRis         = false;
-		row.reservoirGiTemporalBudgetDivisor   = 1;
-		row.reservoirGiSpatialBudgetDivisor    = 1;
-		row.environmentNeeBounceMode           = 0;
-		row.pathTracerMaxBounces               = 8;
-		row.directSunBounceMode                = directSunMode;
-		row.reservoirGiCandidateEvaluationMode = 2;
-		row.debugAov                           = UISystem::PathTracerDebugAov::PathRawFinalColor;
-		return row;
-	};
-
-	ptExperimentRows.clear();
-	for (const auto &scenario : sponzaScenarioPresets())
-	{
-		auto reservoirMixedTemporalSpatialBudget2Row =
-		    makeReservoirRow(scenario,
-		                     "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2",
-		                     1,
-		                     UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunGuided);
-		reservoirMixedTemporalSpatialBudget2Row.reservoirGiMode = UISystem::PathTracerReservoirGiMode::TemporalSpatial;
-		reservoirMixedTemporalSpatialBudget2Row.reservoirGiSpatialNeighborCount = 2;
-		reservoirMixedTemporalSpatialBudget2Row.reservoirGiTemporalBudgetDivisor = 2;
-		reservoirMixedTemporalSpatialBudget2Row.reservoirGiSpatialBudgetDivisor = 2;
-		auto reservoirMixedTemporalSpatialBudget2SunReceiverRow = reservoirMixedTemporalSpatialBudget2Row;
-		reservoirMixedTemporalSpatialBudget2SunReceiverRow.name =
-		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Temporal Spatial 2N Budget 2 Sun Receiver");
-		reservoirMixedTemporalSpatialBudget2SunReceiverRow.reservoirGiProposalMode =
-		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
-		auto reservoirMixedSingleFrameSunReceiverRow =
-		    reservoirMixedTemporalSpatialBudget2SunReceiverRow;
-		reservoirMixedSingleFrameSunReceiverRow.name =
-		    makeScenarioRowName(scenario, "Reservoir 1C Shadowed Sun First Mixed Single Frame Sun Receiver");
-		reservoirMixedSingleFrameSunReceiverRow.reservoirGiMode =
-		    UISystem::PathTracerReservoirGiMode::SingleFrame;
-		reservoirMixedSingleFrameSunReceiverRow.reservoirGiCandidateCount = 1;
-		reservoirMixedSingleFrameSunReceiverRow.reservoirGiProposalMode =
-		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
-		reservoirMixedSingleFrameSunReceiverRow.reservoirGiTemporalBudgetDivisor = 1;
-		reservoirMixedSingleFrameSunReceiverRow.reservoirGiSpatialBudgetDivisor = 1;
-		reservoirMixedSingleFrameSunReceiverRow.reservoirGiCandidateEvaluationMode = 2;
-		auto reservoirAuditSingleFrame1cCurrentRow = reservoirMixedTemporalSpatialBudget2SunReceiverRow;
-		reservoirAuditSingleFrame1cCurrentRow.name =
-		    makeScenarioRowName(scenario, "Reservoir Audit / Single Frame 1C Current");
-		reservoirAuditSingleFrame1cCurrentRow.reservoirGiMode =
-		    UISystem::PathTracerReservoirGiMode::SingleFrame;
-		reservoirAuditSingleFrame1cCurrentRow.reservoirGiCandidateCount = 1;
-		reservoirAuditSingleFrame1cCurrentRow.reservoirGiUseCandidateRis = false;
-		reservoirAuditSingleFrame1cCurrentRow.reservoirGiTemporalBudgetDivisor = 1;
-		reservoirAuditSingleFrame1cCurrentRow.reservoirGiSpatialBudgetDivisor = 1;
-		reservoirAuditSingleFrame1cCurrentRow.reservoirGiEstimatorAuditMode =
-		    UISystem::PathTracerReservoirGiEstimatorAuditMode::Current;
-		auto reservoirAuditTemporalSpatialStaticRow = reservoirAuditSingleFrame1cCurrentRow;
-		reservoirAuditTemporalSpatialStaticRow.name =
-		    makeScenarioRowName(scenario, "Reservoir Audit / Temporal Spatial Static");
-		reservoirAuditTemporalSpatialStaticRow.reservoirGiMode =
-		    UISystem::PathTracerReservoirGiMode::TemporalSpatial;
-		reservoirAuditTemporalSpatialStaticRow.reservoirGiTemporalBudgetDivisor = 1;
-		reservoirAuditTemporalSpatialStaticRow.reservoirGiSpatialNeighborCount = 2;
-		reservoirAuditTemporalSpatialStaticRow.reservoirGiSpatialBudgetDivisor = 1;
-		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2Row);
-		ptExperimentRows.push_back(reservoirMixedTemporalSpatialBudget2SunReceiverRow);
-		ptExperimentRows.push_back(reservoirMixedSingleFrameSunReceiverRow);
-		ptExperimentRows.push_back(reservoirAuditSingleFrame1cCurrentRow);
-		ptExperimentRows.push_back(reservoirAuditTemporalSpatialStaticRow);
-	}
-
-	ptExperimentSweepActive     = !ptExperimentRows.empty();
-	ptExperimentRowIndex        = 0;
-	ptExperimentWarmupFrames    = std::max(1, analysis.sponzaGiSweepWarmupFrames);
-	ptExperimentSampleFrames    = std::max(1, analysis.sponzaGiSweepSampleFrames);
-	ptExperimentWarmupRemaining = ptExperimentWarmupFrames;
-	ptExperimentSampleRemaining = ptExperimentSampleFrames;
-	ptExperimentAccum           = {};
-	ptExperimentCompletionLog   = "PT Experiment Sweep: Sponza PT/GI audit sweep complete";
-
-	if (ptExperimentSweepActive)
-	{
-		LOGI("PT Experiment Sweep: starting Sponza PT/GI audit sweep (%zu rows, warmup=%d, samples=%d)",
-		     ptExperimentRows.size(), ptExperimentWarmupRemaining, ptExperimentSampleRemaining);
-		applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
-	}
-}
-
-void EngineCore::startPathTracerBrightSurfelShadowEvaluationSweep()
-{
-	auto &analysis = ui.pathTracerAnalysisSettings;
-	analysis.runSponzaGiPerfSweep = false;
-	analysis.runBrightSurfelShadowEvaluationSweep = false;
-	analysis.runBrightSurfelProposalEvaluationSweep = false;
-	analysis.enableAnalysisMode = true;
-	analysis.lockBenchmarkScene = true;
-	analysis.benchmarkActive = false;
-	analysis.runBaselineSweep = false;
-	ui.renderMode = RenderMode::PathTracer;
-	vulkan.logicalDevice.waitIdle();
-	clearPathTracerExperimentState();
-
-	auto makeScenarioRowName = [](const SponzaScenarioPreset &scenario, const char *variant) {
-		return std::string("Sponza / ") + scenario.name + " / " + variant;
-	};
-	auto applyScenarioPreset = [](PathTracerExperimentRow &row,
-	                              const SponzaScenarioPreset &scenario) {
-		row.scenarioName = scenario.name;
-		row.cameraPosition = scenario.cameraPosition;
-		row.cameraPitch = scenario.cameraPitch;
-		row.cameraYaw = scenario.cameraYaw;
-		row.lightDirection = scenario.lightDirection;
-	};
-
-	auto makeBaselineRow = [&](const SponzaScenarioPreset &scenario, const char *name) {
-		PathTracerExperimentRow row{};
-		row.name = makeScenarioRowName(scenario, name);
-		applyScenarioPreset(row, scenario);
-		row.probeMode = UISystem::FirstHitProbeSamplingMode::CandidateRis;
-		row.blackEnvironment = false;
-		row.reservoirGiMode = UISystem::PathTracerReservoirGiMode::SingleFrame;
-		row.reservoirGiProposalMode =
-		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
-		row.firstHitDiffuseSamples = 2;
-		row.firstHitCandidateCount = 4;
-		row.reservoirGiCandidateCount = 1;
-		row.reservoirGiUseCandidateRis = false;
-		row.reservoirGiTemporalBudgetDivisor = 1;
-		row.reservoirGiSpatialBudgetDivisor = 1;
-		row.environmentNeeBounceMode = 0;
-		row.pathTracerMaxBounces = 8;
-		row.directSunBounceMode = 1;
-		row.reservoirGiCandidateEvaluationMode = 2;
-		row.debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor;
-		return row;
-	};
-
-	ptExperimentRows.clear();
-	for (const auto &scenario : sponzaScenarioPresets())
-	{
-		auto baselineSunReceiver =
-		    makeBaselineRow(scenario, "Bright Surfel Evaluation / Baseline Sun Receiver");
-		auto baselineStaticAudit =
-		    makeBaselineRow(scenario, "Bright Surfel Evaluation / Baseline Static Audit");
-		baselineStaticAudit.reservoirGiMode =
-		    UISystem::PathTracerReservoirGiMode::TemporalSpatial;
-		baselineStaticAudit.reservoirGiSpatialNeighborCount = 2;
-		baselineStaticAudit.reservoirGiEstimatorAuditMode =
-		    UISystem::PathTracerReservoirGiEstimatorAuditMode::Current;
-
-		auto shadowDiagnostics =
-		    makeBaselineRow(scenario, "Bright Surfel Evaluation / Shadow Diagnostics");
-		shadowDiagnostics.reservoirGiProposalMode =
-		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverBrightSurfel;
-		shadowDiagnostics.reservoirGiBrightSurfelShadowOnly = true;
-		shadowDiagnostics.reservoirGiEstimatorAuditMode =
-		    UISystem::PathTracerReservoirGiEstimatorAuditMode::Current;
-
-		ptExperimentRows.push_back(baselineSunReceiver);
-		ptExperimentRows.push_back(baselineStaticAudit);
-		ptExperimentRows.push_back(shadowDiagnostics);
-	}
-
-	ptExperimentSweepActive     = !ptExperimentRows.empty();
-	ptExperimentRowIndex        = 0;
-	ptExperimentWarmupFrames    = std::max(1, analysis.sponzaGiSweepWarmupFrames);
-	ptExperimentSampleFrames    = std::max(1, analysis.sponzaGiSweepSampleFrames);
-	ptExperimentWarmupRemaining = ptExperimentWarmupFrames;
-	ptExperimentSampleRemaining = ptExperimentSampleFrames;
-	ptExperimentAccum           = {};
-	ptExperimentCompletionLog   = "PT Experiment Sweep: bright surfel shadow evaluation sweep complete";
-
-	if (ptExperimentSweepActive)
-	{
-		LOGI("PT Experiment Sweep: starting bright surfel shadow evaluation sweep (%zu rows, warmup=%d, samples=%d)",
-		     ptExperimentRows.size(), ptExperimentWarmupRemaining, ptExperimentSampleRemaining);
-		applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
-	}
-}
-
-void EngineCore::startPathTracerBrightSurfelProposalEvaluationSweep()
-{
-	auto &analysis = ui.pathTracerAnalysisSettings;
-	analysis.runSponzaGiPerfSweep = false;
-	analysis.runBrightSurfelShadowEvaluationSweep = false;
-	analysis.runBrightSurfelProposalEvaluationSweep = false;
-	analysis.enableAnalysisMode = true;
-	analysis.lockBenchmarkScene = true;
-	analysis.benchmarkActive = false;
-	analysis.runBaselineSweep = false;
-	ui.renderMode = RenderMode::PathTracer;
-	vulkan.logicalDevice.waitIdle();
-	clearPathTracerExperimentState();
-
-	auto makeScenarioRowName = [](const SponzaScenarioPreset &scenario, const char *variant) {
-		return std::string("Sponza / ") + scenario.name + " / " + variant;
-	};
-	auto applyScenarioPreset = [](PathTracerExperimentRow &row,
-	                              const SponzaScenarioPreset &scenario) {
-		row.scenarioName = scenario.name;
-		row.cameraPosition = scenario.cameraPosition;
-		row.cameraPitch = scenario.cameraPitch;
-		row.cameraYaw = scenario.cameraYaw;
-		row.lightDirection = scenario.lightDirection;
-	};
-
-	auto makeBaselineRow = [&](const SponzaScenarioPreset &scenario, const char *name) {
-		PathTracerExperimentRow row{};
-		row.name = makeScenarioRowName(scenario, name);
-		applyScenarioPreset(row, scenario);
-		row.probeMode = UISystem::FirstHitProbeSamplingMode::CandidateRis;
-		row.blackEnvironment = false;
-		row.reservoirGiMode = UISystem::PathTracerReservoirGiMode::SingleFrame;
-		row.reservoirGiProposalMode =
-		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
-		row.firstHitDiffuseSamples = 2;
-		row.firstHitCandidateCount = 4;
-		row.reservoirGiCandidateCount = 1;
-		row.reservoirGiUseCandidateRis = false;
-		row.reservoirGiTemporalBudgetDivisor = 1;
-		row.reservoirGiSpatialBudgetDivisor = 1;
-		row.environmentNeeBounceMode = 0;
-		row.pathTracerMaxBounces = 8;
-		row.directSunBounceMode = 1;
-		row.reservoirGiCandidateEvaluationMode = 2;
-		row.debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor;
-		return row;
-	};
-
-	ptExperimentRows.clear();
-	for (const auto &scenario : sponzaScenarioPresets())
-	{
-		auto baselineStaticAudit =
-		    makeBaselineRow(scenario, "Bright Surfel Evaluation / Baseline Static Audit");
-		baselineStaticAudit.reservoirGiMode =
-		    UISystem::PathTracerReservoirGiMode::TemporalSpatial;
-		baselineStaticAudit.reservoirGiSpatialNeighborCount = 2;
-		baselineStaticAudit.reservoirGiEstimatorAuditMode =
-		    UISystem::PathTracerReservoirGiEstimatorAuditMode::Current;
-
-		auto proposalEnabled =
-		    makeBaselineRow(scenario, "Bright Surfel Evaluation / Proposal Enabled");
-		proposalEnabled.reservoirGiProposalMode =
-		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverBrightSurfel;
-
-		auto proposalEnabledStaticAudit =
-		    makeBaselineRow(scenario, "Bright Surfel Evaluation / Proposal Enabled Static Audit");
-		proposalEnabledStaticAudit.reservoirGiMode =
-		    UISystem::PathTracerReservoirGiMode::TemporalSpatial;
-		proposalEnabledStaticAudit.reservoirGiProposalMode =
-		    UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverBrightSurfel;
-		proposalEnabledStaticAudit.reservoirGiSpatialNeighborCount = 2;
-		proposalEnabledStaticAudit.reservoirGiTemporalBudgetDivisor = 1;
-		proposalEnabledStaticAudit.reservoirGiSpatialBudgetDivisor = 1;
-		proposalEnabledStaticAudit.reservoirGiEstimatorAuditMode =
-		    UISystem::PathTracerReservoirGiEstimatorAuditMode::Current;
-
-		ptExperimentRows.push_back(baselineStaticAudit);
-		ptExperimentRows.push_back(proposalEnabled);
-		ptExperimentRows.push_back(proposalEnabledStaticAudit);
-	}
-
-	ptExperimentSweepActive     = !ptExperimentRows.empty();
-	ptExperimentRowIndex        = 0;
-	ptExperimentWarmupFrames    = std::max(1, analysis.sponzaGiSweepWarmupFrames);
-	ptExperimentSampleFrames    = std::max(1, analysis.sponzaGiSweepSampleFrames);
-	ptExperimentWarmupRemaining = ptExperimentWarmupFrames;
-	ptExperimentSampleRemaining = ptExperimentSampleFrames;
-	ptExperimentAccum           = {};
-	ptExperimentCompletionLog   = "PT Experiment Sweep: bright surfel proposal evaluation sweep complete";
-
-	if (ptExperimentSweepActive)
-	{
-		LOGI("PT Experiment Sweep: starting bright surfel proposal evaluation sweep (%zu rows, warmup=%d, samples=%d)",
-		     ptExperimentRows.size(), ptExperimentWarmupRemaining, ptExperimentSampleRemaining);
-		applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
-	}
-}
-
 void EngineCore::clearPathTracerExperimentState()
 {
 	for (void *mapped : frames.reservoirGiCurrentMapped)
@@ -3291,93 +2708,40 @@ void EngineCore::clearPathTracerExperimentState()
 
 void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row)
 {
-	auto &settings                              = ui.pathTracerSettings;
-	auto &analysis                              = ui.pathTracerAnalysisSettings;
-	settings.enableEnvironmentNEE               = true;
-	settings.environmentNeeBounceMode           = row.environmentNeeBounceMode;
-	settings.blackEnvironment                   = row.blackEnvironment;
-	settings.applyFirstHitProbesToFinal         = true;
-	settings.environmentNeeSamplingMode         = UISystem::EnvironmentNeeSamplingMode::SkyBiased;
-	settings.firstHitProbeSamplingMode          = row.probeMode;
-	settings.firstHitDiffuseSamples             = row.firstHitDiffuseSamples;
-	settings.firstHitCandidateCount             = row.firstHitCandidateCount;
-	settings.reservoirGiMode                    = row.reservoirGiMode;
-	settings.reservoirGiProposalMode            = row.reservoirGiProposalMode;
-	settings.reservoirGiCandidateCount          = row.reservoirGiCandidateCount;
-	settings.reservoirGiSpatialNeighborCount    = row.reservoirGiSpatialNeighborCount;
-	settings.reservoirGiUseCandidateRis         = row.reservoirGiUseCandidateRis;
-	settings.reservoirGiTemporalBudgetDivisor   = row.reservoirGiTemporalBudgetDivisor;
-	settings.reservoirGiSpatialBudgetDivisor    = row.reservoirGiSpatialBudgetDivisor;
-	settings.reservoirGiEstimatorAuditMode      = row.reservoirGiEstimatorAuditMode;
-	settings.reservoirGiBrightSurfelShadowOnly  = row.reservoirGiBrightSurfelShadowOnly;
-	settings.reservoirGiDetailedDiagnostics = false;
-	settings.pathTracerMaxBounces               = row.pathTracerMaxBounces;
-	settings.directSunBounceMode                = row.directSunBounceMode;
-	settings.reservoirGiCandidateEvaluationMode = row.reservoirGiCandidateEvaluationMode;
-	ptBenchmarkBasePosition                     = row.cameraPosition;
-	ptBenchmarkBasePitch                        = row.cameraPitch;
-	ptBenchmarkBaseYaw                          = row.cameraYaw;
-	camera.position                             = row.cameraPosition;
-	camera.pitch                                = row.cameraPitch;
-	camera.yaw                                  = row.cameraYaw;
+	auto &settings                         = ui.pathTracerSettings;
+	auto &analysis                         = ui.pathTracerAnalysisSettings;
+	settings.enableEnvironmentNEE          = true;
+	settings.environmentNeeBounceMode      = row.environmentNeeBounceMode;
+	settings.blackEnvironment              = row.blackEnvironment;
+	settings.applyFirstHitProbesToFinal    = true;
+	settings.environmentNeeSamplingMode    = UISystem::EnvironmentNeeSamplingMode::SkyBiased;
+	settings.firstHitProbeSamplingMode     = row.probeMode;
+	settings.firstHitDiffuseSamples        = row.firstHitDiffuseSamples;
+	settings.firstHitCandidateCount        = row.firstHitCandidateCount;
+	settings.pathTracerMaxBounces          = row.pathTracerMaxBounces;
+	settings.directSunBounceMode           = row.directSunBounceMode;
+	ptBenchmarkBasePosition                = row.cameraPosition;
+	ptBenchmarkBasePitch                   = row.cameraPitch;
+	ptBenchmarkBaseYaw                     = row.cameraYaw;
+	camera.position                        = row.cameraPosition;
+	camera.pitch                           = row.cameraPitch;
+	camera.yaw                             = row.cameraYaw;
 	camera.processInput(0.0f, 0.0f, 0.0f);
-	ptPrevCameraPos                = camera.position;
-	ptPrevPitch                    = camera.pitch;
-	ptPrevYaw                      = camera.yaw;
-	ui.lightDirection              = glm::normalize(row.lightDirection);
-	ptForceHistoryReset            = true;
-	analysis.debugAov              = row.debugAov;
-	analysis.debugAtrousIteration  = 0;
-	analysis.enableAnalysisMode    = true;
+	ptPrevCameraPos               = camera.position;
+	ptPrevPitch                   = camera.pitch;
+	ptPrevYaw                     = camera.yaw;
+	ui.lightDirection             = glm::normalize(row.lightDirection);
+	ptForceHistoryReset           = true;
+	analysis.debugAov             = row.debugAov;
+	analysis.debugAtrousIteration = 0;
+	analysis.enableAnalysisMode   = true;
 }
-
 void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow         &row,
                                             const PathTracerExperimentAccumulator &accum) const
 {
 	const double invSamples = (accum.sampleCount > 0) ? (1.0 / static_cast<double>(accum.sampleCount)) : 0.0;
 	LOGI("PT Experiment Row Summary: name=\"%s\", samples=%u, mode=%d, "
-	     "maxBounces=%d, directSunMode=%d, environmentNeeMode=%d, reservoirEvalMode=%d, "
-	     "reservoirGiMode=%d, reservoirProposalMode=%d, reservoirCandidates=%d, reservoirUseRis=%d, "
-	     "reservoirTemporalBudget=%d, reservoirSpatialBudget=%d, "
-	     "reservoirGiCandidateRays=%.1f, reservoirGiAccepted=%.1f, "
-	     "localSurfaceHits=%.1f, localValid=%.1f, localMiss=%.1f, localMissPositive=%.1f, "
-	     "localSurfaceInvalid=%.1f, localRejectGeometry=%.1f, localRejectNoLight=%.1f, "
-	     "localRejectZeroTarget=%.1f, localRejectBadPdf=%.1f, "
-	     "acceptedLocalSurface=%.1f, acceptedLocalMiss=%.1f, "
-	     "localShadowRays=%.1f, "
-	     "reservoirGiAcceptedAvgLuma=%.5f, reservoirGiAcceptedLumaSum=%.1f, "
-	     "reservoirGiSelectedWeightAvg=%.5f, reservoirGiTargetWeightAvg=%.5f, "
-	     "reservoirGiConfidenceMAvg=%.5f, "
-	     "reservoirGiAuditCurrentLuma=%.5f, reservoirGiAuditReferenceLuma=%.5f, "
-	     "reservoirGiAuditRelativeErrorPct=%.2f, reservoirGiAuditProbeScale=%.5f, "
-	     "reservoirGiSelectedLocal=%.1f, reservoirGiSelectedTemporal=%.1f, reservoirGiSelectedSpatial=%.1f, "
-	     "reservoirGiSelectedCache=%.1f, reservoirGiSelectedCacheReconnect=%.1f, "
-	     "temporalAccepted=%.1f, temporalReuseAttempts=%.1f, "
-	     "temporalReconnectRays=%.1f, temporalShadowRays=%.1f, "
-	     "historyGuideUsed=%.1f, historyGuideRejectedLowWeight=%.1f, historyGuideFallbackCosine=%.1f, "
-	     "historyGuideRejectReprojection=%.1f, historyGuideRejectLoad=%.1f, historyGuideRejectGeometry=%.1f, "
-	     "historyGuideNeighborSearches=%.1f, historyGuideNeighborHits=%.1f, historyGuideNeighborMisses=%.1f, "
-	     "receiverCacheStore=%.1f, receiverCacheAttempt=%.1f, receiverCacheHit=%.1f, "
-	     "receiverCacheMiss=%.1f, receiverCacheRejectNoLight=%.1f, receiverCacheAccepted=%.1f, "
-	     "receiverReconnectAttempt=%.1f, receiverReconnectHit=%.1f, receiverReconnectMiss=%.1f, "
-	     "receiverReconnectRejectVisibility=%.1f, receiverReconnectRejectTarget=%.1f, "
-	     "receiverReconnectAccepted=%.1f, "
-	     "receiverCacheContinuationAttempt=%.1f, receiverCacheContinuationHit=%.1f, "
-	     "receiverCacheContinuationMiss=%.1f, receiverCacheContinuationAccepted=%.1f, "
-	     "brightSurfelStore=%.1f, brightSurfelAttempt=%.1f, brightSurfelHit=%.1f, "
-	     "brightSurfelMiss=%.1f, brightSurfelRejectVisibility=%.1f, "
-	     "brightSurfelRejectGeometry=%.1f, brightSurfelRejectTarget=%.1f, "
-	     "brightSurfelAccepted=%.1f, reservoirGiSelectedBrightSurfel=%.1f, "
-	     "brightSurfelPrecheckRejectTarget=%.1f, brightSurfelTrainingAttempt=%.1f, "
-	     "brightSurfelTrainingStore=%.1f, brightSurfelTrainingRejectGeometry=%.1f, "
-	     "brightSurfelTrainingRejectTarget=%.1f, "
-	     "brightSurfelSelectorRejectGeometry=%.1f, brightSurfelSelectorRejectTarget=%.1f, "
-	     "brightSurfelSelectorViable=%.1f, "
-	     "brightSurfelIndexedQuery=%.1f, brightSurfelIndexedEmpty=%.1f, "
-	     "brightSurfelIndexedProbe=%.1f, brightSurfelSelectorRejectDistance=%.1f, "
-	     "brightSurfelSelectorRejectReceiverHemisphere=%.1f, "
-	     "brightSurfelSelectorRejectSurfelHemisphere=%.1f, "
-	     "brightSurfelSelectorRejectInvalidVector=%.1f, "
+	     "maxBounces=%d, directSunMode=%d, environmentNeeMode=%d, "
 	     "rayTraceMs=%.3f, totalMs=%.3f",
 	     row.name.c_str(),
 	     accum.sampleCount,
@@ -3385,98 +2749,9 @@ void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow       
 	     row.pathTracerMaxBounces,
 	     row.directSunBounceMode,
 	     row.environmentNeeBounceMode,
-	     row.reservoirGiCandidateEvaluationMode,
-	     static_cast<int>(row.reservoirGiMode),
-	     static_cast<int>(row.reservoirGiProposalMode),
-	     row.reservoirGiCandidateCount,
-	     row.reservoirGiUseCandidateRis ? 1 : 0,
-	     row.reservoirGiTemporalBudgetDivisor,
-	     row.reservoirGiSpatialBudgetDivisor,
-	     accum.reservoirGiCandidates * invSamples,
-	     accum.reservoirGiAccepted * invSamples,
-	     accum.reservoirGiLocalSurfaceHits * invSamples,
-	     accum.reservoirGiLocalValidSamples * invSamples,
-	     accum.reservoirGiLocalMissCandidates * invSamples,
-	     accum.reservoirGiLocalMissPositiveWeight * invSamples,
-	     accum.reservoirGiLocalSurfaceInvalid * invSamples,
-	     accum.reservoirGiLocalRejectGeometry * invSamples,
-	     accum.reservoirGiLocalRejectNoLight * invSamples,
-	     accum.reservoirGiLocalRejectZeroTarget * invSamples,
-	     accum.reservoirGiLocalRejectBadPdf * invSamples,
-	     accum.reservoirGiAcceptedLocalSurface * invSamples,
-	     accum.reservoirGiAcceptedLocalMiss * invSamples,
-	     accum.reservoirGiLocalShadowRays * invSamples,
-	     accum.reservoirGiAcceptedAvgLuma * invSamples,
-	     accum.reservoirGiAcceptedLumaSum * invSamples,
-	     accum.reservoirGiSelectedWeightAverage * invSamples,
-	     accum.reservoirGiTargetWeightAverage * invSamples,
-	     accum.reservoirGiConfidenceMAvg * invSamples,
-	     accum.reservoirGiAuditCurrentLuma * invSamples,
-	     accum.reservoirGiAuditReferenceLuma * invSamples,
-	     accum.reservoirGiAuditRelativeErrorPct * invSamples,
-	     accum.reservoirGiAuditProbeScale * invSamples,
-	     accum.reservoirGiSelectedLocal * invSamples,
-	     accum.reservoirGiSelectedTemporal * invSamples,
-	     accum.reservoirGiSelectedSpatial * invSamples,
-	     accum.reservoirGiSelectedCache * invSamples,
-	     accum.reservoirGiSelectedCacheReconnect * invSamples,
-	     accum.reservoirGiTemporalAccepted * invSamples,
-	     accum.reservoirGiTemporalReuseAttempts * invSamples,
-	     accum.reservoirGiTemporalReconnectRays * invSamples,
-	     accum.reservoirGiTemporalShadowRays * invSamples,
-	     accum.reservoirGiHistoryGuideUsed * invSamples,
-	     accum.reservoirGiHistoryGuideRejectedLowWeight * invSamples,
-	     accum.reservoirGiHistoryGuideFallbackCosine * invSamples,
-	     accum.reservoirGiHistoryGuideRejectReprojection * invSamples,
-	     accum.reservoirGiHistoryGuideRejectLoad * invSamples,
-	     accum.reservoirGiHistoryGuideRejectGeometry * invSamples,
-	     accum.reservoirGiHistoryGuideNeighborSearches * invSamples,
-	     accum.reservoirGiHistoryGuideNeighborHits * invSamples,
-	     accum.reservoirGiHistoryGuideNeighborMisses * invSamples,
-	     accum.reservoirGiReceiverCacheStore * invSamples,
-	     accum.reservoirGiReceiverCacheAttempt * invSamples,
-	     accum.reservoirGiReceiverCacheHit * invSamples,
-	     accum.reservoirGiReceiverCacheMiss * invSamples,
-	     accum.reservoirGiReceiverCacheRejectNoLight * invSamples,
-	     accum.reservoirGiReceiverCacheAccepted * invSamples,
-	     accum.reservoirGiReceiverReconnectAttempt * invSamples,
-	     accum.reservoirGiReceiverReconnectHit * invSamples,
-	     accum.reservoirGiReceiverReconnectMiss * invSamples,
-	     accum.reservoirGiReceiverReconnectRejectVisibility * invSamples,
-	     accum.reservoirGiReceiverReconnectRejectTarget * invSamples,
-	     accum.reservoirGiReceiverReconnectAccepted * invSamples,
-	     accum.reservoirGiReceiverCacheContinuationAttempt * invSamples,
-	     accum.reservoirGiReceiverCacheContinuationHit * invSamples,
-	     accum.reservoirGiReceiverCacheContinuationMiss * invSamples,
-	     accum.reservoirGiReceiverCacheContinuationAccepted * invSamples,
-	     accum.reservoirGiBrightSurfelStore * invSamples,
-	     accum.reservoirGiBrightSurfelAttempt * invSamples,
-	     accum.reservoirGiBrightSurfelHit * invSamples,
-	     accum.reservoirGiBrightSurfelMiss * invSamples,
-	     accum.reservoirGiBrightSurfelRejectVisibility * invSamples,
-	     accum.reservoirGiBrightSurfelRejectGeometry * invSamples,
-	     accum.reservoirGiBrightSurfelRejectTarget * invSamples,
-	     accum.reservoirGiBrightSurfelAccepted * invSamples,
-	     accum.reservoirGiSelectedBrightSurfel * invSamples,
-	     accum.brightSurfelPrecheckRejectTarget * invSamples,
-	     accum.brightSurfelTrainingAttempt * invSamples,
-	     accum.brightSurfelTrainingStore * invSamples,
-	     accum.brightSurfelTrainingRejectGeometry * invSamples,
-	     accum.brightSurfelTrainingRejectTarget * invSamples,
-	     accum.brightSurfelSelectorRejectGeometry * invSamples,
-	     accum.brightSurfelSelectorRejectTarget * invSamples,
-	     accum.brightSurfelSelectorViable * invSamples,
-	     accum.brightSurfelIndexedQuery * invSamples,
-	     accum.brightSurfelIndexedEmpty * invSamples,
-	     accum.brightSurfelIndexedProbe * invSamples,
-	     accum.brightSurfelSelectorRejectDistance * invSamples,
-	     accum.brightSurfelSelectorRejectReceiverHemisphere * invSamples,
-	     accum.brightSurfelSelectorRejectSurfelHemisphere * invSamples,
-	     accum.brightSurfelSelectorRejectInvalidVector * invSamples,
 	     accum.rayTraceMs * invSamples,
 	     accum.totalFrameMs * invSamples);
 }
-
 void EngineCore::updatePathTracerExperimentSweep()
 {
 	if (!ptExperimentSweepActive)
@@ -3497,188 +2772,6 @@ void EngineCore::updatePathTracerExperimentSweep()
 	}
 
 	const auto &stats = ui.pathTracerPerfStats;
-	ptExperimentAccum.reservoirGiCandidates +=
-	    static_cast<double>(stats.reservoirGiCandidates);
-	ptExperimentAccum.reservoirGiAccepted +=
-	    static_cast<double>(stats.reservoirGiAccepted);
-	ptExperimentAccum.reservoirGiAcceptedAvgLuma +=
-	    static_cast<double>(stats.reservoirGiAcceptedAvgLuma);
-	ptExperimentAccum.reservoirGiAcceptedLumaSum +=
-	    static_cast<double>(stats.reservoirGiAcceptedLumaSum);
-	ptExperimentAccum.reservoirGiCandidateSurfaceHitRatio +=
-	    static_cast<double>(stats.reservoirGiCandidateSurfaceHitRatio);
-	ptExperimentAccum.reservoirGiCandidateSunVisibleRatio +=
-	    static_cast<double>(stats.reservoirGiCandidateSunVisibleRatio);
-	ptExperimentAccum.reservoirGiCandidatePositiveWeightRatio +=
-	    static_cast<double>(stats.reservoirGiCandidatePositiveWeightRatio);
-	ptExperimentAccum.reservoirGiZeroWeight +=
-	    static_cast<double>(stats.reservoirGiZeroWeight);
-	ptExperimentAccum.reservoirGiSelectedWeightAverage +=
-	    static_cast<double>(stats.reservoirGiSelectedWeightAverage);
-	ptExperimentAccum.reservoirGiTargetWeightAverage +=
-	    static_cast<double>(stats.reservoirGiTargetWeightAverage);
-	ptExperimentAccum.reservoirGiConfidenceMAvg +=
-	    static_cast<double>(stats.reservoirGiConfidenceMAvg);
-	ptExperimentAccum.reservoirGiAuditCurrentLuma +=
-	    static_cast<double>(stats.reservoirGiAuditCurrentLuma);
-	ptExperimentAccum.reservoirGiAuditReferenceLuma +=
-	    static_cast<double>(stats.reservoirGiAuditReferenceLuma);
-	ptExperimentAccum.reservoirGiAuditRelativeErrorPct +=
-	    static_cast<double>(stats.reservoirGiAuditRelativeErrorPct);
-	ptExperimentAccum.reservoirGiAuditProbeScale +=
-	    static_cast<double>(stats.reservoirGiAuditProbeScale);
-	ptExperimentAccum.reservoirGiTemporalAccepted +=
-	    static_cast<double>(stats.reservoirGiTemporalAccepted);
-	ptExperimentAccum.reservoirGiTemporalRejected +=
-	    static_cast<double>(stats.reservoirGiTemporalRejected);
-	ptExperimentAccum.reservoirGiTemporalReuseAttempts +=
-	    static_cast<double>(stats.reservoirGiTemporalReuseAttempts);
-	ptExperimentAccum.reservoirGiTemporalRejectGeometry +=
-	    static_cast<double>(stats.reservoirGiTemporalRejectGeometry);
-	ptExperimentAccum.reservoirGiTemporalRejectVisibility +=
-	    static_cast<double>(stats.reservoirGiTemporalRejectVisibility);
-	ptExperimentAccum.reservoirGiTemporalRejectLight +=
-	    static_cast<double>(stats.reservoirGiTemporalRejectLight);
-	ptExperimentAccum.reservoirGiSpatialAccepted +=
-	    static_cast<double>(stats.reservoirGiSpatialAccepted);
-	ptExperimentAccum.reservoirGiSpatialRejected +=
-	    static_cast<double>(stats.reservoirGiSpatialRejected);
-	ptExperimentAccum.reservoirGiSelectedLocal +=
-	    static_cast<double>(stats.reservoirGiSelectedLocal);
-	ptExperimentAccum.reservoirGiSelectedTemporal +=
-	    static_cast<double>(stats.reservoirGiSelectedTemporal);
-	ptExperimentAccum.reservoirGiSelectedSpatial +=
-	    static_cast<double>(stats.reservoirGiSelectedSpatial);
-	ptExperimentAccum.reservoirGiSelectedCache +=
-	    static_cast<double>(stats.reservoirGiSelectedCache);
-	ptExperimentAccum.reservoirGiSelectedCacheReconnect +=
-	    static_cast<double>(stats.reservoirGiSelectedCacheReconnect);
-	ptExperimentAccum.reservoirGiLocalSurfaceHits +=
-	    static_cast<double>(stats.reservoirGiLocalSurfaceHits);
-	ptExperimentAccum.reservoirGiLocalValidSamples +=
-	    static_cast<double>(stats.reservoirGiLocalValidSamples);
-	ptExperimentAccum.reservoirGiLocalMissCandidates +=
-	    static_cast<double>(stats.reservoirGiLocalMissCandidates);
-	ptExperimentAccum.reservoirGiLocalMissPositiveWeight +=
-	    static_cast<double>(stats.reservoirGiLocalMissPositiveWeight);
-	ptExperimentAccum.reservoirGiLocalSurfaceInvalid +=
-	    static_cast<double>(stats.reservoirGiLocalSurfaceInvalid);
-	ptExperimentAccum.reservoirGiLocalRejectGeometry +=
-	    static_cast<double>(stats.reservoirGiLocalRejectGeometry);
-	ptExperimentAccum.reservoirGiLocalRejectNoLight +=
-	    static_cast<double>(stats.reservoirGiLocalRejectNoLight);
-	ptExperimentAccum.reservoirGiLocalRejectZeroTarget +=
-	    static_cast<double>(stats.reservoirGiLocalRejectZeroTarget);
-	ptExperimentAccum.reservoirGiLocalRejectBadPdf +=
-	    static_cast<double>(stats.reservoirGiLocalRejectBadPdf);
-	ptExperimentAccum.reservoirGiAcceptedLocalSurface +=
-	    static_cast<double>(stats.reservoirGiAcceptedLocalSurface);
-	ptExperimentAccum.reservoirGiAcceptedLocalMiss +=
-	    static_cast<double>(stats.reservoirGiAcceptedLocalMiss);
-	ptExperimentAccum.reservoirGiLocalShadowRays +=
-	    static_cast<double>(stats.reservoirGiLocalShadowRays);
-	ptExperimentAccum.reservoirGiTemporalReconnectRays +=
-	    static_cast<double>(stats.reservoirGiTemporalReconnectRays);
-	ptExperimentAccum.reservoirGiTemporalShadowRays +=
-	    static_cast<double>(stats.reservoirGiTemporalShadowRays);
-	ptExperimentAccum.reservoirGiHistoryGuideUsed +=
-	    static_cast<double>(stats.reservoirGiHistoryGuideUsed);
-	ptExperimentAccum.reservoirGiHistoryGuideRejectedLowWeight +=
-	    static_cast<double>(stats.reservoirGiHistoryGuideRejectedLowWeight);
-	ptExperimentAccum.reservoirGiHistoryGuideFallbackCosine +=
-	    static_cast<double>(stats.reservoirGiHistoryGuideFallbackCosine);
-	ptExperimentAccum.reservoirGiHistoryGuideRejectReprojection +=
-	    static_cast<double>(stats.reservoirGiHistoryGuideRejectReprojection);
-	ptExperimentAccum.reservoirGiHistoryGuideRejectLoad +=
-	    static_cast<double>(stats.reservoirGiHistoryGuideRejectLoad);
-	ptExperimentAccum.reservoirGiHistoryGuideRejectGeometry +=
-	    static_cast<double>(stats.reservoirGiHistoryGuideRejectGeometry);
-	ptExperimentAccum.reservoirGiHistoryGuideNeighborSearches +=
-	    static_cast<double>(stats.reservoirGiHistoryGuideNeighborSearches);
-	ptExperimentAccum.reservoirGiHistoryGuideNeighborHits +=
-	    static_cast<double>(stats.reservoirGiHistoryGuideNeighborHits);
-	ptExperimentAccum.reservoirGiHistoryGuideNeighborMisses +=
-	    static_cast<double>(stats.reservoirGiHistoryGuideNeighborMisses);
-	ptExperimentAccum.reservoirGiReceiverCacheStore +=
-	    static_cast<double>(stats.reservoirGiReceiverCacheStore);
-	ptExperimentAccum.reservoirGiReceiverCacheAttempt +=
-	    static_cast<double>(stats.reservoirGiReceiverCacheAttempt);
-	ptExperimentAccum.reservoirGiReceiverCacheHit +=
-	    static_cast<double>(stats.reservoirGiReceiverCacheHit);
-	ptExperimentAccum.reservoirGiReceiverCacheMiss +=
-	    static_cast<double>(stats.reservoirGiReceiverCacheMiss);
-	ptExperimentAccum.reservoirGiReceiverCacheRejectNoLight +=
-	    static_cast<double>(stats.reservoirGiReceiverCacheRejectNoLight);
-	ptExperimentAccum.reservoirGiReceiverCacheAccepted +=
-	    static_cast<double>(stats.reservoirGiReceiverCacheAccepted);
-	ptExperimentAccum.reservoirGiReceiverReconnectAttempt +=
-	    static_cast<double>(stats.reservoirGiReceiverReconnectAttempt);
-	ptExperimentAccum.reservoirGiReceiverReconnectHit +=
-	    static_cast<double>(stats.reservoirGiReceiverReconnectHit);
-	ptExperimentAccum.reservoirGiReceiverReconnectMiss +=
-	    static_cast<double>(stats.reservoirGiReceiverReconnectMiss);
-	ptExperimentAccum.reservoirGiReceiverReconnectRejectVisibility +=
-	    static_cast<double>(stats.reservoirGiReceiverReconnectRejectVisibility);
-	ptExperimentAccum.reservoirGiReceiverReconnectRejectTarget +=
-	    static_cast<double>(stats.reservoirGiReceiverReconnectRejectTarget);
-	ptExperimentAccum.reservoirGiReceiverReconnectAccepted +=
-	    static_cast<double>(stats.reservoirGiReceiverReconnectAccepted);
-	ptExperimentAccum.reservoirGiReceiverCacheContinuationAttempt +=
-	    static_cast<double>(stats.reservoirGiReceiverCacheContinuationAttempt);
-	ptExperimentAccum.reservoirGiReceiverCacheContinuationHit +=
-	    static_cast<double>(stats.reservoirGiReceiverCacheContinuationHit);
-	ptExperimentAccum.reservoirGiReceiverCacheContinuationMiss +=
-	    static_cast<double>(stats.reservoirGiReceiverCacheContinuationMiss);
-	ptExperimentAccum.reservoirGiReceiverCacheContinuationAccepted +=
-	    static_cast<double>(stats.reservoirGiReceiverCacheContinuationAccepted);
-	ptExperimentAccum.reservoirGiBrightSurfelStore +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelStore);
-	ptExperimentAccum.reservoirGiBrightSurfelAttempt +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelAttempt);
-	ptExperimentAccum.reservoirGiBrightSurfelHit +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelHit);
-	ptExperimentAccum.reservoirGiBrightSurfelMiss +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelMiss);
-	ptExperimentAccum.reservoirGiBrightSurfelRejectVisibility +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelRejectVisibility);
-	ptExperimentAccum.reservoirGiBrightSurfelRejectGeometry +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelRejectGeometry);
-	ptExperimentAccum.reservoirGiBrightSurfelRejectTarget +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelRejectTarget);
-	ptExperimentAccum.reservoirGiBrightSurfelAccepted +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelAccepted);
-	ptExperimentAccum.reservoirGiSelectedBrightSurfel +=
-	    static_cast<double>(stats.reservoirGiSelectedBrightSurfel);
-	ptExperimentAccum.brightSurfelPrecheckRejectTarget +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelPrecheckRejectTarget);
-	ptExperimentAccum.brightSurfelTrainingAttempt +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelTrainingAttempt);
-	ptExperimentAccum.brightSurfelTrainingStore +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelTrainingStore);
-	ptExperimentAccum.brightSurfelTrainingRejectGeometry +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelTrainingRejectGeometry);
-	ptExperimentAccum.brightSurfelTrainingRejectTarget +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelTrainingRejectTarget);
-	ptExperimentAccum.brightSurfelSelectorRejectGeometry +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectGeometry);
-	ptExperimentAccum.brightSurfelSelectorRejectTarget +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectTarget);
-	ptExperimentAccum.brightSurfelSelectorViable +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorViable);
-	ptExperimentAccum.brightSurfelIndexedQuery +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelIndexedQuery);
-	ptExperimentAccum.brightSurfelIndexedEmpty +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelIndexedEmpty);
-	ptExperimentAccum.brightSurfelIndexedProbe +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelIndexedProbe);
-	ptExperimentAccum.brightSurfelSelectorRejectDistance +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectDistance);
-	ptExperimentAccum.brightSurfelSelectorRejectReceiverHemisphere +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectReceiverHemisphere);
-	ptExperimentAccum.brightSurfelSelectorRejectSurfelHemisphere +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectSurfelHemisphere);
-	ptExperimentAccum.brightSurfelSelectorRejectInvalidVector +=
-	    static_cast<double>(stats.reservoirGiBrightSurfelSelectorRejectInvalidVector);
 	ptExperimentAccum.rayTraceMs += stats.rayTraceMs;
 	ptExperimentAccum.totalFrameMs += stats.totalFrameMs;
 	++ptExperimentAccum.sampleCount;
@@ -3708,7 +2801,6 @@ void EngineCore::updatePathTracerExperimentSweep()
 	clearPathTracerExperimentState();
 	applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
 }
-
 void EngineCore::ensurePathTracerSanityScene()
 {
 	if (ptSanitySceneCreated || !scene || !resourceManager)
@@ -3823,83 +2915,6 @@ void EngineCore::updatePathTracerPhysicalSanityChecks(float /*deltaTimeSeconds*/
 	}
 }
 
-void EngineCore::applySponzaValidationPreset(UISystem::PathTracerSponzaValidationView view)
-{
-	const SponzaScenarioPreset &preset = sponzaScenarioPresetForView(view);
-	auto                       &analysis = ui.pathTracerAnalysisSettings;
-	auto                       &pathTracerSettings = ui.pathTracerSettings;
-
-	analysis.sponzaValidationView     = view;
-	analysis.enableAnalysisMode       = true;
-	analysis.lockBenchmarkScene       = true;
-	analysis.benchmarkActive          = false;
-	analysis.runBaselineSweep         = false;
-	analysis.runPhysicalSanityChecks  = false;
-	analysis.physicalSanityActive     = false;
-	analysis.cameraPath               = UISystem::PathTracerBenchmarkCameraPath::Static;
-	analysis.debugAov                 = UISystem::PathTracerDebugAov::PathRawFinalColor;
-
-	ui.renderMode                     = RenderMode::PathTracer;
-	ui.exposure                       = 1.0f;
-	ui.lightDirection                 = glm::normalize(preset.lightDirection);
-	pathTracerSettings.enableEnvironmentNEE     = true;
-	pathTracerSettings.environmentNeeBounceMode = 0;
-	pathTracerSettings.blackEnvironment         = false;
-	pathTracerSettings.applyFirstHitProbesToFinal = true;
-	pathTracerSettings.environmentNeeSamplingMode = UISystem::EnvironmentNeeSamplingMode::SkyBiased;
-	pathTracerSettings.firstHitProbeSamplingMode  = UISystem::FirstHitProbeSamplingMode::CandidateRis;
-	pathTracerSettings.firstHitDiffuseSamples     = 2;
-	pathTracerSettings.firstHitCandidateCount     = 4;
-	pathTracerSettings.reservoirGiMode            = UISystem::PathTracerReservoirGiMode::TemporalSpatial;
-	pathTracerSettings.reservoirGiProposalMode    = UISystem::PathTracerReservoirGiProposalMode::MixedCosineSunReceiverGuided;
-	pathTracerSettings.reservoirGiCandidateCount = 1;
-	pathTracerSettings.reservoirGiSpatialNeighborCount = 2;
-	pathTracerSettings.reservoirGiUseCandidateRis = false;
-	pathTracerSettings.reservoirGiTemporalBudgetDivisor = 2;
-	pathTracerSettings.reservoirGiSpatialBudgetDivisor = 2;
-	pathTracerSettings.reservoirGiEstimatorAuditMode =
-	    UISystem::PathTracerReservoirGiEstimatorAuditMode::Off;
-	pathTracerSettings.reservoirGiCandidateEvaluationMode = 2;
-	pathTracerSettings.pathTracerMaxBounces       = 8;
-	pathTracerSettings.directSunBounceMode = 1;
-
-	ptBenchmarkBasePosition = preset.cameraPosition;
-	ptBenchmarkBasePitch    = preset.cameraPitch;
-	ptBenchmarkBaseYaw      = preset.cameraYaw;
-	camera.position         = preset.cameraPosition;
-	camera.pitch            = preset.cameraPitch;
-	camera.yaw              = preset.cameraYaw;
-	camera.processInput(0.0f, 0.0f, 0.0f);
-	ptPrevCameraPos     = camera.position;
-	ptPrevPitch         = camera.pitch;
-	ptPrevYaw           = camera.yaw;
-	ptForceHistoryReset = true;
-}
-
-void EngineCore::loadPathTracerSponzaGiValidationPresetIfRequested()
-{
-	auto &pathTracerAnalysisSettings = ui.pathTracerAnalysisSettings;
-	if (!pathTracerAnalysisSettings.loadSponzaGiValidationPreset)
-	{
-		return;
-	}
-	pathTracerAnalysisSettings.loadSponzaGiValidationPreset = false;
-
-	if (!scene || !resourceManager)
-	{
-		return;
-	}
-
-	scene->clearScene();
-	ptBenchmarkSceneLoaded            = false;
-	ptExperimentSweepActive           = false;
-	ptExperimentRows.clear();
-
-	ptBenchmarkClockSeconds         = 0.0f;
-	ptBenchmarkTeleportClockSeconds = 0.0f;
-	applySponzaValidationPreset(pathTracerAnalysisSettings.sponzaValidationView);
-}
-
 void EngineCore::writePathTracerBacklogCsv()
 {
 	const auto backlogCsvPath                          = resolveAnalysisOutputPath(kPtBacklogCsvFileName);
@@ -3963,6 +2978,8 @@ void EngineCore::loadPathTracerBenchmarkSceneIfNeeded()
 	}
 
 	scene->loadModel(resolvedPath, *resourceManager, *pipelines.descriptorSetLayoutMaterial, scene->getRoot());
+	auto &pathTracerSettings                 = ui.pathTracerSettings;
+	pathTracerSettings.directSunBounceMode   = 1;
 	ptBenchmarkSceneLoaded = true;
 }
 

@@ -43,15 +43,7 @@ public:
         PathEnvironmentNeeContribution = 13,
         PathFirstHitBounceContribution = 14,
         PathSecondaryDirectSunContribution = 15,
-        PathBaselineContinuationContribution = 16,
-        PathReservoirGiContribution = 17,
-        PathReservoirGiAcceptedLuma = 18,
-        PathReservoirGiCandidateSurfaceHit = 19,
-        PathReservoirGiCandidateSunVisible = 20,
-        PathReservoirGiCandidatePositiveWeight = 21,
-        PathReservoirGiSelectedWeight = 22,
-        PathReservoirGiLocalNoLight = 23,
-        PathReservoirGiSelectedSource = 24
+        PathBaselineContinuationContribution = 16
     };
 
     enum class PathTracerQualityMode
@@ -74,41 +66,6 @@ public:
         CandidateSunBounce = 2,
         CandidateAverageReference = 3,
         CandidateRis = 4
-    };
-
-    enum class PathTracerReservoirGiMode
-    {
-        Off = 0,
-        SingleFrame = 1,
-        Temporal = 2,
-        TemporalSpatial = 3
-    };
-
-    enum class PathTracerReservoirGiEstimatorAuditMode
-    {
-        Off = 0,
-        Current = 1,
-        NoProbeScale = 2
-    };
-
-    enum class PathTracerReservoirGiProposalMode
-    {
-        Cosine = 0,
-        SunGuided = 1,
-        MixedCosineSunGuided = 2,
-        MixedCosineHistoryGuided = 3,
-        MixedCosineSunReceiverGuided = 4,
-        MixedCosineDualSunGuided = 5,
-        MixedCosineSunReceiverCacheGuided = 6,
-        MixedCosineSunReceiverCacheReconnect = 7,
-        MixedCosineSunReceiverBrightSurfel = 8
-    };
-
-    enum class PathTracerSponzaValidationView
-    {
-        DarkCourtyard = 0,
-        SunlitCourtyardWall = 1,
-        MidDepthInterior = 2
     };
 
     enum class SurfelPathTracerDebugView
@@ -148,21 +105,9 @@ public:
         FirstHitProbeSamplingMode firstHitProbeSamplingMode = FirstHitProbeSamplingMode::CosineHemisphere;
         int                   firstHitDiffuseSamples = 1;
         int                   firstHitCandidateCount = 4;
-        PathTracerReservoirGiMode reservoirGiMode = PathTracerReservoirGiMode::Off;
-        PathTracerReservoirGiProposalMode reservoirGiProposalMode = PathTracerReservoirGiProposalMode::Cosine;
-        int                   reservoirGiCandidateCount = 2;
-        int                   reservoirGiSpatialNeighborCount = 4;
-        bool                  reservoirGiUseCandidateRis = true;
-        bool                  reservoirGiDetailedDiagnostics = true;
-        bool                  reservoirGiBrightSurfelShadowOnly = false;
-        PathTracerReservoirGiEstimatorAuditMode reservoirGiEstimatorAuditMode =
-            PathTracerReservoirGiEstimatorAuditMode::Off;
-        int                   reservoirGiTemporalBudgetDivisor = 1;
-        int                   reservoirGiSpatialBudgetDivisor = 1;
         int                   pathTracerMaxBounces = 8;
         // 0 = all bounces, 1 = first bounce only, 2 = first 2 bounces.
         int                   directSunBounceMode = 0;
-        int                   reservoirGiCandidateEvaluationMode = 2;
         float                 targetFrameMs = 16.6f;
         bool                  enableReprojection = true;
         bool                  enableDenoiser = true;
@@ -194,101 +139,6 @@ public:
         uint32_t skyHitCount = 0;
         uint32_t fireflyClampCount = 0;
         uint32_t pixelSampleCount = 0;
-        uint32_t reservoirGiCandidates = 0;
-        uint32_t reservoirGiAccepted = 0;
-        uint32_t reservoirGiCandidateSurfaceHits = 0;
-        uint32_t reservoirGiCandidateSunVisible = 0;
-        uint32_t reservoirGiCandidatePositiveWeight = 0;
-        uint32_t reservoirGiZeroWeight = 0;
-        uint32_t reservoirGiTemporalAccepted = 0;
-        uint32_t reservoirGiTemporalRejected = 0;
-        uint32_t reservoirGiTemporalReuseAttempts = 0;
-        uint32_t reservoirGiTemporalRejectGeometry = 0;
-        uint32_t reservoirGiTemporalRejectVisibility = 0;
-        uint32_t reservoirGiTemporalRejectLight = 0;
-        uint32_t reservoirGiSpatialAccepted = 0;
-        uint32_t reservoirGiSpatialRejected = 0;
-        uint32_t reservoirGiSelectedLocal = 0;
-        uint32_t reservoirGiSelectedTemporal = 0;
-        uint32_t reservoirGiSelectedSpatial = 0;
-        uint32_t reservoirGiSelectedCache = 0;
-        uint32_t reservoirGiSelectedCacheReconnect = 0;
-        uint32_t reservoirGiLocalSurfaceHits = 0;
-        uint32_t reservoirGiLocalValidSamples = 0;
-        uint32_t reservoirGiLocalMissCandidates = 0;
-        uint32_t reservoirGiLocalMissPositiveWeight = 0;
-        uint32_t reservoirGiLocalSurfaceInvalid = 0;
-        uint32_t reservoirGiLocalRejectGeometry = 0;
-        uint32_t reservoirGiLocalRejectNoLight = 0;
-        uint32_t reservoirGiLocalRejectZeroTarget = 0;
-        uint32_t reservoirGiLocalRejectBadPdf = 0;
-        uint32_t reservoirGiAcceptedLocalSurface = 0;
-        uint32_t reservoirGiAcceptedLocalMiss = 0;
-        uint32_t reservoirGiLocalShadowRays = 0;
-        uint32_t reservoirGiTemporalReconnectRays = 0;
-        uint32_t reservoirGiTemporalShadowRays = 0;
-        uint32_t reservoirGiHistoryGuideUsed = 0;
-        uint32_t reservoirGiHistoryGuideRejectedLowWeight = 0;
-        uint32_t reservoirGiHistoryGuideFallbackCosine = 0;
-        uint32_t reservoirGiHistoryGuideRejectReprojection = 0;
-        uint32_t reservoirGiHistoryGuideRejectLoad = 0;
-        uint32_t reservoirGiHistoryGuideRejectGeometry = 0;
-        uint32_t reservoirGiHistoryGuideNeighborSearches = 0;
-        uint32_t reservoirGiHistoryGuideNeighborHits = 0;
-        uint32_t reservoirGiHistoryGuideNeighborMisses = 0;
-        uint32_t reservoirGiReceiverCacheStore = 0;
-        uint32_t reservoirGiReceiverCacheAttempt = 0;
-        uint32_t reservoirGiReceiverCacheHit = 0;
-        uint32_t reservoirGiReceiverCacheMiss = 0;
-        uint32_t reservoirGiReceiverCacheRejectNoLight = 0;
-        uint32_t reservoirGiReceiverCacheAccepted = 0;
-        uint32_t reservoirGiReceiverReconnectAttempt = 0;
-        uint32_t reservoirGiReceiverReconnectHit = 0;
-        uint32_t reservoirGiReceiverReconnectMiss = 0;
-        uint32_t reservoirGiReceiverReconnectRejectVisibility = 0;
-        uint32_t reservoirGiReceiverReconnectRejectTarget = 0;
-        uint32_t reservoirGiReceiverReconnectAccepted = 0;
-        uint32_t reservoirGiReceiverCacheContinuationAttempt = 0;
-        uint32_t reservoirGiReceiverCacheContinuationHit = 0;
-        uint32_t reservoirGiReceiverCacheContinuationMiss = 0;
-        uint32_t reservoirGiReceiverCacheContinuationAccepted = 0;
-        uint32_t reservoirGiBrightSurfelStore = 0;
-        uint32_t reservoirGiBrightSurfelAttempt = 0;
-        uint32_t reservoirGiBrightSurfelHit = 0;
-        uint32_t reservoirGiBrightSurfelMiss = 0;
-        uint32_t reservoirGiBrightSurfelRejectVisibility = 0;
-        uint32_t reservoirGiBrightSurfelRejectGeometry = 0;
-        uint32_t reservoirGiBrightSurfelRejectTarget = 0;
-        uint32_t reservoirGiBrightSurfelAccepted = 0;
-        uint32_t reservoirGiSelectedBrightSurfel = 0;
-        uint32_t reservoirGiBrightSurfelPrecheckRejectTarget = 0;
-        uint32_t reservoirGiBrightSurfelTrainingAttempt = 0;
-        uint32_t reservoirGiBrightSurfelTrainingStore = 0;
-        uint32_t reservoirGiBrightSurfelTrainingRejectGeometry = 0;
-        uint32_t reservoirGiBrightSurfelTrainingRejectTarget = 0;
-        uint32_t reservoirGiBrightSurfelSelectorRejectGeometry = 0;
-        uint32_t reservoirGiBrightSurfelSelectorRejectTarget = 0;
-        uint32_t reservoirGiBrightSurfelSelectorViable = 0;
-        uint32_t reservoirGiBrightSurfelIndexedQuery = 0;
-        uint32_t reservoirGiBrightSurfelIndexedEmpty = 0;
-        uint32_t reservoirGiBrightSurfelIndexedProbe = 0;
-        uint32_t reservoirGiBrightSurfelSelectorRejectDistance = 0;
-        uint32_t reservoirGiBrightSurfelSelectorRejectReceiverHemisphere = 0;
-        uint32_t reservoirGiBrightSurfelSelectorRejectSurfelHemisphere = 0;
-        uint32_t reservoirGiBrightSurfelSelectorRejectInvalidVector = 0;
-        float reservoirGiAcceptedAvgLuma = 0.0f;
-        float reservoirGiAcceptedLumaSum = 0.0f;
-        float reservoirGiCandidateSurfaceHitRatio = 0.0f;
-        float reservoirGiCandidateSunVisibleRatio = 0.0f;
-        float reservoirGiCandidatePositiveWeightRatio = 0.0f;
-        float reservoirGiLocalValidRatio = 0.0f;
-        float reservoirGiSelectedWeightAverage = 0.0f;
-        float reservoirGiTargetWeightAverage = 0.0f;
-        float reservoirGiConfidenceMAvg = 0.0f;
-        float reservoirGiAuditCurrentLuma = 0.0f;
-        float reservoirGiAuditReferenceLuma = 0.0f;
-        float reservoirGiAuditRelativeErrorPct = 0.0f;
-        float reservoirGiAuditProbeScale = 0.0f;
         float cameraMotionFactor = 0.0f;
     };
 
@@ -356,12 +206,6 @@ public:
         bool                         lockBenchmarkScene = false;
         bool                         benchmarkActive = false;
         bool                         runBaselineSweep = false;
-        bool                         runSponzaGiPerfSweep = false;
-        bool                         runBrightSurfelShadowEvaluationSweep = false;
-        bool                         runBrightSurfelProposalEvaluationSweep = false;
-        bool                         loadSponzaGiValidationPreset = false;
-        PathTracerSponzaValidationView sponzaValidationView = PathTracerSponzaValidationView::DarkCourtyard;
-        bool                         applySponzaValidationView = false;
         bool                         freezeCameraInputDuringBenchmark = true;
         PathTracerBenchmarkCameraPath cameraPath = PathTracerBenchmarkCameraPath::SlowPan;
         bool                         adaptiveSampling = true;
@@ -372,8 +216,6 @@ public:
         int                          debugAtrousIteration = 0;
         int                          warmupFrames = 30;
         int                          sampleFrames = 120;
-        int                          sponzaGiSweepWarmupFrames = 8;
-        int                          sponzaGiSweepSampleFrames = 32;
         float                        benchmarkVisualFidelityScore = 0.80f;
         bool                         runPhysicalSanityChecks = false;
         bool                         physicalSanityActive = false;
