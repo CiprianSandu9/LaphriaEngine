@@ -23,6 +23,7 @@ struct EvaluatePushConstants {
     float removalThreshold;
     float surfelTargetArea;
     float surfelMinRadius;
+    float surfelMaxRadiusScale;
     uint frameIndex;
     uint lockSurfels;
     uint enablePlacement;
@@ -30,7 +31,6 @@ struct EvaluatePushConstants {
     uint maxSurfelSamplesPerQuery;
     uint pad0;
     uint pad1;
-    uint pad2;
 };
 
 [[vk::push_constant]] EvaluatePushConstants push;
@@ -275,7 +275,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (push.mode == SURFEL_PT_EVALUATE_GENERATE) {
         float coverage = estimateCoverage(position, normal, closestSurfelIndex, false);
         if (push.lockSurfels == 0u && push.enablePlacement != 0u && coverage < push.placementThreshold) {
-            float radius = surfelRadius(depth, push.surfelTargetArea, push.surfelMinRadius, push.cellSize * 2.0);
+            float radius = surfelRadius(depth, push.surfelTargetArea, push.surfelMinRadius, push.cellSize * push.surfelMaxRadiusScale);
             allocateSurfel(pixel, position, normal, radius, resolveSurfelRadiance(position, normal), 0u);
         }
         if (push.lockSurfels == 0u &&

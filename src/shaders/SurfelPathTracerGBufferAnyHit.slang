@@ -6,6 +6,11 @@ struct SurfelPathTracerGBufferPayload {
     uint materialIndex;
     float3 worldNormal;
     float3 baseColor;
+    float roughness;
+    float metallic;
+    float dielectricSpec;
+    float ao;
+    float3 emissive;
 };
 
 struct BuiltInTriangleIntersectionAttributes {

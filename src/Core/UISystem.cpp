@@ -1441,15 +1441,13 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
                     surfelPathTracerStats.requestedRays,
                     surfelPathTracerStats.filledCells,
                     surfelPathTracerStats.rejectedStores);
-        ImGui::Text("Lifecycle: %u spawned / %u recycled / %u removed",
-                    surfelPathTracerStats.spawnedSurfels,
-                    surfelPathTracerStats.recycledSurfels,
-                    surfelPathTracerStats.removedSurfels);
-        ImGui::Text("Guided: %u | Cosine: %u | Terminated: %u | Misses: %u",
-                    surfelPathTracerStats.guidedRays,
-                    surfelPathTracerStats.cosineRays,
-                    surfelPathTracerStats.surfelTerminatedPaths,
-                    surfelPathTracerStats.pathMisses);
+        ImGui::Text("Recycled Surfels: %u", surfelPathTracerStats.recycledSurfels);
+        ImGui::Text("Spawned Surfels: %u", surfelPathTracerStats.spawnedSurfels);
+        ImGui::Text("Removed Surfels: %u", surfelPathTracerStats.removedSurfels);
+        ImGui::Text("Guided Rays: %u", surfelPathTracerStats.guidedRays);
+        ImGui::Text("Cosine Rays: %u", surfelPathTracerStats.cosineRays);
+        ImGui::Text("Surfel-Terminated Paths: %u", surfelPathTracerStats.surfelTerminatedPaths);
+        ImGui::Text("Path Misses: %u", surfelPathTracerStats.pathMisses);
         ImGui::Text("Total: %.3f ms", surfelPathTracerStats.totalFrameMs);
     }
 

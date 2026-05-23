@@ -79,7 +79,9 @@ class EngineCore
 	vk::raii::DescriptorPool             surfelPathTracerRtDescriptorPool{nullptr};
 	std::vector<vk::raii::DescriptorSet> surfelPathTracerRtDescriptorSets;
 	mutable bool                         surfelPathTracerPersistentImageLayoutsInitialized = false;
-	mutable std::array<bool, MAX_FRAMES_IN_FLIGHT> surfelPathTracerHistoryValid{};
+	mutable std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> surfelPathTracerPreviousHistoryIndex{};
+	mutable std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> surfelPathTracerCurrentHistoryIndex{};
+	mutable std::array<bool, MAX_FRAMES_IN_FLIGHT> surfelPathTracerTemporalHistoryValid{};
 	SurfelPathTracerStaticSettingsSnapshot surfelPathTracerStaticSettings{};
 	bool surfelPathTracerStaticSettingsInitialized = false;
 
@@ -207,6 +209,8 @@ class EngineCore
 	void createSurfelPathTracerStorageDescriptorSets();
 	void createSurfelPathTracerRtDescriptorSets();
 	void createDenoiserDescriptorSets();
+	void resetSurfelPathTracerTemporalHistory() const;
+	void updateSurfelPathTracerHistoryDescriptors(uint32_t frameIndex) const;
 
 	void recordComputeCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordSkinningPass(const vk::raii::CommandBuffer &commandBuffer) const;

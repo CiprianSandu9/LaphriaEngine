@@ -6,6 +6,11 @@ struct SurfelPathTracerGBufferPayload {
     uint materialIndex;
     float3 worldNormal;
     float3 baseColor;
+    float roughness;
+    float metallic;
+    float dielectricSpec;
+    float ao;
+    float3 emissive;
 };
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;
@@ -15,6 +20,8 @@ struct SurfelPathTracerGBufferPayload {
 [[vk::binding(2, 1)]] RWTexture2D<float> gBufferDepth;
 [[vk::binding(3, 1)]] RWTexture2D<float4> gBufferMotionMaterial;
 [[vk::binding(20, 1)]] RWTexture2D<float4> gBufferAlbedo;
+[[vk::binding(21, 1)]] RWTexture2D<float4> gBufferMaterial;
+[[vk::binding(22, 1)]] RWTexture2D<float4> gBufferEmissive;
 
 [[vk::binding(0, 2)]] ConstantBuffer<UniformBuffer> ubo;
 
@@ -26,6 +33,18 @@ SurfelPathTracerGBufferPayload makeEmptyGBufferPayload()
     payload.materialIndex = 0u;
     payload.worldNormal = float3(0.0, 0.0, 0.0);
     payload.baseColor = float3(0.0, 0.0, 0.0);
+    payload.roughness = 1.0;
+    payload.metallic = 0.0;
+    payload.dielectricSpec = 1.0;
+    payload.ao = 1.0;
+    payload.emissive = float3(0.0);
+    return payload;
+}
+
+SurfelPathTracerGBufferPayload makeVisibilityGBufferPayload()
+{
+    SurfelPathTracerGBufferPayload payload = makeEmptyGBufferPayload();
+    payload.hitT = 1.0;
     return payload;
 }
 
@@ -38,8 +57,10 @@ float traceSunVisibility(float3 position, float3 normal, float3 sunDir)
     shadowRay.TMin = bias;
     shadowRay.TMax = 10000.0;
 
-    SurfelPathTracerGBufferPayload shadowPayload = makeEmptyGBufferPayload();
-    TraceRay(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+    SurfelPathTracerGBufferPayload shadowPayload = makeVisibilityGBufferPayload();
+    TraceRay(tlas,
+             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+             0xFF, 0, 0, 0, shadowRay, shadowPayload);
     return shadowPayload.hitT < 0.0 ? 1.0 : 0.0;
 }
 
@@ -72,6 +93,8 @@ void main() {
         gBufferDepth[launchID] = -1.0;
         gBufferMotionMaterial[launchID] = float4(0.0, 0.0, 0.0, 0.0);
         gBufferAlbedo[launchID] = float4(0.0, 0.0, 0.0, 0.0);
+        gBufferMaterial[launchID] = float4(1.0, 0.0, 1.0, 1.0);
+        gBufferEmissive[launchID] = float4(0.0, 0.0, 0.0, 0.0);
         return;
     }
 
@@ -90,4 +113,6 @@ void main() {
     gBufferDepth[launchID] = payload.hitT;
     gBufferMotionMaterial[launchID] = float4(motion, float(payload.modelId), float(payload.materialIndex));
     gBufferAlbedo[launchID] = float4(payload.baseColor, 1.0);
+    gBufferMaterial[launchID] = float4(payload.roughness, payload.metallic, payload.dielectricSpec, payload.ao);
+    gBufferEmissive[launchID] = float4(payload.emissive, 0.0);
 }

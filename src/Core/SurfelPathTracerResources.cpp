@@ -126,10 +126,20 @@ void SurfelPathTracerResources::cleanupSwapchainResources()
 	clearViewsThenDestroyImages(gBufferDepthViews, gBufferDepthImages);
 	clearViewsThenDestroyImages(gBufferMotionMaterialViews, gBufferMotionMaterialImages);
 	clearViewsThenDestroyImages(gBufferAlbedoViews, gBufferAlbedoImages);
+	clearViewsThenDestroyImages(gBufferMaterialViews, gBufferMaterialImages);
+	clearViewsThenDestroyImages(gBufferEmissiveViews, gBufferEmissiveImages);
 	clearViewsThenDestroyImages(reflectionViews, reflectionImages);
 	clearViewsThenDestroyImages(filteredReflectionViews, filteredReflectionImages);
+	for (size_t bank = 0; bank < filteredReflectionHistoryImages.size(); ++bank)
+	{
+		clearViewsThenDestroyImages(filteredReflectionHistoryViews[bank], filteredReflectionHistoryImages[bank]);
+	}
 	clearViewsThenDestroyImages(lightingViews, lightingImages);
-	clearViewsThenDestroyImages(taaHistoryViews, taaHistoryImages);
+	clearViewsThenDestroyImages(referenceViews, referenceImages);
+	for (size_t bank = 0; bank < taaHistoryImages.size(); ++bank)
+	{
+		clearViewsThenDestroyImages(taaHistoryViews[bank], taaHistoryImages[bank]);
+	}
 	clearViewsThenDestroyImages(irradianceAtlasViews, irradianceAtlasImages);
 	clearViewsThenDestroyImages(surfelDepthAtlasViews, surfelDepthAtlasImages);
 }
@@ -281,14 +291,26 @@ void SurfelPathTracerResources::createExtentImages(const VulkanDevice &dev,
 	createStorageImageSet(dev, width, height, vk::Format::eR32Sfloat, gBufferDepthImages, gBufferDepthViews);
 	createStorageImageSet(dev, width, height, vk::Format::eR32G32B32A32Sfloat, gBufferMotionMaterialImages, gBufferMotionMaterialViews);
 	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, gBufferAlbedoImages, gBufferAlbedoViews);
+	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, gBufferMaterialImages, gBufferMaterialViews);
+	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, gBufferEmissiveImages, gBufferEmissiveViews);
 	const uint32_t halfWidth = std::max((width + 1u) / 2u, 1u);
 	const uint32_t halfHeight = std::max((height + 1u) / 2u, 1u);
 	createStorageImageSet(dev, halfWidth, halfHeight,
 	                      vk::Format::eR16G16B16A16Sfloat, reflectionImages, reflectionViews);
 	createStorageImageSet(dev, halfWidth, halfHeight,
 	                      vk::Format::eR16G16B16A16Sfloat, filteredReflectionImages, filteredReflectionViews);
+	for (size_t bank = 0; bank < filteredReflectionHistoryImages.size(); ++bank)
+	{
+		createStorageImageSet(dev, halfWidth, halfHeight, vk::Format::eR16G16B16A16Sfloat,
+		                      filteredReflectionHistoryImages[bank], filteredReflectionHistoryViews[bank]);
+	}
 	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, lightingImages, lightingViews);
-	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, taaHistoryImages, taaHistoryViews);
+	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, referenceImages, referenceViews);
+	for (size_t bank = 0; bank < taaHistoryImages.size(); ++bank)
+	{
+		createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat,
+		                      taaHistoryImages[bank], taaHistoryViews[bank]);
+	}
 
 	const uint32_t atlasWidth = std::clamp(settings_.irradianceAtlasWidth, 512u, 4096u);
 	const uint32_t atlasHeight = std::clamp(settings_.irradianceAtlasHeight, 512u, 4096u);

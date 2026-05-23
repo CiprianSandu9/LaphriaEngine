@@ -2,6 +2,7 @@
 #define LAPHRIAENGINE_SURFELPATHTRACERRESOURCES_H
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -147,14 +148,22 @@ class SurfelPathTracerResources
 	std::vector<vk::raii::ImageView> gBufferMotionMaterialViews;
 	std::vector<VulkanUtils::VmaImage> gBufferAlbedoImages;
 	std::vector<vk::raii::ImageView> gBufferAlbedoViews;
+	std::vector<VulkanUtils::VmaImage> gBufferMaterialImages;
+	std::vector<vk::raii::ImageView> gBufferMaterialViews;
+	std::vector<VulkanUtils::VmaImage> gBufferEmissiveImages;
+	std::vector<vk::raii::ImageView> gBufferEmissiveViews;
 	std::vector<VulkanUtils::VmaImage> reflectionImages;
 	std::vector<vk::raii::ImageView> reflectionViews;
 	std::vector<VulkanUtils::VmaImage> filteredReflectionImages;
 	std::vector<vk::raii::ImageView> filteredReflectionViews;
+	std::array<std::vector<VulkanUtils::VmaImage>, 2> filteredReflectionHistoryImages;
+	std::array<std::vector<vk::raii::ImageView>, 2> filteredReflectionHistoryViews;
 	std::vector<VulkanUtils::VmaImage> lightingImages;
 	std::vector<vk::raii::ImageView> lightingViews;
-	std::vector<VulkanUtils::VmaImage> taaHistoryImages;
-	std::vector<vk::raii::ImageView> taaHistoryViews;
+	std::vector<VulkanUtils::VmaImage> referenceImages;
+	std::vector<vk::raii::ImageView> referenceViews;
+	std::array<std::vector<VulkanUtils::VmaImage>, 2> taaHistoryImages;
+	std::array<std::vector<vk::raii::ImageView>, 2> taaHistoryViews;
 	std::vector<VulkanUtils::VmaImage> irradianceAtlasImages;
 	std::vector<vk::raii::ImageView> irradianceAtlasViews;
 	std::vector<VulkanUtils::VmaImage> surfelDepthAtlasImages;

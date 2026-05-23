@@ -5,6 +5,8 @@
 [[vk::binding(3, 0)]] RWTexture2D<float4> gBufferMotionMaterial;
 [[vk::binding(16, 0)]] RWTexture2D<float4> reflectionImages;
 [[vk::binding(17, 0)]] RWTexture2D<float4> filteredReflectionImages;
+[[vk::binding(23, 0)]] RWTexture2D<float4> previousFilteredReflectionHistory;
+[[vk::binding(24, 0)]] RWTexture2D<float4> currentFilteredReflectionHistory;
 
 struct ReflectionFilterPushConstants {
     uint width;
@@ -63,6 +65,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float4 raw = reflectionImages[pixel];
     if (push.enabled == 0u) {
         filteredReflectionImages[pixel] = raw;
+        currentFilteredReflectionHistory[pixel] = raw;
         return;
     }
 
@@ -71,6 +74,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 centerNormalRaw = gBufferNormal[fullPixel].xyz;
     if (centerDepth <= 0.0 || !isFinite3(centerNormalRaw) || length(centerNormalRaw) <= 0.001) {
         filteredReflectionImages[pixel] = float4(0.0);
+        currentFilteredReflectionHistory[pixel] = float4(0.0);
         return;
     }
 
@@ -102,11 +106,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     float3 spatialReconstruction = weightSum > 0.0001 ? sum / weightSum : raw.rgb;
 
-    float4 previousFiltered = push.resetHistory == 0u ? filteredReflectionImages[pixel] : float4(0.0);
+    float4 previousFiltered = push.resetHistory == 0u ? previousFilteredReflectionHistory[pixel] : float4(0.0);
     bool historyUsable = push.resetHistory == 0u &&
                          isFinite3(previousFiltered.rgb) &&
                          reflectionHistoryKeyMatches(previousFiltered.a, currentKey);
     float historyAlpha = 0.16;
     float3 filtered = historyUsable ? lerp(previousFiltered.rgb, spatialReconstruction, historyAlpha) : spatialReconstruction;
-    filteredReflectionImages[pixel] = float4(clampLuminance(filtered, SURFEL_PT_MAX_RADIANCE_LUMINANCE), currentKey);
+    float4 filteredValue = float4(clampLuminance(filtered, SURFEL_PT_MAX_RADIANCE_LUMINANCE), currentKey);
+    filteredReflectionImages[pixel] = filteredValue;
+    currentFilteredReflectionHistory[pixel] = filteredValue;
 }

@@ -89,7 +89,7 @@ bool occursAtLeast(std::string_view haystack, std::string_view needle, size_t ex
 bool testSurfelPathTracerPipelineContractFiles()
 {
 	const std::filesystem::path root = sourceRoot();
-	const std::array<std::filesystem::path, 31> contractFiles = {
+	const std::array<std::filesystem::path, 32> contractFiles = {
 	    root / "CMakeLists.txt",
 	    root / "src" / "Core" / "EngineAuxiliary.h",
 	    root / "src" / "Core" / "UISystem.h",
@@ -117,6 +117,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    root / "src" / "shaders" / "SurfelPathTracerIntegrate.slang",
 	    root / "src" / "shaders" / "SurfelPathTracerEvaluate.slang",
 	    root / "src" / "shaders" / "SurfelPathTracerReflection.slang",
+	    root / "src" / "shaders" / "SurfelPathTracerReference.slang",
 	    root / "src" / "shaders" / "SurfelPathTracerReflectionFilter.slang",
 	    root / "src" / "shaders" / "SurfelPathTracerBilateral.slang",
 	    root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang",
@@ -220,6 +221,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "SurfelPathTracerIntegrate.slang|main",
 	    "SurfelPathTracerEvaluate.slang|main",
 	    "SurfelPathTracerReflection.slang|main",
+	    "SurfelPathTracerReference.slang|main",
 	    "SurfelPathTracerReflectionFilter.slang|main",
 	    "SurfelPathTracerBilateral.slang|main",
 	    "SurfelPathTracerLightIntegrate.slang|main",
@@ -233,6 +235,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "recordIntegratePass",
 	    "recordEvaluatePass",
 	    "recordReflectionPass",
+	    "recordReferencePass",
 	    "recordReflectionFilterPass",
 	    "recordBilateralPass",
 	    "recordLightIntegratePass",
@@ -244,10 +247,12 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "recordStorageBarrierComputeToRt",
 	    "recordStorageBarrierRtToCompute",
 	    "gBufferRayTracingPipeline",
+	    "referenceRayTracingPipeline",
 	    "rayTracingDescriptorSetLayout",
 	    "surfelPathTracerStorageDescriptorSets",
 	    "surfelPathTracerRtDescriptorSets",
 	    "gBufferSbt",
+	    "referenceSbt",
 	    "traceRaysKHR",
 	    "SurfelPathTracerGBuffer.slang",
 	    "SurfelPathTracerGBufferMiss.slang",
@@ -259,6 +264,9 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "gBufferDepth",
 	    "lightingImages",
 	    "taaHistoryImages",
+	    "filteredReflectionHistoryImages",
+	    "filteredReflectionHistoryViews",
+	    "taaHistoryViews",
 	    "RaytracingAccelerationStructure tlas",
 	    "node->modelId >= static_cast<int>(Laphria::EngineConfig::kBindlessModelCapacity)",
 	    "vk::Format::eR32G32B32A32Sfloat, gBufferMotionMaterialImages",
@@ -282,7 +290,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "perCellSurfelLimit",
 	    "rejectedStores",
 	    "InterlockedAdd",
-	    "msmeBlend",
+	    "updateMsme",
 	    "packNormalOctahedral",
 	    "unpackNormalOctahedral",
 	    "SURFEL_PT_RAY_BIAS",
@@ -309,10 +317,14 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "float currentKey = makeReflectionHistoryKey(centerDepth, centerNormal, centerMaterial)",
 	    "bool historyUsable = push.resetHistory == 0u &&",
 	    "reflectionHistoryKeyMatches(previousFiltered.a, currentKey)",
-	    "filteredReflectionImages[pixel] = float4(clampLuminance(filtered, SURFEL_PT_MAX_RADIANCE_LUMINANCE), currentKey)",
-	    "push.resetHistory == 0u ? filteredReflectionImages[pixel] : float4(0.0)",
+	    "float4 filteredValue = float4(clampLuminance(filtered, SURFEL_PT_MAX_RADIANCE_LUMINANCE), currentKey)",
+	    "filteredReflectionImages[pixel] = filteredValue",
+	    "currentFilteredReflectionHistory[pixel] = filteredValue",
+	    "push.resetHistory == 0u ? previousFilteredReflectionHistory[pixel] : float4(0.0)",
 	    "[[vk::binding(16, 0)]] RWTexture2D<float4> reflectionImages",
 	    "[[vk::binding(17, 0)]] RWTexture2D<float4> filteredReflectionImages",
+	    "[[vk::binding(23, 0)]] RWTexture2D<float4> previousFilteredReflectionHistory",
+	    "[[vk::binding(24, 0)]] RWTexture2D<float4> currentFilteredReflectionHistory",
 	    "float4 sampleValue = filteredReflectionImages[samplePixel]",
 	    "reflectionImages[pixel] = float4(clampLuminance(filtered, SURFEL_PT_MAX_RADIANCE_LUMINANCE), centerValue.a)",
 	    "makeTaaHistoryKey",
@@ -321,9 +333,10 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "float3 normalRaw = gBufferNormal[pixel].xyz",
 	    "float currentKey = makeTaaHistoryKey(depth, motionMaterial, normal)",
 	    "uint2 previousPixel = min(uint2(previousUv * float2(push.width, push.height))",
-	    "bool samePixelFallback = all(abs(int2(previousPixel) - int2(pixel)) <= int2(0))",
-	    "if (samePixelFallback && taaHistoryKeyMatches(storedHistory.a, currentKey))",
-	    "taaHistoryImages[pixel] = float4(blended, currentKey)",
+	    "if (taaHistoryKeyMatches(storedHistory.a, currentKey))",
+	    "[[vk::binding(25, 0)]] RWTexture2D<float4> previousTaaHistory",
+	    "[[vk::binding(26, 0)]] RWTexture2D<float4> currentTaaHistory",
+	    "currentTaaHistory[pixel] = float4(blended, currentKey)",
 	    "outputImage[pixel] = float4(applyAcesTonemap(blended, ubo.exposure), 1.0)",
 	    "SurfelPathTracer persistent resource creation failed",
 	    "SurfelPathTracer extent resource creation failed",
@@ -339,8 +352,8 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "if (!resourceManager || resourceManager->getModelCount() == 0)",
 	    "commandBuffer.dispatch(groupCount16(push.width), groupCount16(push.height), 1)",
 	    "const bool updateSurfels = !surfelSettings.lockSurfels || resetPersistent",
-	    "Current descriptors expose one history image per frame-in-flight",
-	    "const bool historyReady = false",
+	    "const bool historyReady = !ptForceHistoryReset && surfelPathTracerTemporalHistoryValid[fi]",
+	    "updateSurfelPathTracerHistoryDescriptors(fi)",
 	    "else\n\t{\n\t\tsurfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);",
 	    "vk::PipelineStageFlagBits2::eComputeShader |\n\t\t                    vk::PipelineStageFlagBits2::eRayTracingShaderKHR",
 	    "const bool preserveReflectionDebug =",
@@ -349,7 +362,8 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "historyReady &&",
 	    "surfelSettings.debugView == UISystem::SurfelPathTracerDebugView::FinalColor",
 	    "if (taaHistoryEnabled)",
-	    "surfelPathTracerHistoryValid.fill(false)",
+	    "surfelPathTracerTemporalHistoryValid.fill(false)",
+	    "std::swap(surfelPathTracerPreviousHistoryIndex[fi], surfelPathTracerCurrentHistoryIndex[fi])",
 	    "if (push.enabled == 0u)",
 	    "outputImage[pixel] = float4(applyAcesTonemap(currentLighting, ubo.exposure), 1.0)",
 	    "!isFinite3(rawNormal) || length(rawNormal) <= 0.001",
@@ -367,14 +381,126 @@ bool testSurfelPathTracerPipelineContractFiles()
 	const std::string commonShader =
 	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerCommon.slang", filesOk);
 	const std::string raygenShader = readTextFile(root / "src" / "shaders" / "SurfelPathTracerRaygen.slang", filesOk);
+	const std::string gBufferShader =
+	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBuffer.slang", filesOk);
+	const std::string gBufferClosestHitShader =
+	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBufferClosestHit.slang", filesOk);
+	const std::string gBufferMissShader =
+	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBufferMiss.slang", filesOk);
+	const std::string gBufferAnyHitShader =
+	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBufferAnyHit.slang", filesOk);
 	const std::string surfelClosestHitShader =
 	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerClosestHit.slang", filesOk);
 	const std::string integrateShader =
 	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerIntegrate.slang", filesOk);
 	const std::string reflectionShader =
 	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerReflection.slang", filesOk);
+	const std::string referenceShader =
+	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerReference.slang", filesOk);
 	const std::string engineCore = readTextFile(root / "src" / "Core" / "EngineCore.cpp", filesOk);
+	const std::string uiSystemHeader = readTextFile(root / "src" / "Core" / "UISystem.h", filesOk);
+	const std::string passesHeader = readTextFile(root / "src" / "Core" / "SurfelPathTracerPasses.h", filesOk);
 	const std::string passesCpp = readTextFile(root / "src" / "Core" / "SurfelPathTracerPasses.cpp", filesOk);
+	auto findAfter = [&](std::string_view needle, size_t start) {
+		const auto pos = engineCore.find(needle, start);
+		if (pos == std::string::npos)
+		{
+			std::cerr << "missing SurfelPathTracer pass marker: " << needle << '\n';
+		}
+		return pos;
+	};
+	auto before = [&](size_t first, size_t second, std::string_view label) {
+		if (first == std::string::npos || second == std::string::npos || first >= second)
+		{
+			std::cerr << "SurfelPathTracer pass-order contract failed: " << label << '\n';
+			return false;
+		}
+		return true;
+	};
+
+	const auto gbuffer = findAfter("recordGBufferPass", 0);
+	const auto gbufferToCompute = findAfter("recordImageBarrierGBufferToCompute", gbuffer);
+	const auto prepare = findAfter("recordPreparePass", gbufferToCompute);
+	const auto evaluateGenerateCall = findAfter("recordEvaluatePass", prepare);
+	const auto evaluateGenerate = findAfter("SurfelPathTracerEvaluateMode::Generate", evaluateGenerateCall);
+	const auto update = findAfter("recordUpdatePass", evaluateGenerate);
+	const auto cellInfo = findAfter("recordCellInfoPass", update);
+	const auto cellToSurfel = findAfter("recordCellToSurfelPass", cellInfo);
+	const auto cellToSurfelToRt = findAfter("recordStorageBarrierComputeToRt", cellToSurfel);
+	const auto surfelRayTrace = findAfter("recordSurfelRayTracePass", cellToSurfelToRt);
+	const auto surfelRtToCompute = findAfter("recordStorageBarrierRtToCompute", surfelRayTrace);
+	const auto integrate = findAfter("recordIntegratePass", surfelRtToCompute);
+	const auto evaluateResolveCall = findAfter("recordEvaluatePass", integrate);
+	const auto evaluateResolve = findAfter("SurfelPathTracerEvaluateMode::Resolve", evaluateResolveCall);
+	const auto resolveToRt = findAfter("recordStorageBarrierComputeToRt", evaluateResolve);
+	const auto reflection = findAfter("recordReflectionPass", resolveToRt);
+	const auto reflectionRtToCompute = findAfter("recordStorageBarrierRtToCompute", reflection);
+	const auto reflectionFilter = findAfter("recordReflectionFilterPass", reflectionRtToCompute);
+	const auto bilateral = findAfter("recordBilateralPass", reflectionFilter);
+	const auto referenceGate = findAfter("if (surfelSettings.enableReferenceValidation)", bilateral);
+	const auto referenceComputeToRt = findAfter("recordStorageBarrierComputeToRt", referenceGate);
+	const auto referenceRecord = findAfter("recordReferencePass", referenceComputeToRt);
+	const auto referenceRtToCompute = findAfter("recordStorageBarrierRtToCompute", referenceRecord);
+	const auto referenceClear = findAfter("clearColorImage(*surfelPathTracerResources.referenceImages[fi]", referenceGate);
+	const auto lightIntegrate = findAfter("recordLightIntegratePass", referenceGate);
+	const auto lightIntegrateBarrier = findAfter("recordStorageBarrierComputeToCompute", lightIntegrate);
+	const auto taa = findAfter("recordTaaPass", lightIntegrateBarrier);
+
+	bool task17Ok = before(gbuffer, prepare, "GBuffer before Prepare") &&
+	    before(gbuffer, gbufferToCompute, "GBuffer before GBuffer-to-compute barrier") &&
+	    before(gbufferToCompute, prepare, "GBuffer-to-compute barrier before Prepare") &&
+	    before(evaluateGenerateCall, evaluateGenerate, "Generate Evaluate call before Generate mode") &&
+	    before(prepare, evaluateGenerate, "Prepare before Generate Evaluate") &&
+	    before(evaluateGenerate, update, "Generate Evaluate before Update") &&
+	    before(update, cellInfo, "Update before CellInfo") &&
+	    before(cellInfo, cellToSurfel, "CellInfo before CellToSurfel") &&
+	    before(cellToSurfel, cellToSurfelToRt, "CellToSurfel before compute-to-RT barrier") &&
+	    before(cellToSurfelToRt, surfelRayTrace, "compute-to-RT barrier before Surfel RayTrace") &&
+	    before(cellToSurfel, surfelRayTrace, "CellToSurfel before Surfel RayTrace") &&
+	    before(surfelRayTrace, surfelRtToCompute, "Surfel RayTrace before RT-to-compute barrier") &&
+	    before(surfelRtToCompute, integrate, "RT-to-compute barrier before Integrate") &&
+	    before(surfelRayTrace, integrate, "Surfel RayTrace before Integrate") &&
+	    before(evaluateResolveCall, evaluateResolve, "Resolve Evaluate call before Resolve mode") &&
+	    before(integrate, evaluateResolve, "Integrate before Resolve Evaluate") &&
+	    before(evaluateResolve, resolveToRt, "Resolve Evaluate before reflection compute-to-RT barrier") &&
+	    before(resolveToRt, reflection, "reflection compute-to-RT barrier before Reflection") &&
+	    before(evaluateResolve, reflection, "Resolve Evaluate before Reflection") &&
+	    before(reflection, reflectionRtToCompute, "Reflection before RT-to-compute barrier") &&
+	    before(reflectionRtToCompute, reflectionFilter, "RT-to-compute barrier before ReflectionFilter") &&
+	    before(reflection, reflectionFilter, "Reflection before ReflectionFilter") &&
+	    before(reflectionFilter, bilateral, "ReflectionFilter before Bilateral") &&
+	    before(bilateral, referenceGate, "Bilateral before reference validation branch") &&
+	    before(referenceGate, referenceComputeToRt, "reference branch before compute-to-RT barrier") &&
+	    before(referenceComputeToRt, referenceRecord, "reference compute-to-RT barrier before Reference") &&
+	    before(referenceRecord, referenceRtToCompute, "Reference before RT-to-compute barrier") &&
+	    before(referenceRtToCompute, lightIntegrate, "reference RT-to-compute barrier before LightIntegrate") &&
+	    before(referenceGate, referenceClear, "reference branch before disabled-reference clear") &&
+	    before(referenceClear, lightIntegrate, "disabled-reference clear before LightIntegrate") &&
+	    before(referenceRecord, lightIntegrate, "Reference before LightIntegrate") &&
+	    before(bilateral, lightIntegrate, "Bilateral before LightIntegrate") &&
+	    before(lightIntegrate, lightIntegrateBarrier, "LightIntegrate before compute barrier") &&
+	    before(lightIntegrateBarrier, taa, "LightIntegrate compute barrier before TAA") &&
+	    before(lightIntegrate, taa, "LightIntegrate before TAA") &&
+	    containsAllNeedles(engineCore,
+	                       {"recordImageBarrierGBufferToCompute",
+	                        "recordStorageBarrierComputeToCompute",
+	                        "recordStorageBarrierComputeToRt",
+	                        "recordStorageBarrierRtToCompute",
+	                        "transitionSurfelOutputForBlit"}) &&
+	    containsAllNeedles(passesCpp,
+	                       {"recordImageBarrierGBufferToCompute",
+	                        "recordStorageBarrierComputeToCompute",
+	                        "recordStorageBarrierComputeToRt",
+	                        "recordStorageBarrierRtToCompute"}) &&
+	    containsAllNeedles(uiSystemHeader,
+	                       {"uint32_t maxSurfels = 150000;",
+	                        "uint32_t maxRaysPerFrame = 150000 * 16;",
+	                        "uint32_t minRaysPerSurfel = 4;",
+	                        "uint32_t maxRaysPerSurfel = 64;",
+	                        "uint32_t activeMaxDepth = 3;",
+	                        "uint32_t sleepingMaxDepth = 5;",
+	                        "uint32_t maxSurfelSamplesPerQuery = 32;",
+	                        "uint32_t maxRadianceSharingSamples = 32;"});
 	const bool task5Ok =
 	    containsAllNeedles(updateShader,
 	                       {"[[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;",
@@ -430,6 +556,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "float removalThreshold;",
 	                        "float surfelTargetArea;",
 	                        "float surfelMinRadius;",
+	                        "float surfelMaxRadiusScale;",
 	                        "uint enablePlacement;",
 	                        "uint enableRemoval;",
 	                        "coverage += weight;",
@@ -437,6 +564,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "push.enableRemoval != 0u",
 	                        "surfel.flags = SURFEL_PT_SURFEL_FLAG_ACTIVE",
 	                        "SURFEL_PT_SURFEL_FLAG_PENDING_FREE",
+	                        "push.cellSize * push.surfelMaxRadiusScale",
 	                        "uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);",
 	                        "estimateCoverage(position, normal, closestSurfelIndex, false)",
 	                        "estimateCoverage(position, normal, closestSurfelIndex, true)",
@@ -445,12 +573,14 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                       {"placementThreshold",
 	                        "removalThreshold",
 	                        "surfelTargetArea",
-	                        "surfelMinRadius"}) &&
+	                        "surfelMinRadius",
+	                        "surfelMaxRadiusScale"}) &&
 	    containsAllNeedles(engineCore,
 	                       {"surfelSettings.placementThreshold",
 	                        "surfelSettings.removalThreshold",
 	                        "surfelSettings.surfelTargetArea",
 	                        "surfelSettings.surfelMinRadius",
+	                        "surfelSettings.surfelMaxRadiusScale",
 	                        "enableSurfelPlacement",
 	                        "enableSurfelRemoval"});
 	for (std::string_view shader : {updateShader,
@@ -483,7 +613,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "uint2 coord = atlasTileBase(surfelIndex, width) + atlasDirectionCoord(localDirection)",
 	                        "irradianceAtlas.GetDimensions(atlasWidth, atlasHeight)",
 	                        "surfelDepthAtlas[coord] = depth",
-	                        "writeAtlas(surfelIndex, localDirection, rayRadiance, rayDepth, atlasWidth, atlasHeight)"}) &&
+	                        "writeAtlas(surfelIndex, localDirection, rayRadiance * integrationWeight, rayDepth, atlasWidth, atlasHeight)"}) &&
 	    containsAllNeedles(raygenShader,
 	                       {"worldToLocalDirection(rayDir, normal)",
 	                        "packRayLocalDirection(localRayDir)",
@@ -520,12 +650,46 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "maxRaysPerSurfel",
 	                        "varianceSensitivity"}) &&
 	    containsAllNeedles(integrateShader,
-	                       {"surfel.varianceAndInconsistency = float4(variance.xxx, surfel.varianceAndInconsistency.w);"}) &&
+	                       {"updateMsme(sampleRadiance, surfel, shortAlpha)"}) &&
 	    containsAllNeedles(engineCore,
 	                       {"surfelSettings.minRaysPerSurfel",
 	                        "surfelSettings.maxRaysPerSurfel",
 	                        "surfelSettings.varianceSensitivity",
-	                        "surfelPathTracerResources.maxRaysPerFrameCapacity())"});
+	                        "surfelPathTracerResources.maxRaysPerFrameCapacity()"});
+	bool task10Ok =
+	    containsAllNeedles(raygenShader,
+	                       {"uint enableGuidedSampling;",
+	                        "uint irradianceAtlasWidth;",
+	                        "[[vk::binding(14, 1)]] RWTexture2D<float4> irradianceAtlas;",
+	                        "float luminanceAtAtlasCoord(uint2 coord, RWTexture2D<float4> atlas)",
+	                        "bool hasGuidedSurfelHistory(SurfelPathTracerSurfel surfel)",
+	                        "return surfel.shortMeanAndLife.w > 2.0;",
+	                        "float3 cosineSampleHemisphereLocal(float2 xi)",
+	                        "bool sampleGuidedSurfelDirection(uint surfelIndex",
+	                        "if (texelDirection.z > 0.0)",
+	                        "if (centeredDirection.z <= 0.0)",
+	                        "if (localDirection.z <= 0.0)",
+	                        "return false;",
+	                        "pdf = max(weight / total, 1e-5);",
+	                        "push.enableGuidedSampling != 0u",
+	                        "hasGuidedSurfelHistory(surfel)",
+	                        "sampleGuidedSurfelDirection(surfelIndex, guideXi, guideJitter, irradianceAtlas, push.irradianceAtlasWidth, localDir, pdf)",
+	                        "localDir = cosineSampleHemisphereLocal(xi);",
+	                        "pdf = max(localDir.z / PI, 1e-5);",
+	                        "counters.InterlockedAdd(SURFEL_PT_COUNTER_COSINE_RAYS_OFFSET, 1u);",
+	                        "counters.InterlockedAdd(SURFEL_PT_COUNTER_GUIDED_RAYS_OFFSET, 1u);",
+	                        "float3 rayDir = localToWorldDirection(localDir, normal);",
+	                        "rayBuffer[base + SURFEL_PT_RAY_LOCAL_DIRECTION] = packRayLocalDirection(localRayDir);"}) &&
+	    containsAllNeedles(passesHeader,
+	                       {"uint32_t rayCount,\n\t                              bool enableGuidedSampling,\n\t                              uint32_t irradianceAtlasWidth,"}) &&
+	    containsAllNeedles(passesCpp,
+	                       {"uint32_t enableGuidedSampling = 0;",
+	                        "uint32_t irradianceAtlasWidth = 1;",
+	                        "uint32_t rayCount,\n                                                      bool enableGuidedSampling,\n                                                      uint32_t irradianceAtlasWidth,",
+	                        ".enableGuidedSampling = enableGuidedSampling ? 1u : 0u",
+	                        ".irradianceAtlasWidth = std::max(irradianceAtlasWidth, 1u)"}) &&
+	    containsAllNeedles(engineCore,
+	                       {"surfelPathTracerResources.maxRaysPerFrameCapacity(),\n\t\t                                                surfelSettings.enableGuidedSampling,\n\t\t                                                surfelSettings.irradianceAtlasWidth"});
 	bool rtPushConstantStagesOk =
 	    containsAllNeedles(passesCpp,
 	                       {"kSurfelRtPushStages",
@@ -540,27 +704,55 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                       {"gBufferAlbedo",
 	                        "gBufferAlbedoImages",
 	                        "gBufferAlbedoViews",
+	                        "gBufferMaterialImages",
+	                        "gBufferMaterialViews",
+	                        "gBufferEmissiveImages",
+	                        "gBufferEmissiveViews",
 	                        "vk::Format::eR16G16B16A16Sfloat, gBufferAlbedoImages",
+	                        "vk::Format::eR16G16B16A16Sfloat, gBufferMaterialImages",
+	                        "vk::Format::eR16G16B16A16Sfloat, gBufferEmissiveImages",
 	                        "vk::DescriptorSetLayoutBinding{.binding = 20",
-	                        "vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 11 * MAX_FRAMES_IN_FLIGHT}",
+	                        "vk::DescriptorSetLayoutBinding{.binding = 21",
+	                        "vk::DescriptorSetLayoutBinding{.binding = 22",
+	                        "vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 18 * MAX_FRAMES_IN_FLIGHT}",
 	                        "[[vk::binding(20, 0)]] RWTexture2D<float4> gBufferAlbedo",
 	                        "[[vk::binding(20, 1)]] RWTexture2D<float4> gBufferAlbedo",
+	                        "[[vk::binding(21, 0)]] RWTexture2D<float4> gBufferMaterial",
+	                        "[[vk::binding(22, 0)]] RWTexture2D<float4> gBufferEmissive",
+	                        "[[vk::binding(21, 1)]] RWTexture2D<float4> gBufferMaterial",
+	                        "[[vk::binding(22, 1)]] RWTexture2D<float4> gBufferEmissive",
 	                        "[[vk::binding(8, 0)]] Sampler2D globalTextures[]",
 	                        "baseColor.rgb *= decodeColorSample(sampled.rgb, ubo.textureColorSpaceModel)",
+	                        "roughness *= mr.g",
+	                        "metallic *= mr.b",
+	                        "emissive *= decodeColorSample",
+	                        "ao = 1.0 + mat.occlusionStrength * (aoSample - 1.0)",
+	                        "dielectricSpec *= globalTextures[NonUniformResourceIndex(mat.specularTextureIndex + mat.globalTextureOffset)].SampleLevel(uv, 0.0).a",
+	                        "lerp(float3(0.08 * dielectricSpec), baseColor.rgb, metallic)",
 	                        "payload.baseColor",
 	                        "gBufferAlbedo[launchID] = float4(payload.baseColor, 1.0)",
+	                        "gBufferMaterial[launchID] = float4(payload.roughness, payload.metallic, payload.dielectricSpec, payload.ao)",
+	                        "gBufferEmissive[launchID] = float4(payload.emissive, 0.0)",
 	                        "float3 albedo = max(gBufferAlbedo[pixel].rgb, float3(0.0))",
-	                        "float3 diffuseLighting = diffuseBsdf * directLighting",
-	                        "diffuseLighting + diffuseGi + reflection"});
+	                        "float3 material = gBufferMaterial[pixel].rgb",
+	                        "float3 emissive = max(gBufferEmissive[pixel].rgb, float3(0.0))",
+	                        "float3 evaluatePrimaryDirectLighting(float3 viewDir",
+	                        "float3 directLighting = evaluatePrimaryDirectLighting(viewDir",
+	                        "directLighting + diffuseGi + reflection + emissive"});
 	const std::string lightIntegrateShader =
 	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk);
 	bool surfelPrimaryLightingUnitsOk =
 	    containsAllNeedles(lightIntegrateShader,
 	                       {"float3 diffuseBsdf = albedo / PI",
-	                        "float3 directLighting = SUN_RADIANCE * directSun * sunVisibility",
-	                        "float3 diffuseLighting = diffuseBsdf * directLighting",
-	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0)"}) &&
+	                        "float3 F = fresnelSchlick(max(dot(H, V), 0.0), f0)",
+	                        "float D = distributionGGX(normal, H, roughness)",
+	                        "float G = geometrySmith(normal, V, L, roughness)",
+	                        "float3 kD = (float3(1.0) - F) * (1.0 - metallic)",
+	                        "float3 diffuse = kD * baseColor / PI",
+	                        "float3 specular = (D * G * F) / max(4.0 * max(dot(normal, V), 0.0001) * directSun, 0.0001)",
+	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE * ao : float3(0.0)"}) &&
 	    !containsNeedle(lightIntegrateShader, "float3 diffuseLighting = albedo * directLighting") &&
+	    !containsNeedle(lightIntegrateShader, "float3 directLighting = SUN_RADIANCE * directSun * sunVisibility") &&
 	    !containsNeedle(lightIntegrateShader, "albedo * rawSurfelRadiance");
 	bool surfelDiffuseGiOk =
 	    containsAllNeedles(evaluateShader,
@@ -580,17 +772,213 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    containsAllNeedles(lightIntegrateShader,
 	                       {"static const float SURFEL_PT_DIFFUSE_GI_SCALE = 0.35",
 	                        "float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0))",
-	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0)"});
+	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE * ao : float3(0.0)"});
 	bool surfelIncidentRadianceOk =
 	    containsAllNeedles(surfelClosestHitShader,
-	                       {"float3 incidentLighting = sky + SUN_RADIANCE * direct",
-	                        "payload.radiance = clampLuminance(incidentLighting, SURFEL_PT_MAX_RADIANCE_LUMINANCE)"});
-	if (containsNeedle(surfelClosestHitShader, "baseColor * (sky + SUN_RADIANCE * direct)") ||
-	    containsNeedle(surfelClosestHitShader, "baseColor * incidentLighting"))
+	                       {"payload.radiance = float3(0.0)",
+	                        "payload.hitKind = 1u",
+	                        "payload.hitT = RayTCurrent()",
+	                        "payload.hitPosition = WorldRayOrigin() + WorldRayDirection() * RayTCurrent()",
+	                        "float tangentLengthSq = dot(T, T)",
+	                        "if (tangentLengthSq > 0.0001)",
+	                        "T = T * rsqrt(tangentLengthSq)",
+	                        "T = T - N * dot(N, T)",
+	                        "payload.f0 = lerp(float3(0.08 * dielectricSpec), payload.baseColor, payload.metallic)"}) &&
+	    containsAllNeedles(gBufferClosestHitShader,
+	                       {"float tangentLengthSq = dot(T, T)",
+	                        "if (tangentLengthSq > 0.0001)",
+	                        "T = T * rsqrt(tangentLengthSq)",
+	                        "T = T - worldNormal * dot(worldNormal, T)"}) &&
+	    containsAllNeedles(combined,
+	                       {"SurfelPathTracerPayload makeEmptySurfelPayload()",
+	                        "SurfelPathTracerPayload makeVisibilitySurfelPayload()",
+	                        "struct SurfelPathTracerPayload",
+	                        "float3 hitPosition",
+	                        "float3 hitNormal",
+	                        "float3 baseColor",
+	                        "float3 emission",
+	                        "float3 f0",
+	                        "float ao",
+	                        "float metallic",
+	                        "float roughness",
+	                        "uint hitKind",
+	                        "uint instanceID",
+	                        "float traceSunVisibility(float3 position, float3 normal, float3 sunDir)",
+	                        "float3 evaluateShadowedDirectLighting(float3 viewDir",
+	                        "float3 terminatePathWithSurfels(float3 position",
+	                        "float3 traceSurfelPath(RayDesc initialRay, uint maxDepth, uint surfelIndex, uint seed, out float firstHitT)",
+	                        "payload.hitKind == 0u",
+	                        "radiance += throughput * payload.radiance",
+	                        "radiance += throughput * payload.emission",
+	                        "push.enableSurfelTermination != 0u",
+	                        "counters.InterlockedAdd(SURFEL_PT_COUNTER_SURFEL_TERMINATED_PATHS_OFFSET, 1u)",
+	                        "throughput *= bsdfWeight / max(pdf, 0.0001)",
+	                        "[[vk::binding(11, 1)]] RWStructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer",
+	                        "[[vk::binding(13, 1)]] RWStructuredBuffer<uint> cellToSurfelBuffer"}) &&
+	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerMiss.slang", filesOk),
+	                       {"payload.radiance = clampLuminance(evalSkyColor",
+	                        "payload.emission = float3(0.0)",
+	                        "payload.hitKind = 0u",
+	                        "payload.hitT = -1.0"}) &&
+	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerReflection.slang", filesOk),
+	                       {"uint enableSurfelTermination;",
+	                        "uint maxSurfelSamplesPerQuery;",
+	                        "SurfelPathTracerPayload payload = makeEmptySurfelPayload()",
+	                        "terminatePathWithSurfels(payload.hitPosition",
+	                        "push.enableSurfelTermination != 0u"});
+	if (containsNeedle(surfelClosestHitShader, "incidentLighting") ||
+	    containsNeedle(surfelClosestHitShader, "evalSkyColor(worldNormal") ||
+	    containsNeedle(surfelClosestHitShader, "SUN_RADIANCE * direct"))
 	{
-		std::cerr << "SurfelPathTracer surfel cache must store incident lighting, not hit-surface outgoing albedo\n";
+		std::cerr << "SurfelPathTracer closest hit must expose material data, not incident lighting\n";
 		surfelIncidentRadianceOk = false;
 	}
+	const std::initializer_list<std::string_view> gBufferPayloadFields = {
+	    "struct SurfelPathTracerGBufferPayload",
+	    "float hitT;",
+	    "uint modelId;",
+	    "uint materialIndex;",
+	    "float3 worldNormal;",
+	    "float3 baseColor;",
+	    "float roughness;",
+	    "float metallic;",
+	    "float dielectricSpec;",
+	    "float ao;",
+	    "float3 emissive;"};
+	bool gBufferPayloadAbiOk =
+	    containsAllNeedles(gBufferShader, gBufferPayloadFields) &&
+	    containsAllNeedles(gBufferClosestHitShader, gBufferPayloadFields) &&
+	    containsAllNeedles(gBufferMissShader, gBufferPayloadFields) &&
+	    containsAllNeedles(gBufferAnyHitShader, gBufferPayloadFields) &&
+	    containsAllNeedles(gBufferShader,
+	                       {"SurfelPathTracerGBufferPayload makeVisibilityGBufferPayload()",
+	                        "payload.hitT = 1.0;",
+	                        "SurfelPathTracerGBufferPayload shadowPayload = makeVisibilityGBufferPayload()",
+	                        "RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER"}) &&
+	    containsAllNeedles(gBufferMissShader,
+	                       {"payload.roughness = 1.0;",
+	                        "payload.metallic = 0.0;",
+	                        "payload.dielectricSpec = 1.0;",
+	                        "payload.ao = 1.0;",
+	                        "payload.emissive = float3(0.0)"});
+	if (containsNeedle(gBufferShader, "TraceRay(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,"))
+	{
+		std::cerr << "SurfelPathTracer GBuffer visibility rays must skip closest-hit and start occluded\n";
+		gBufferPayloadAbiOk = false;
+	}
+	bool reflectionSurfelTerminationOk =
+	    containsAllNeedles(reflectionShader,
+	                       {"float3 cachedIncident = terminatePathWithSurfels(payload.hitPosition",
+	                        "payload.hitNormal",
+	                        "(1.0 - payload.metallic) * payload.baseColor / PI * cachedIncident",
+	                        "float3 reflected = payload.radiance;"});
+	if (containsNeedle(reflectionShader,
+	                   "float3 cachedIncident = terminatePathWithSurfels(position,\n                                                             normal,"))
+	{
+		std::cerr << "SurfelPathTracer reflection hit termination must sample the reflected-hit endpoint\n";
+		reflectionSurfelTerminationOk = false;
+	}
+	if (containsNeedle(reflectionShader, "terminatePathWithSurfels(position") ||
+	    containsNeedle(reflectionShader, "} else if (push.enableSurfelTermination != 0u) {"))
+	{
+		std::cerr << "SurfelPathTracer reflection miss branch must not terminate against the primary surface cache\n";
+		reflectionSurfelTerminationOk = false;
+	}
+	bool reflectionRisOk =
+	    containsAllNeedles(commonShader,
+	                       {"float ggxPdf(float3 L, float3 N, float3 V, float roughness)",
+	                        "float3 ggxSpecularBrdf(float3 L, float3 N, float3 V, float3 f0, float roughness)",
+	                        "struct SurfelPtReservoir",
+	                        "void addReflectionCandidate(inout SurfelPtReservoir reservoir"}) &&
+	    containsAllNeedles(reflectionShader,
+	                       {"float4 material = gBufferMaterial[fullPixel]",
+	                        "const uint candidateCount = 16u",
+	                        "ggxSampleDirection(candidateXi, normal, viewDir, roughness)",
+	                        "ggxSpecularBrdf(candidateDir, normal, viewDir, f0, roughness)",
+	                        "ggxPdf(candidateDir, normal, viewDir, roughness)",
+	                        "addReflectionCandidate(reservoir",
+	                        "reservoir.weightSum",
+	                        "bool reservoirFinite = isFiniteScalar(reservoir.weightSum) &&",
+	                        "isFiniteScalar(reservoir.pdf) &&",
+	                        "isFinite3(reservoir.brdfWeight)",
+	                        "!reservoirFinite || reservoir.weightSum <= 1e-5",
+	                        "float risWeight = reservoir.weightSum / max(luminance(reservoir.brdfWeight), 1e-5)",
+	                        "reservoir.brdfWeight",
+	                        "float nDotSelected = max(dot(reservoir.direction, normal), 0.0)"});
+	if (containsNeedle(reflectionShader, "float3 rayDir = normalize(ggxSampleDirection("))
+	{
+		std::cerr << "SurfelPathTracer reflection must use RIS candidates, not the old single GGX sample ray\n";
+		reflectionRisOk = false;
+	}
+	bool guidedRayIntegrationOk =
+	    containsAllNeedles(integrateShader,
+	                       {"float loadRayPdf(uint rayIndex)",
+	                        "float3 loadRayLocalDirection(uint rayIndex)",
+	                        "float pdf = max(loadRayPdf(rayIndex), 1e-5)",
+	                        "float cosine = max(localDirection.z, 0.0)",
+	                        "float integrationWeight = cosine / pdf",
+	                        "float3 weightedRadiance = rayRadiance * integrationWeight",
+	                        "accumulatedRadiance += weightedRadiance",
+	                        "writeAtlas(surfelIndex, localDirection, rayRadiance * integrationWeight, rayDepth, atlasWidth, atlasHeight)"});
+	if (containsNeedle(integrateShader, "accumulatedRadiance += rayRadiance;"))
+	{
+		std::cerr << "SurfelPathTracer guided rays must be integrated with cosine/pdf weighting\n";
+		guidedRayIntegrationOk = false;
+	}
+	bool msmRadianceSharingOk =
+	    containsAllNeedles(commonShader,
+	                       {"float3 updateMsme(float3 sampleRadiance, inout SurfelPathTracerSurfel surfel, float shortBlend)",
+	                        "float3 previousMean = surfel.meanAndVariance.xyz",
+	                        "float3 previousShort = surfel.shortMeanAndLife.xyz",
+	                        "float3 shortMean = lerp(previousShort, sampleRadiance, saturate(shortBlend))",
+	                        "float3 longMean = lerp(previousMean, sampleRadiance, saturate(shortBlend * 0.25))",
+	                        "float variance = lerp(surfel.meanAndVariance.w, dot(delta, delta), saturate(shortBlend * 0.5))",
+	                        "surfel.varianceAndInconsistency = float4(abs(shortMean - longMean), variance)",
+	                        "surfel.radiance = longMean",
+	                        "return longMean"}) &&
+	    !containsNeedle(commonShader, "float3 msmeBlend(") &&
+	    containsAllNeedles(integrateShader,
+	                       {"uint enableRadianceSharing;",
+	                        "uint maxRadianceSharingSamples;",
+	                        "uint cellDimension;",
+	                        "float cellSize;",
+	                        "[[vk::binding(11, 0)]] RWStructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer;",
+	                        "[[vk::binding(13, 0)]] RWStructuredBuffer<uint> cellToSurfelBuffer;",
+	                        "[[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;",
+	                        "float3 terminatePathWithSurfels(float3 position",
+	                        "uint cellIndex = cameraRelativeCellIndexForPosition(position, cameraPosition, cellSize, cellDimension)",
+	                        "sum += surfel.radiance * weight",
+	                        "if (push.enableRadianceSharing != 0u)",
+	                        "float3 shared = terminatePathWithSurfels(surfel.position",
+	                        "unpackNormalOctahedral(surfel.packedNormal)",
+	                        "push.maxRadianceSharingSamples",
+	                        "push.cellSize",
+	                        "push.cellDimension",
+	                        "ubo.cameraPos.xyz",
+	                        "sampleRadiance = lerp(sampleRadiance, shared, 0.25)",
+	                        "float3 longMean = updateMsme(sampleRadiance, surfel, shortAlpha)"}) &&
+	    containsAllNeedles(passesHeader,
+	                       {"void recordIntegratePass(const vk::raii::CommandBuffer &commandBuffer,",
+	                        "vk::DescriptorSet globalSet",
+	                        "bool enableRadianceSharing",
+	                        "uint32_t maxRadianceSharingSamples",
+	                        "uint32_t cellDimension",
+	                        "float cellSize"}) &&
+	    containsAllNeedles(passesCpp,
+	                       {"uint32_t enableRadianceSharing = 0;",
+	                        "uint32_t maxRadianceSharingSamples = 1;",
+	                        "uint32_t cellDimension = 1;",
+	                        "float cellSize = 1.0f;",
+	                        "const std::array descriptorSets = {imageSet, globalSet};",
+	                        ".enableRadianceSharing = enableRadianceSharing ? 1u : 0u",
+	                        ".maxRadianceSharingSamples = std::clamp(maxRadianceSharingSamples, 1u, 128u)",
+	                        ".cellDimension = std::max(cellDimension, 1u)",
+	                        ".cellSize = std::max(cellSize, 0.0001f)"}) &&
+	    containsAllNeedles(engineCore,
+	                       {"surfelSettings.enableRadianceSharing",
+	                        "surfelSettings.maxRadianceSharingSamples",
+	                        "surfelPathTracerResources.cellDimensionCapacity()",
+	                        "surfelSettings.cellSize"});
 	bool debugViewsOk =
 	    containsAllNeedles(combined,
 	                       {"GBufferAlbedo = 13",
@@ -601,17 +989,72 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "\"Diffuse GI\"",
 	                        "\"Sun Visibility\"",
 	                        "static_cast<int>(SurfelPathTracerDebugView::SunVisibility)",
+	                        "static const uint SURFEL_DEBUG_SURFEL_RADIUS = 4u",
+	                        "static const uint SURFEL_DEBUG_SURFEL_VARIANCE = 6u",
 	                        "static const uint SURFEL_DEBUG_GBUFFER_ALBEDO = 13u",
 	                        "static const uint SURFEL_DEBUG_DIFFUSE_GI = 14u",
 	                        "static const uint SURFEL_DEBUG_SUN_VISIBILITY = 15u",
 	                        "static const uint SURFEL_DEBUG_SURFEL_COVERAGE = 10u",
+	                        "static const uint SURFEL_DEBUG_REFERENCE_COLOR = 11u",
+	                        "static const uint SURFEL_DEBUG_REFERENCE_DIFFERENCE = 12u",
+	                        "SurfelPathTracerSurfel surfel;",
+	                        "bool loadSelectedContributingSurfel(float3 worldPosition",
+	                        "int3 centerCoord = cameraRelativeCellCoord(worldPosition, ubo.cameraPos.xyz, push.cellSize)",
+	                        "float bestWeight = 0.0",
+	                        "for (int shell = 0; shell <= 1; ++shell)",
+	                        "int3 cellCoord = centerCoord + int3(x, y, z)",
+	                        "float normalWeight = saturate(dot(normal, surfelNormal))",
+	                        "float distanceWeight = saturate(1.0 - length(worldPosition - surfel.position) / max(surfel.radius, 0.0001))",
+	                        "float weight = normalWeight * distanceWeight",
+	                        "if (weight > bestWeight)",
+	                        "loadSelectedContributingSurfel(worldPosition, normal, surfel)",
+	                        "surfel.radius / max(push.cellSize * push.surfelMaxRadiusScale, 1e-4)",
+	                        "surfel.varianceAndInconsistency.xyz",
 	                        "float surfelCoverage = max(outputImage[pixel].a, 0.0)",
 	                        "lightingImages[pixel] = float4(albedo, 1.0)",
 	                        "lightingImages[pixel] = float4(rawSurfelRadiance, 1.0)",
+	                        "push.debugView == SURFEL_DEBUG_REFERENCE_COLOR",
+	                        "push.debugView == SURFEL_DEBUG_REFERENCE_DIFFERENCE",
+	                        "lightingImages[pixel] = float4(referenceColor",
+	                        "lightingImages[pixel] = float4(referenceDifference",
 	                        "lightingImages[pixel] = float4(diffuseGi, 1.0)",
 	                        "lightingImages[pixel] = float4(sunVisibility.xxx, 1.0)",
 	                        "lightingImages[pixel] = float4(surfelCoverage.xxx, 1.0)",
-	                        "outputImage[pixel] = float4(resolveSurfelRadiance(position, normal), coverage)"});
+	                        "outputImage[pixel] = float4(resolveSurfelRadiance(position, normal), coverage)",
+	                        "ImGui::Text(\"Recycled Surfels: %u\", surfelPathTracerStats.recycledSurfels)",
+	                        "ImGui::Text(\"Spawned Surfels: %u\", surfelPathTracerStats.spawnedSurfels)",
+	                        "ImGui::Text(\"Removed Surfels: %u\", surfelPathTracerStats.removedSurfels)",
+	                        "ImGui::Text(\"Guided Rays: %u\", surfelPathTracerStats.guidedRays)",
+	                        "ImGui::Text(\"Cosine Rays: %u\", surfelPathTracerStats.cosineRays)",
+	                        "ImGui::Text(\"Surfel-Terminated Paths: %u\", surfelPathTracerStats.surfelTerminatedPaths)"});
+	const bool referenceDifferenceUsesReferenceLighting =
+	    containsNeedle(lightIntegrateShader, "referenceDifference") &&
+	    (containsNeedle(lightIntegrateShader, "referenceColor - lighting") ||
+	     containsNeedle(lightIntegrateShader, "lighting - referenceColor"));
+	if (!referenceDifferenceUsesReferenceLighting)
+	{
+		std::cerr << "SurfelPathTracer ReferenceDifference must compare referenceColor against current lighting\n";
+		debugViewsOk = false;
+	}
+	if (containsNeedle(lightIntegrateShader, "bool loadSelectedSurfel(float3 worldPosition") ||
+	    containsNeedle(lightIntegrateShader, "lightingImages[pixel] = float4(max(abs(referenceColor - rawSurfelRadiance), float3(0.002)), 1.0)") ||
+	    containsNeedle(lightIntegrateShader, "abs(referenceColor - rawSurfelRadiance)"))
+	{
+		std::cerr << "SurfelPathTracer debug views must use weighted selected surfel and reference/current-lighting difference\n";
+		debugViewsOk = false;
+	}
+	const bool referenceDifferenceZeroWhenUnavailable =
+	    containsNeedle(lightIntegrateShader, "referenceSample.a") &&
+	    containsNeedle(lightIntegrateShader, "abs(referenceColor - lighting)") &&
+	    (containsNeedle(lightIntegrateShader, "referenceSample.a > 0.0 ? abs(referenceColor - lighting)") ||
+	     containsNeedle(lightIntegrateShader, "referenceSample.a <= 0.0 ? float3(0.0)"));
+	if (!referenceDifferenceZeroWhenUnavailable ||
+	    containsNeedle(lightIntegrateShader, "float3(0.002)") ||
+	    containsNeedle(lightIntegrateShader, "referenceSample.a > 0.0 ? float3(0.0)"))
+	{
+		std::cerr << "SurfelPathTracer ReferenceDifference must be zero when reference alpha is 0 and real abs(reference-lighting) when alpha is valid\n";
+		debugViewsOk = false;
+	}
 	bool cellOccupancyDebugOk =
 	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
 	                       {"static const uint SURFEL_DEBUG_CELL_OCCUPANCY = 7u",
@@ -634,19 +1077,20 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "surfelPathTracerResources.cellDimensionCapacity(),",
 	                        "surfelPathTracerResources.perCellSurfelLimitCapacity(),"});
 	bool primarySunVisibilityOk =
-	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBuffer.slang", filesOk),
+	    containsAllNeedles(gBufferShader,
 	                       {"SurfelPathTracerGBufferPayload makeEmptyGBufferPayload()",
+	                        "SurfelPathTracerGBufferPayload makeVisibilityGBufferPayload()",
 	                        "float traceSunVisibility(float3 position, float3 normal, float3 sunDir)",
-	                        "TraceRay(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH",
+	                        "RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER",
 	                        "float sunVisibility = directSun > 0.0 ? traceSunVisibility(hitPos, normal, sunDir) : 0.0",
 	                        "gBufferNormal[launchID] = float4(normal, sunVisibility)"}) &&
 	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
 	                       {"float sunVisibility = saturate(gBufferNormal[pixel].w)",
-	                        "float3 directLighting = SUN_RADIANCE * directSun * sunVisibility;"}) &&
-	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBufferMiss.slang", filesOk),
+	                        "float3 directLighting = evaluatePrimaryDirectLighting(viewDir"}) &&
+	    containsAllNeedles(gBufferMissShader,
 	                       {"float3 baseColor",
 	                        "payload.baseColor = float3(0.0, 0.0, 0.0)"}) &&
-	    containsAllNeedles(readTextFile(root / "src" / "shaders" / "SurfelPathTracerGBufferAnyHit.slang", filesOk),
+	    containsAllNeedles(gBufferAnyHitShader,
 	                       {"float3 baseColor"});
 	if (containsNeedle(readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk),
 	                   "skyAmbient"))
@@ -684,11 +1128,109 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "replaceSlot = representativeSlot;",
 	                        "cellToSurfelBuffer[cellInfo.surfelOffset + replaceSlot] = surfelIndex;",
 	                        "if (replaceSlot == SURFEL_PT_INVALID_INDEX)"});
+	bool temporalHistoryPingPongOk =
+	    containsAllNeedles(combined,
+	                       {"std::array<std::vector<VulkanUtils::VmaImage>, 2> filteredReflectionHistoryImages;",
+	                        "std::array<std::vector<vk::raii::ImageView>, 2> filteredReflectionHistoryViews;",
+	                        "std::array<std::vector<VulkanUtils::VmaImage>, 2> taaHistoryImages;",
+	                        "std::array<std::vector<vk::raii::ImageView>, 2> taaHistoryViews;",
+	                        "surfelPathTracerPreviousHistoryIndex.fill(0);",
+	                        "surfelPathTracerCurrentHistoryIndex.fill(1);",
+	                        "surfelPathTracerTemporalHistoryValid.fill(false);",
+	                        "vk::DescriptorSetLayoutBinding{.binding = 23",
+	                        "vk::DescriptorSetLayoutBinding{.binding = 24",
+	                        "vk::DescriptorSetLayoutBinding{.binding = 25",
+	                        "vk::DescriptorSetLayoutBinding{.binding = 26",
+	                        "const std::array<uint32_t, 5> imageBindings = {19, 23, 24, 25, 26};",
+	                        "if (surfelPathTracerTemporalHistoryValid[frameIndex] && previousHistoryIndex == currentHistoryIndex)",
+	                        "updateSurfelPathTracerHistoryDescriptors(fi);",
+	                        "const bool historyReady = !ptForceHistoryReset && surfelPathTracerTemporalHistoryValid[fi];",
+	                        "std::swap(surfelPathTracerPreviousHistoryIndex[fi], surfelPathTracerCurrentHistoryIndex[fi]);",
+	                        "surfelPathTracerTemporalHistoryValid[fi] = true;",
+	                        "float4 previousFiltered = push.resetHistory == 0u ? previousFilteredReflectionHistory[pixel] : float4(0.0);",
+	                        "float4 filteredValue = float4(clampLuminance(filtered, SURFEL_PT_MAX_RADIANCE_LUMINANCE), currentKey);",
+	                        "filteredReflectionImages[pixel] = filteredValue;",
+	                        "currentFilteredReflectionHistory[pixel] = filteredValue;",
+	                        "float4 storedHistory = previousTaaHistory[previousPixel];",
+	                        "currentTaaHistory[pixel] = float4(blended, currentKey);"}) &&
+	    !containsNeedle(combined, "const bool historyReady = false") &&
+	    !containsNeedle(combined, "currentFilteredReflectionHistory[pixel] = filteredReflectionImages[pixel]") &&
+	    !containsNeedle(combined, "samePixelFallback");
+	bool referenceValidationOk =
+	    containsAllNeedles(combined,
+	                       {"std::vector<VulkanUtils::VmaImage> referenceImages;",
+	                        "std::vector<vk::raii::ImageView> referenceViews;",
+	                        "clearViewsThenDestroyImages(referenceViews, referenceImages);",
+	                        "createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, referenceImages, referenceViews);",
+	                        "std::array<vk::DescriptorSetLayoutBinding, 28> storageBindings",
+	                        "vk::DescriptorSetLayoutBinding{.binding = 27",
+	                        "vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 18 * MAX_FRAMES_IN_FLIGHT}",
+	                        "referenceImages",
+	                        "referenceViews[i]",
+	                        "const std::array<uint32_t, 13> imageBindings = {0, 1, 2, 3, 14, 15, 16, 17, 18, 20, 21, 22, 27};",
+	                        "createReferenceRayTracingPipeline",
+	                        "createReferenceShaderBindingTable",
+	                        "referenceRayTracingPipeline",
+	                        "referenceSbt",
+	                        "SurfelPathTracerReference.slang.spv",
+	                        "recordReferencePass",
+	                        "enableReferenceValidation"}) &&
+	    containsAllNeedles(referenceShader,
+	                       {"[shader(\"raygeneration\")]",
+	                        "[[vk::binding(27, 1)]] RWTexture2D<float4> referenceImage;",
+	                        "[[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;",
+	                        "[[vk::binding(0, 2)]] ConstantBuffer<UniformBuffer> ubo;",
+	                        "struct SurfelReferencePushConstants",
+	                        "uint maxDepth;",
+	                        "uint enabled;",
+	                        "SurfelPathTracerPayload payload = makeEmptySurfelPayload()",
+	                        "SurfelPathTracerPayload shadowPayload = makeVisibilitySurfelPayload()",
+	                        "float traceSunVisibility(float3 position, float3 normal, float3 sunDir)",
+	                        "float3 evaluateShadowedDirectLighting",
+	                        "TraceRay(tlas",
+	                        "referenceImage[pixel]"}) &&
+	    containsAllNeedles(lightIntegrateShader,
+	                       {"[[vk::binding(27, 0)]] RWTexture2D<float4> referenceImage",
+	                        "float3 referenceColor = referenceImage[pixel].rgb",
+	                        "float3 referenceDifference",
+	                        "lightingImages[pixel] = float4(referenceColor",
+	                        "lightingImages[pixel] = float4(referenceDifference"});
+	if (containsNeedle(referenceShader, "[numthreads(") || containsNeedle(referenceShader, "RWStructuredBuffer<SurfelPathTracerSurfel> surfelBuffer") ||
+	    containsNeedle(lightIntegrateShader, "float3 referenceColor = lighting"))
+	{
+		std::cerr << "SurfelPathTracer reference validation must be a real RT path and not a placeholder comparison\n";
+		referenceValidationOk = false;
+	}
+	const size_t referenceGatePos = engineCore.find("if (surfelSettings.enableReferenceValidation)");
+	const size_t referenceRecordPos = engineCore.find("surfelPathTracerPasses.recordReferencePass");
+	const size_t referenceElsePos = engineCore.find("\n\telse\n\t{", referenceRecordPos);
+	const size_t referenceClearPos = engineCore.find("clearColorImage(*surfelPathTracerResources.referenceImages[fi]");
+	const bool referenceRtIsGated =
+	    referenceGatePos != std::string::npos &&
+	    referenceRecordPos != std::string::npos &&
+	    referenceElsePos != std::string::npos &&
+	    referenceClearPos != std::string::npos &&
+	    referenceGatePos < referenceRecordPos &&
+	    referenceRecordPos < referenceElsePos &&
+	    referenceElsePos < referenceClearPos &&
+	    containsAllNeedles(engineCore,
+	                       {"const vk::ClearColorValue referenceClearColor(0.0f, 0.0f, 0.0f, 0.0f)",
+	                        "vk::ImageLayout::eGeneral",
+	                        "vk::AccessFlagBits2::eTransferWrite",
+	                        "vk::PipelineStageFlagBits2::eTransfer",
+	                        "vk::AccessFlagBits2::eShaderRead",
+	                        "vk::PipelineStageFlagBits2::eComputeShader"});
+	if (!referenceRtIsGated)
+	{
+		std::cerr << "SurfelPathTracer reference RT pass must be gated by enableReferenceValidation and clear referenceImages when disabled\n";
+		referenceValidationOk = false;
+	}
 
-	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok &&
+	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok && task10Ok && task17Ok &&
 	       rtPushConstantStagesOk && materialAlbedoOk && surfelPrimaryLightingUnitsOk && surfelDiffuseGiOk && surfelIncidentRadianceOk &&
+	       gBufferPayloadAbiOk && reflectionSurfelTerminationOk && guidedRayIntegrationOk && msmRadianceSharingOk &&
 	       debugViewsOk && neighborGatherOk && cellOccupancyDebugOk && primarySunVisibilityOk &&
-	       representativeCellOverflowOk;
+	       representativeCellOverflowOk && reflectionRisOk && temporalHistoryPingPongOk && referenceValidationOk;
 }
 
 bool testSurfelPathTracerCellAddressBounds()

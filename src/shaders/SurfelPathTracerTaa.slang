@@ -5,7 +5,8 @@
 [[vk::binding(2, 0)]] RWTexture2D<float> gBufferDepth;
 [[vk::binding(3, 0)]] RWTexture2D<float4> gBufferMotionMaterial;
 [[vk::binding(18, 0)]] RWTexture2D<float4> lightingImages;
-[[vk::binding(19, 0)]] RWTexture2D<float4> taaHistoryImages;
+[[vk::binding(25, 0)]] RWTexture2D<float4> previousTaaHistory;
+[[vk::binding(26, 0)]] RWTexture2D<float4> currentTaaHistory;
 
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 
@@ -111,12 +112,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
         if (reprojectWithPrevViewProj(pixel, depth, motionMaterial.xy, previousUv)) {
             uint2 previousPixel = min(uint2(previousUv * float2(push.width, push.height)),
                                       uint2(push.width - 1u, push.height - 1u));
-            bool samePixelFallback = all(abs(int2(previousPixel) - int2(pixel)) <= int2(0));
             float3 lo;
             float3 hi;
             neighborhoodBounds(pixel, lo, hi);
-            float4 storedHistory = taaHistoryImages[pixel];
-            if (samePixelFallback && taaHistoryKeyMatches(storedHistory.a, currentKey)) {
+            float4 storedHistory = previousTaaHistory[previousPixel];
+            if (taaHistoryKeyMatches(storedHistory.a, currentKey)) {
                 history = clamp(storedHistory.rgb, lo, hi);
             } else {
                 useHistory = false;
@@ -130,6 +130,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float alpha = lerp(0.08, 0.45, cameraMotion);
     float3 blended = useHistory ? lerp(history, currentLighting, alpha) : currentLighting;
 
-    taaHistoryImages[pixel] = float4(blended, currentKey);
+    currentTaaHistory[pixel] = float4(blended, currentKey);
     outputImage[pixel] = float4(applyAcesTonemap(blended, ubo.exposure), 1.0);
 }

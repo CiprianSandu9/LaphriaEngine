@@ -1,10 +1,5 @@
 #include "SurfelPathTracerCommon.slang"
 
-struct SurfelPathTracerPayload {
-    float3 radiance;
-    float hitT;
-};
-
 struct BuiltInTriangleIntersectionAttributes {
     float2 barycentrics;
 };

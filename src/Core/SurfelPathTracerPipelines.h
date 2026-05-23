@@ -30,9 +30,11 @@ class SurfelPathTracerPipelines
 	void createGBufferRayTracingPipeline(const VulkanDevice &dev);
 	void createSurfelRayTracingPipeline(const VulkanDevice &dev);
 	void createReflectionRayTracingPipeline(const VulkanDevice &dev);
+	void createReferenceRayTracingPipeline(const VulkanDevice &dev);
 	void createGBufferShaderBindingTable(const VulkanDevice &dev);
 	void createSurfelShaderBindingTable(const VulkanDevice &dev);
 	void createReflectionShaderBindingTable(const VulkanDevice &dev);
+	void createReferenceShaderBindingTable(const VulkanDevice &dev);
 
 	vk::raii::DescriptorSetLayout skyDescriptorSetLayout{nullptr};
 	vk::raii::DescriptorSetLayout storageDescriptorSetLayout{nullptr};
@@ -57,10 +59,12 @@ class SurfelPathTracerPipelines
 	vk::raii::Pipeline gBufferRayTracingPipeline{nullptr};
 	vk::raii::Pipeline surfelRayTracingPipeline{nullptr};
 	vk::raii::Pipeline reflectionRayTracingPipeline{nullptr};
+	vk::raii::Pipeline referenceRayTracingPipeline{nullptr};
 
 	SurfelPathTracerSbtRegions gBufferSbt{};
 	SurfelPathTracerSbtRegions surfelSbt{};
 	SurfelPathTracerSbtRegions reflectionSbt{};
+	SurfelPathTracerSbtRegions referenceSbt{};
 };
 } // namespace Laphria
 

@@ -68,12 +68,25 @@ class SurfelPathTracerPasses
 	                              vk::DescriptorSet rayTracingSet,
 	                              vk::DescriptorSet storageSet,
 	                              vk::DescriptorSet globalSet,
-	                              uint32_t rayCount) const;
+	                              uint32_t rayCount,
+	                              bool enableGuidedSampling,
+	                              uint32_t irradianceAtlasWidth,
+	                              uint32_t activeMaxDepth,
+	                              uint32_t sleepingMaxDepth,
+	                              bool enableSurfelTermination,
+	                              uint32_t maxSurfelSamplesPerQuery,
+	                              float cellSize,
+	                              uint32_t cellDimension) const;
 
 	void recordIntegratePass(const vk::raii::CommandBuffer &commandBuffer,
 	                         const SurfelPathTracerPipelines &pipelines,
 	                         vk::DescriptorSet imageSet,
-	                         uint32_t maxSurfels) const;
+	                         vk::DescriptorSet globalSet,
+	                         uint32_t maxSurfels,
+	                         bool enableRadianceSharing,
+	                         uint32_t maxRadianceSharingSamples,
+	                         uint32_t cellDimension,
+	                         float cellSize) const;
 
 	void recordEvaluatePass(const vk::raii::CommandBuffer &commandBuffer,
 	                        const SurfelPathTracerPipelines &pipelines,
@@ -87,6 +100,7 @@ class SurfelPathTracerPasses
 	                        float removalThreshold,
 	                        float surfelTargetArea,
 	                        float surfelMinRadius,
+	                        float surfelMaxRadiusScale,
 	                        uint32_t frameIndex,
 	                        bool lockSurfels,
 	                        bool enableSurfelPlacement,
@@ -104,7 +118,18 @@ class SurfelPathTracerPasses
 	                          float cellSize,
 	                          uint32_t cellDimension,
 	                          vk::Extent2D extent,
-	                          uint32_t frameIndex) const;
+	                          uint32_t frameIndex,
+	                          bool enableSurfelTermination,
+	                          uint32_t maxSurfelSamplesPerQuery) const;
+
+	void recordReferencePass(const vk::raii::CommandBuffer &commandBuffer,
+	                         const SurfelPathTracerPipelines &pipelines,
+	                         vk::DescriptorSet rayTracingSet,
+	                         vk::DescriptorSet storageSet,
+	                         vk::DescriptorSet globalSet,
+	                         bool enableReferenceValidation,
+	                         uint32_t maxDepth,
+	                         vk::Extent2D extent) const;
 
 	void recordReflectionFilterPass(const vk::raii::CommandBuffer &commandBuffer,
 	                                const SurfelPathTracerPipelines &pipelines,
@@ -128,6 +153,7 @@ class SurfelPathTracerPasses
 	                              bool enableReflections,
 	                              bool useBilateralReflection,
 	                              float cellSize,
+	                              float surfelMaxRadiusScale,
 	                              uint32_t cellDimension,
 	                              uint32_t perCellSurfelLimit,
 	                              uint32_t debugView,

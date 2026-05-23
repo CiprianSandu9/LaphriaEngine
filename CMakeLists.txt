@@ -49,6 +49,7 @@ set(SHADER_SOURCES
         "SurfelPathTracerIntegrate.slang|main"
         "SurfelPathTracerEvaluate.slang|main"
         "SurfelPathTracerReflection.slang|main"
+        "SurfelPathTracerReference.slang|main"
         "SurfelPathTracerReflectionFilter.slang|main"
         "SurfelPathTracerBilateral.slang|main"
         "SurfelPathTracerLightIntegrate.slang|main"

@@ -153,7 +153,7 @@ public:
         bool enableBilateralCleanup = true;
         bool enableTaa = true;
         uint32_t maxSurfels = 150000;
-        uint32_t maxRaysPerFrame = 150000 * 64;
+        uint32_t maxRaysPerFrame = 150000 * 16;
         float cellSize = 2.0f;
         uint32_t cellDimension = 64;
         uint32_t perCellSurfelLimit = 64;

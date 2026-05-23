@@ -162,7 +162,7 @@ void SurfelPathTracerPipelines::createDescriptorSetLayouts(const VulkanDevice &d
 	    vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eRaygenKHR |
 	    vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR |
 	    vk::ShaderStageFlagBits::eAnyHitKHR;
-	std::array<vk::DescriptorSetLayoutBinding, 21> storageBindings = {
+	std::array<vk::DescriptorSetLayoutBinding, 28> storageBindings = {
 	    vk::DescriptorSetLayoutBinding{.binding = 0, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 2, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
@@ -183,7 +183,14 @@ void SurfelPathTracerPipelines::createDescriptorSetLayouts(const VulkanDevice &d
 	    vk::DescriptorSetLayoutBinding{.binding = 17, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 18, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 19, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
-	    vk::DescriptorSetLayoutBinding{.binding = 20, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages}};
+	    vk::DescriptorSetLayoutBinding{.binding = 20, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 21, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 22, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 23, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 24, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 25, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 26, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 27, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages}};
 	vk::DescriptorSetLayoutCreateInfo storageLayoutInfo{
 	    .bindingCount = static_cast<uint32_t>(storageBindings.size()),
 	    .pBindings = storageBindings.data()};
@@ -399,6 +406,50 @@ void SurfelPathTracerPipelines::createReflectionRayTracingPipeline(const VulkanD
 	reflectionRayTracingPipeline = dev.logicalDevice.createRayTracingPipelineKHR(nullptr, nullptr, pipelineInfo);
 }
 
+void SurfelPathTracerPipelines::createReferenceRayTracingPipeline(const VulkanDevice &dev)
+{
+	vk::raii::ShaderModule rgenModule = createShaderModule(dev, readFile("Shaders/SurfelPathTracerReference.slang.spv"));
+	vk::raii::ShaderModule rmissModule = createShaderModule(dev, readFile("Shaders/SurfelPathTracerMiss.slang.spv"));
+	vk::raii::ShaderModule rchitModule = createShaderModule(dev, readFile("Shaders/SurfelPathTracerClosestHit.slang.spv"));
+	vk::raii::ShaderModule ranyModule = createShaderModule(dev, readFile("Shaders/SurfelPathTracerAnyHit.slang.spv"));
+
+	std::array<vk::PipelineShaderStageCreateInfo, 4> stages = {
+	    vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eRaygenKHR, .module = *rgenModule, .pName = "main"},
+	    vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eMissKHR, .module = *rmissModule, .pName = "main"},
+	    vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eClosestHitKHR, .module = *rchitModule, .pName = "main"},
+	    vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eAnyHitKHR, .module = *ranyModule, .pName = "main"}};
+
+	std::array<vk::RayTracingShaderGroupCreateInfoKHR, 3> groups = {
+	    vk::RayTracingShaderGroupCreateInfoKHR{
+	        .type = vk::RayTracingShaderGroupTypeKHR::eGeneral,
+	        .generalShader = 0,
+	        .closestHitShader = VK_SHADER_UNUSED_KHR,
+	        .anyHitShader = VK_SHADER_UNUSED_KHR,
+	        .intersectionShader = VK_SHADER_UNUSED_KHR},
+	    vk::RayTracingShaderGroupCreateInfoKHR{
+	        .type = vk::RayTracingShaderGroupTypeKHR::eGeneral,
+	        .generalShader = 1,
+	        .closestHitShader = VK_SHADER_UNUSED_KHR,
+	        .anyHitShader = VK_SHADER_UNUSED_KHR,
+	        .intersectionShader = VK_SHADER_UNUSED_KHR},
+	    vk::RayTracingShaderGroupCreateInfoKHR{
+	        .type = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup,
+	        .generalShader = VK_SHADER_UNUSED_KHR,
+	        .closestHitShader = 2,
+	        .anyHitShader = 3,
+	        .intersectionShader = VK_SHADER_UNUSED_KHR}};
+
+	vk::RayTracingPipelineCreateInfoKHR pipelineInfo{
+	    .stageCount = static_cast<uint32_t>(stages.size()),
+	    .pStages = stages.data(),
+	    .groupCount = static_cast<uint32_t>(groups.size()),
+	    .pGroups = groups.data(),
+	    .maxPipelineRayRecursionDepth = 1,
+	    .layout = *rayTracingPipelineLayout};
+
+	referenceRayTracingPipeline = dev.logicalDevice.createRayTracingPipelineKHR(nullptr, nullptr, pipelineInfo);
+}
+
 void SurfelPathTracerPipelines::createGBufferShaderBindingTable(const VulkanDevice &dev)
 {
 	createShaderBindingTableForPipeline(dev, gBufferRayTracingPipeline, gBufferSbt);
@@ -412,4 +463,9 @@ void SurfelPathTracerPipelines::createSurfelShaderBindingTable(const VulkanDevic
 void SurfelPathTracerPipelines::createReflectionShaderBindingTable(const VulkanDevice &dev)
 {
 	createShaderBindingTableForPipeline(dev, reflectionRayTracingPipeline, reflectionSbt);
+}
+
+void SurfelPathTracerPipelines::createReferenceShaderBindingTable(const VulkanDevice &dev)
+{
+	createShaderBindingTableForPipeline(dev, referenceRayTracingPipeline, referenceSbt);
 }

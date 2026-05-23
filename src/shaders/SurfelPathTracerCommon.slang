@@ -82,6 +82,47 @@ struct SurfelPathTracerCounters {
     uint pad1;
 };
 
+struct SurfelPathTracerPayload {
+    float3 radiance;
+    float hitT;
+    float3 hitPosition;
+    float3 hitNormal;
+    float3 baseColor;
+    float3 emission;
+    float3 f0;
+    float ao;
+    float metallic;
+    float roughness;
+    uint hitKind;
+    uint instanceID;
+};
+
+SurfelPathTracerPayload makeEmptySurfelPayload()
+{
+    SurfelPathTracerPayload payload;
+    payload.radiance = float3(0.0);
+    payload.hitT = -1.0;
+    payload.hitPosition = float3(0.0);
+    payload.hitNormal = float3(0.0, 1.0, 0.0);
+    payload.baseColor = float3(0.0);
+    payload.emission = float3(0.0);
+    payload.f0 = float3(0.0);
+    payload.ao = 1.0;
+    payload.metallic = 0.0;
+    payload.roughness = 1.0;
+    payload.hitKind = 0u;
+    payload.instanceID = 0u;
+    return payload;
+}
+
+SurfelPathTracerPayload makeVisibilitySurfelPayload()
+{
+    SurfelPathTracerPayload payload = makeEmptySurfelPayload();
+    payload.hitT = 1.0;
+    payload.hitKind = 1u;
+    return payload;
+}
+
 uint packNormalOctahedral(float3 normal) {
     float3 n = normalize(normal);
     float invL1 = 1.0 / max(abs(n.x) + abs(n.y) + abs(n.z), 0.000001);
@@ -170,10 +211,14 @@ uint2 atlasDirectionCoord(float3 localDirection)
     return uint2(clamp(offset, int2(0), int2(5)));
 }
 
+bool isFiniteScalar(float value) {
+    return abs(value) < 3.402823e38;
+}
+
 bool isFinite3(float3 value) {
-    return abs(value.x) < 3.402823e38 &&
-           abs(value.y) < 3.402823e38 &&
-           abs(value.z) < 3.402823e38;
+    return isFiniteScalar(value.x) &&
+           isFiniteScalar(value.y) &&
+           isFiniteScalar(value.z);
 }
 
 bool isActiveSurfel(SurfelPathTracerSurfel surfel)
@@ -285,9 +330,66 @@ float3 clampLuminance(float3 radiance, float maxLuminance) {
     return max(radiance, float3(0.0, 0.0, 0.0)) * (safeMax / luma);
 }
 
-float3 msmeBlend(float3 previousMean, float3 sampleRadiance, float alpha)
+float ggxPdf(float3 L, float3 N, float3 V, float roughness)
 {
-    return lerp(previousMean, sampleRadiance, clamp(alpha, 0.0, 1.0));
+    float3 H = normalize(L + V);
+    float nDotH = max(dot(N, H), 0.0);
+    float vDotH = max(dot(V, H), 1e-5);
+    if (nDotH <= 0.0) { return 0.0; }
+    float D = distributionGGX(N, H, max(roughness, MIN_ROUGHNESS));
+    return max(D * nDotH / (4.0 * vDotH), 1e-5);
+}
+
+float3 ggxSpecularBrdf(float3 L, float3 N, float3 V, float3 f0, float roughness)
+{
+    float nDotL = max(dot(N, L), 0.0);
+    float nDotV = max(dot(N, V), 0.0);
+    if (nDotL <= 0.0 || nDotV <= 0.0) { return float3(0.0); }
+    float3 H = normalize(L + V);
+    float D = distributionGGX(N, H, max(roughness, MIN_ROUGHNESS));
+    float G = geometrySmith(N, V, L, max(roughness, MIN_ROUGHNESS));
+    float3 F = fresnelSchlickRoughness(saturate(dot(H, V)), f0, roughness);
+    return (D * G * F) / max(4.0 * nDotV * nDotL, 1e-5);
+}
+
+struct SurfelPtReservoir {
+    float3 direction;
+    float3 brdfWeight;
+    float pdf;
+    float weightSum;
+    float selectedWeight;
+};
+
+void addReflectionCandidate(inout SurfelPtReservoir reservoir,
+                            float3 direction,
+                            float3 brdfWeight,
+                            float pdf,
+                            float candidateWeight,
+                            float randomValue)
+{
+    reservoir.weightSum += candidateWeight;
+    if (reservoir.weightSum > 0.0 && randomValue < candidateWeight / reservoir.weightSum)
+    {
+        reservoir.direction = direction;
+        reservoir.brdfWeight = brdfWeight;
+        reservoir.pdf = max(pdf, 1e-5);
+        reservoir.selectedWeight = candidateWeight;
+    }
+}
+
+float3 updateMsme(float3 sampleRadiance, inout SurfelPathTracerSurfel surfel, float shortBlend)
+{
+    float3 previousMean = surfel.meanAndVariance.xyz;
+    float3 previousShort = surfel.shortMeanAndLife.xyz;
+    float3 shortMean = lerp(previousShort, sampleRadiance, saturate(shortBlend));
+    float3 longMean = lerp(previousMean, sampleRadiance, saturate(shortBlend * 0.25));
+    float3 delta = sampleRadiance - longMean;
+    float variance = lerp(surfel.meanAndVariance.w, dot(delta, delta), saturate(shortBlend * 0.5));
+    surfel.meanAndVariance = float4(longMean, variance);
+    surfel.shortMeanAndLife = float4(shortMean, surfel.shortMeanAndLife.w);
+    surfel.varianceAndInconsistency = float4(abs(shortMean - longMean), variance);
+    surfel.radiance = longMean;
+    return longMean;
 }
 
 #endif // SURFEL_PATH_TRACER_COMMON_H
