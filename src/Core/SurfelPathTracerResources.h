@@ -135,6 +135,8 @@ struct SurfelPathTracerCellAddress
 class SurfelPathTracerResources
 {
   public:
+	using VmaBuffer = VulkanUtils::VmaBuffer;
+
 	SurfelPathTracerResources() = default;
 	~SurfelPathTracerResources();
 
@@ -191,17 +193,22 @@ class SurfelPathTracerResources
 		return cellAddressForPosition(position - cameraPosition, cellSize, cellDimension);
 	}
 
-	VulkanUtils::VmaBuffer countersBuffer;
-	VulkanUtils::VmaBuffer surfelBuffer;
-	VulkanUtils::VmaBuffer aliveBuffer;
-	VulkanUtils::VmaBuffer deadBuffer;
-	VulkanUtils::VmaBuffer dirtyBuffer;
-	VulkanUtils::VmaBuffer recycleBuffer;
-	VulkanUtils::VmaBuffer rayBuffer;
-	VulkanUtils::VmaBuffer cellInfoBuffer;
-	VulkanUtils::VmaBuffer cellCounterBuffer;
-	VulkanUtils::VmaBuffer cellToSurfelBuffer;
+	VmaBuffer countersBuffer;
+	VmaBuffer surfelBuffer;
+	VmaBuffer surfelSourceBuffer;
+	VmaBuffer sourceInstanceBuffer;
+	VmaBuffer sourceTransformBuffer;
+	VmaBuffer aliveBuffer;
+	VmaBuffer deadBuffer;
+	VmaBuffer dirtyBuffer;
+	VmaBuffer recycleBuffer;
+	VmaBuffer rayBuffer;
+	VmaBuffer cellInfoBuffer;
+	VmaBuffer cellCounterBuffer;
+	VmaBuffer cellToSurfelBuffer;
 	void *mappedCounters = nullptr;
+	uint32_t maxSourceInstances = 65536u;
+	uint32_t maxSourceTransforms = 65536u;
 
 	std::vector<VulkanUtils::VmaImage> outputImages;
 	std::vector<vk::raii::ImageView> outputImageViews;
@@ -217,6 +224,7 @@ class SurfelPathTracerResources
 	std::vector<vk::raii::ImageView> gBufferMaterialViews;
 	std::vector<VulkanUtils::VmaImage> gBufferEmissiveImages;
 	std::vector<vk::raii::ImageView> gBufferEmissiveViews;
+	std::vector<VmaBuffer> gBufferSourceBuffers;
 	std::vector<VulkanUtils::VmaImage> reflectionImages;
 	std::vector<vk::raii::ImageView> reflectionViews;
 	std::vector<VulkanUtils::VmaImage> filteredReflectionImages;

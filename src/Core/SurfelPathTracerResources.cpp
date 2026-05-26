@@ -7,6 +7,7 @@
 #include <exception>
 #include <initializer_list>
 #include <stdexcept>
+#include <string>
 
 using namespace Laphria;
 
@@ -26,6 +27,15 @@ void destroyBuffers(std::initializer_list<VulkanUtils::VmaBuffer *> buffers)
 			buffer->reset();
 		}
 	}
+}
+
+void destroyBufferSet(std::vector<VulkanUtils::VmaBuffer> &buffers)
+{
+	for (auto &buffer : buffers)
+	{
+		buffer.reset();
+	}
+	buffers.clear();
 }
 
 UISystem::SurfelPathTracerSettings persistentCapacitySettings(
@@ -128,6 +138,7 @@ void SurfelPathTracerResources::cleanupSwapchainResources()
 	clearViewsThenDestroyImages(gBufferAlbedoViews, gBufferAlbedoImages);
 	clearViewsThenDestroyImages(gBufferMaterialViews, gBufferMaterialImages);
 	clearViewsThenDestroyImages(gBufferEmissiveViews, gBufferEmissiveImages);
+	destroyBufferSet(gBufferSourceBuffers);
 	clearViewsThenDestroyImages(reflectionViews, reflectionImages);
 	clearViewsThenDestroyImages(filteredReflectionViews, filteredReflectionImages);
 	for (size_t bank = 0; bank < filteredReflectionHistoryImages.size(); ++bank)
@@ -246,14 +257,25 @@ void SurfelPathTracerResources::createPersistentBuffers(
 
 	auto createBuffer = [&](vk::DeviceSize size,
 	                        VulkanUtils::VmaBuffer &buffer,
-	                        vk::MemoryPropertyFlags memoryFlags) {
-		VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, size,
-		                          vk::BufferUsageFlagBits::eStorageBuffer,
-		                          memoryFlags, buffer);
+	                        vk::MemoryPropertyFlags memoryFlags,
+	                        vk::BufferUsageFlags usageFlags,
+	                        const char *resourceName) {
+		try
+		{
+			VulkanUtils::createBuffer(dev.logicalDevice, dev.physicalDevice, size,
+			                          usageFlags,
+			                          memoryFlags, buffer);
+		}
+		catch (const std::exception &ex)
+		{
+			throw std::runtime_error(std::string(resourceName) + ": " + ex.what());
+		}
 	};
 
 	createBuffer(sizeof(SurfelPathTracerCounters), countersBuffer,
-	             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+	             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+	             vk::BufferUsageFlagBits::eStorageBuffer,
+	             "SurfelPathTracer.CountersBuffer");
 	mappedCounters = countersBuffer.memory.mapMemory(0, sizeof(SurfelPathTracerCounters));
 	std::memset(mappedCounters, 0, sizeof(SurfelPathTracerCounters));
 	auto *initialCounters = static_cast<SurfelPathTracerCounters *>(mappedCounters);
@@ -261,23 +283,53 @@ void SurfelPathTracerResources::createPersistentBuffers(
 	initialCounters->deadSurfels = maxSurfels;
 
 	createBuffer(byteSize(maxSurfels, sizeof(SurfelPathTracerSurfel)), surfelBuffer,
-	             vk::MemoryPropertyFlagBits::eDeviceLocal);
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
+	             vk::BufferUsageFlagBits::eStorageBuffer,
+	             "SurfelPathTracer.SurfelBuffer");
+	createBuffer(byteSize(maxSurfels, sizeof(SurfelPathTracerSource)), surfelSourceBuffer,
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
+	             vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+	             "SurfelPathTracer.SourceBuffer");
+	createBuffer(byteSize(maxSourceInstances, sizeof(SurfelPathTracerSourceInstance)), sourceInstanceBuffer,
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
+	             vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+	             "SurfelPathTracer.SourceInstanceBuffer");
+	createBuffer(byteSize(maxSourceTransforms, sizeof(SurfelPathTracerSourceTransform)), sourceTransformBuffer,
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
+	             vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+	             "SurfelPathTracer.SourceTransformBuffer");
 	createBuffer(byteSize(maxSurfels, sizeof(uint32_t)), aliveBuffer,
-	             vk::MemoryPropertyFlagBits::eDeviceLocal);
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
+	             vk::BufferUsageFlagBits::eStorageBuffer,
+	             "SurfelPathTracer.AliveBuffer");
 	createBuffer(byteSize(maxSurfels, sizeof(uint32_t)), deadBuffer,
-	             vk::MemoryPropertyFlagBits::eDeviceLocal);
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
+	             vk::BufferUsageFlagBits::eStorageBuffer,
+	             "SurfelPathTracer.DeadBuffer");
 	createBuffer(byteSize(maxSurfels, sizeof(uint32_t)), dirtyBuffer,
-	             vk::MemoryPropertyFlagBits::eDeviceLocal);
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
+	             vk::BufferUsageFlagBits::eStorageBuffer,
+	             "SurfelPathTracer.DirtyBuffer");
 	createBuffer(byteSize(static_cast<uint64_t>(maxSurfels) * 4u, sizeof(uint32_t)), recycleBuffer,
-	             vk::MemoryPropertyFlagBits::eDeviceLocal);
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
+	             vk::BufferUsageFlagBits::eStorageBuffer,
+	             "SurfelPathTracer.RecycleBuffer");
 	createBuffer(byteSize(static_cast<uint64_t>(maxRays) * 8u, sizeof(uint32_t)), rayBuffer,
-	             vk::MemoryPropertyFlagBits::eDeviceLocal);
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
+	             vk::BufferUsageFlagBits::eStorageBuffer,
+	             "SurfelPathTracer.RayBuffer");
 	createBuffer(byteSize(cellCount, sizeof(SurfelPathTracerCellInfo)), cellInfoBuffer,
-	             vk::MemoryPropertyFlagBits::eDeviceLocal);
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
+	             vk::BufferUsageFlagBits::eStorageBuffer,
+	             "SurfelPathTracer.CellInfoBuffer");
 	createBuffer(byteSize(cellCounterCount, sizeof(uint32_t)), cellCounterBuffer,
-	             vk::MemoryPropertyFlagBits::eDeviceLocal);
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
+	             vk::BufferUsageFlagBits::eStorageBuffer,
+	             "SurfelPathTracer.CellCounterBuffer");
 	createBuffer(byteSize(cellToSurfelCount, sizeof(uint32_t)), cellToSurfelBuffer,
-	             vk::MemoryPropertyFlagBits::eDeviceLocal);
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
+	             vk::BufferUsageFlagBits::eStorageBuffer,
+	             "SurfelPathTracer.CellToSurfelBuffer");
 	needsPersistentReset_ = true;
 }
 
@@ -293,6 +345,21 @@ void SurfelPathTracerResources::createExtentImages(const VulkanDevice &dev,
 	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, gBufferAlbedoImages, gBufferAlbedoViews);
 	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, gBufferMaterialImages, gBufferMaterialViews);
 	createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, gBufferEmissiveImages, gBufferEmissiveViews);
+	destroyBufferSet(gBufferSourceBuffers);
+	gBufferSourceBuffers.reserve(MAX_FRAMES_IN_FLIGHT);
+	for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+	{
+		VmaBuffer gBufferSourceBuffer{};
+		VulkanUtils::createBuffer(dev.logicalDevice,
+		                          dev.physicalDevice,
+		                          byteSize(static_cast<uint64_t>(width) * height,
+		                                   sizeof(SurfelPathTracerPixelSource)),
+		                          vk::BufferUsageFlagBits::eStorageBuffer |
+		                              vk::BufferUsageFlagBits::eTransferDst,
+		                          vk::MemoryPropertyFlagBits::eDeviceLocal,
+		                          gBufferSourceBuffer);
+		gBufferSourceBuffers.push_back(std::move(gBufferSourceBuffer));
+	}
 	const uint32_t halfWidth = std::max((width + 1u) / 2u, 1u);
 	const uint32_t halfHeight = std::max((height + 1u) / 2u, 1u);
 	createStorageImageSet(dev, halfWidth, halfHeight,
@@ -339,7 +406,8 @@ void SurfelPathTracerResources::destroyPersistentBuffers()
 	mappedCounters = nullptr;
 	destroyBuffers({&countersBuffer, &surfelBuffer, &aliveBuffer, &deadBuffer, &dirtyBuffer,
 	                &recycleBuffer, &rayBuffer, &cellInfoBuffer, &cellCounterBuffer,
-	                &cellToSurfelBuffer});
+	                &cellToSurfelBuffer, &surfelSourceBuffer, &sourceInstanceBuffer,
+	                &sourceTransformBuffer});
 	cellCount_ = 0;
 	needsPersistentReset_ = true;
 }

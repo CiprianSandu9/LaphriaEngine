@@ -2039,6 +2039,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	    fi >= surfelPathTracerResources.gBufferAlbedoImages.size() ||
 	    fi >= surfelPathTracerResources.gBufferMaterialImages.size() ||
 	    fi >= surfelPathTracerResources.gBufferEmissiveImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferSourceBuffers.size() ||
 	    fi >= surfelPathTracerStorageDescriptorSets.size() ||
 	    fi >= surfelPathTracerRtDescriptorSets.size())
 	{
@@ -2072,6 +2073,44 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferAlbedoImages[fi]);
 	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferMaterialImages[fi]);
 	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferEmissiveImages[fi]);
+
+	commandBuffer.fillBuffer(*surfelPathTracerResources.gBufferSourceBuffers[fi], 0, VK_WHOLE_SIZE, 0u);
+	std::vector<vk::BufferMemoryBarrier2> sourceClearBarriers;
+	sourceClearBarriers.push_back(vk::BufferMemoryBarrier2{
+	    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+	    .dstStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR |
+	                    vk::PipelineStageFlagBits2::eComputeShader,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+	                     vk::AccessFlagBits2::eShaderStorageWrite,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .buffer = *surfelPathTracerResources.gBufferSourceBuffers[fi],
+	    .offset = 0,
+	    .size = VK_WHOLE_SIZE});
+	if (resetPersistent)
+	{
+		commandBuffer.fillBuffer(*surfelPathTracerResources.surfelSourceBuffer, 0, VK_WHOLE_SIZE, 0u);
+		sourceClearBarriers.push_back(vk::BufferMemoryBarrier2{
+		    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+		    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+		    .dstStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR |
+		                    vk::PipelineStageFlagBits2::eComputeShader,
+		    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+		                     vk::AccessFlagBits2::eShaderStorageWrite,
+		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		    .buffer = *surfelPathTracerResources.surfelSourceBuffer,
+		    .offset = 0,
+		    .size = VK_WHOLE_SIZE});
+	}
+	if (!sourceClearBarriers.empty())
+	{
+		const vk::DependencyInfo sourceClearDependency{
+		    .bufferMemoryBarrierCount = static_cast<uint32_t>(sourceClearBarriers.size()),
+		    .pBufferMemoryBarriers = sourceClearBarriers.data()};
+		commandBuffer.pipelineBarrier2(sourceClearDependency);
+	}
 
 	surfelPathTracerPasses.recordGBufferPass(commandBuffer,
 	                                         pipelines.surfelPathTracerPipelines,
