@@ -11,6 +11,13 @@ struct SurfelPathTracerGBufferPayload {
     float dielectricSpec;
     float ao;
     float3 emissive;
+    uint sourceNodeId;
+    uint sourceInstanceId;
+    uint sourceInstanceCustomIndex;
+    uint sourcePrimitiveIndex;
+    float2 sourceBarycentrics;
+    float3 sourceObjectPosition;
+    float3 sourceObjectNormal;
 };
 
 struct BuiltInTriangleIntersectionAttributes {
@@ -22,6 +29,7 @@ struct BuiltInTriangleIntersectionAttributes {
 [[vk::binding(6, 0)]] ByteAddressBuffer globalIndices[];
 [[vk::binding(7, 0)]] StructuredBuffer<MaterialData> globalMaterials[];
 [[vk::binding(8, 0)]] Sampler2D globalTextures[];
+[[vk::binding(30, 1)]] StructuredBuffer<SurfelPathTracerSourceInstance> sourceInstanceBuffer;
 
 static const uint kVertexStride = 60;
 
@@ -38,12 +46,13 @@ uint loadGBufferIndex(ByteAddressBuffer buf, uint idx)
 
 [shader("anyhit")]
 void main(inout SurfelPathTracerGBufferPayload payload, in BuiltInTriangleIntersectionAttributes attribs) {
-    uint instanceId = InstanceID();
-    uint modelId = instanceId >> 14;
-    uint primitiveOffset = instanceId & 0x3FFF;
-    uint geometryIndex = GeometryIndex();
+    uint sourceInstanceId = InstanceIndex();
+    SurfelPathTracerSourceInstance sourceInstance = sourceInstanceBuffer[sourceInstanceId];
+    uint modelId = sourceInstance.modelId;
+    uint primitiveOffset = sourceInstance.primitiveOffset;
+    uint materialIndex = primitiveOffset + GeometryIndex();
 
-    MaterialData mat = globalMaterials[NonUniformResourceIndex(modelId)][primitiveOffset + geometryIndex];
+    MaterialData mat = globalMaterials[NonUniformResourceIndex(modelId)][materialIndex];
     if (mat.alphaCutoff <= 0.0) {
         return;
     }

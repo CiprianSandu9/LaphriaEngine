@@ -11,6 +11,13 @@ struct SurfelPathTracerGBufferPayload {
     float dielectricSpec;
     float ao;
     float3 emissive;
+    uint sourceNodeId;
+    uint sourceInstanceId;
+    uint sourceInstanceCustomIndex;
+    uint sourcePrimitiveIndex;
+    float2 sourceBarycentrics;
+    float3 sourceObjectPosition;
+    float3 sourceObjectNormal;
 };
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;
@@ -39,6 +46,13 @@ SurfelPathTracerGBufferPayload makeEmptyGBufferPayload()
     payload.dielectricSpec = 1.0;
     payload.ao = 1.0;
     payload.emissive = float3(0.0);
+    payload.sourceNodeId = SURFEL_PT_INVALID_INDEX;
+    payload.sourceInstanceId = SURFEL_PT_INVALID_INDEX;
+    payload.sourceInstanceCustomIndex = SURFEL_PT_INVALID_INDEX;
+    payload.sourcePrimitiveIndex = SURFEL_PT_INVALID_INDEX;
+    payload.sourceBarycentrics = float2(0.0);
+    payload.sourceObjectPosition = float3(0.0);
+    payload.sourceObjectNormal = float3(0.0);
     return payload;
 }
 

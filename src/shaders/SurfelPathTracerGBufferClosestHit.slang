@@ -11,6 +11,13 @@ struct SurfelPathTracerGBufferPayload {
     float dielectricSpec;
     float ao;
     float3 emissive;
+    uint sourceNodeId;
+    uint sourceInstanceId;
+    uint sourceInstanceCustomIndex;
+    uint sourcePrimitiveIndex;
+    float2 sourceBarycentrics;
+    float3 sourceObjectPosition;
+    float3 sourceObjectNormal;
 };
 
 struct BuiltInTriangleIntersectionAttributes {
@@ -39,6 +46,13 @@ struct GBufferSurface {
     float dielectricSpec;
     float ao;
     float3 emissive;
+    uint sourceNodeId;
+    uint sourceInstanceId;
+    uint sourceInstanceCustomIndex;
+    uint sourcePrimitiveIndex;
+    float2 sourceBarycentrics;
+    float3 sourceObjectPosition;
+    float3 sourceObjectNormal;
 };
 
 Vertex loadGBufferVertex(ByteAddressBuffer buf, uint idx)
@@ -60,8 +74,11 @@ uint loadGBufferIndex(ByteAddressBuffer buf, uint idx)
 
 GBufferSurface decodeGBufferSurface(uint instanceId, uint geometryIndex, uint primitiveIndex, float2 barycentrics)
 {
-    uint modelId = instanceId >> 14;
-    uint primitiveOffset = instanceId & 0x3FFF;
+    uint sourceInstanceId = InstanceIndex();
+    uint sourceInstanceCustomIndex = instanceId;
+    SurfelPathTracerSourceInstance sourceInstance = sourceInstanceBuffer[sourceInstanceId];
+    uint modelId = sourceInstance.modelId;
+    uint primitiveOffset = sourceInstance.primitiveOffset;
     uint materialIndex = primitiveOffset + geometryIndex;
 
     MaterialData mat = globalMaterials[NonUniformResourceIndex(modelId)][materialIndex];
@@ -78,6 +95,8 @@ GBufferSurface decodeGBufferSurface(uint instanceId, uint geometryIndex, uint pr
     Vertex v2 = loadGBufferVertex(vertBuf, mat.vertexOffset + i2);
 
     float3 bary = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
+    float3 objectPosition = v0.pos * bary.x + v1.pos * bary.y + v2.pos * bary.z;
+    float3 objectNormal = normalize(v0.normal * bary.x + v1.normal * bary.y + v2.normal * bary.z);
     float2 uv = v0.texCoord * bary.x + v1.texCoord * bary.y + v2.texCoord * bary.z;
     float3 vertexColor = v0.color * bary.x + v1.color * bary.y + v2.color * bary.z;
     float3 geomNormal = v0.normal * bary.x + v1.normal * bary.y + v2.normal * bary.z;
@@ -153,6 +172,13 @@ GBufferSurface decodeGBufferSurface(uint instanceId, uint geometryIndex, uint pr
     surface.dielectricSpec = max(dielectricSpec + f0.x * 0.0, 0.0);
     surface.ao = ao;
     surface.emissive = max(emissive, float3(0.0));
+    surface.sourceInstanceId = sourceInstanceId;
+    surface.sourceNodeId = sourceInstance.sourceNodeId;
+    surface.sourceInstanceCustomIndex = sourceInstanceCustomIndex;
+    surface.sourcePrimitiveIndex = primitiveIndex;
+    surface.sourceBarycentrics = barycentrics;
+    surface.sourceObjectPosition = objectPosition;
+    surface.sourceObjectNormal = objectNormal;
     return surface;
 }
 
@@ -169,4 +195,11 @@ void main(inout SurfelPathTracerGBufferPayload payload, in BuiltInTriangleInters
     payload.dielectricSpec = surface.dielectricSpec;
     payload.ao = surface.ao;
     payload.emissive = surface.emissive;
+    payload.sourceNodeId = surface.sourceNodeId;
+    payload.sourceInstanceId = surface.sourceInstanceId;
+    payload.sourceInstanceCustomIndex = surface.sourceInstanceCustomIndex;
+    payload.sourcePrimitiveIndex = surface.sourcePrimitiveIndex;
+    payload.sourceBarycentrics = surface.sourceBarycentrics;
+    payload.sourceObjectPosition = surface.sourceObjectPosition;
+    payload.sourceObjectNormal = surface.sourceObjectNormal;
 }

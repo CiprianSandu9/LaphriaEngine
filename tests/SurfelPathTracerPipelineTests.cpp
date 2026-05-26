@@ -38,29 +38,85 @@ std::string readTextFile(const std::filesystem::path &path, bool &ok)
 	return stream.str();
 }
 
+std::string normalizeContractText(std::string_view text)
+{
+	std::string normalized;
+	normalized.reserve(text.size());
+	bool inWhitespace = false;
+	for (unsigned char ch : text)
+	{
+		if (std::isspace(ch))
+		{
+			inWhitespace = true;
+			continue;
+		}
+		if (inWhitespace && !normalized.empty())
+		{
+			normalized.push_back(' ');
+		}
+		normalized.push_back(static_cast<char>(ch));
+		inWhitespace = false;
+	}
+	return normalized;
+}
+
 bool containsNeedle(std::string_view haystack, std::string_view needle)
 {
-	auto normalizeWhitespace = [](std::string_view text) {
-		std::string normalized;
-		normalized.reserve(text.size());
-		bool inWhitespace = false;
-		for (unsigned char ch : text)
+	return normalizeContractText(haystack).find(normalizeContractText(needle)) != std::string::npos;
+}
+
+std::string extractStructBlock(std::string_view haystack, std::string_view structName, std::string_view label, bool &ok)
+{
+	const std::string marker = "struct " + std::string(structName);
+	const size_t start = haystack.find(marker);
+	if (start == std::string_view::npos)
+	{
+		std::cerr << "missing SurfelPathTracer struct contract in " << label << ": " << marker << '\n';
+		ok = false;
+		return {};
+	}
+
+	const size_t openBrace = haystack.find('{', start);
+	if (openBrace == std::string_view::npos)
+	{
+		std::cerr << "missing SurfelPathTracer struct opening brace in " << label << ": " << marker << '\n';
+		ok = false;
+		return {};
+	}
+
+	size_t closeBrace = std::string_view::npos;
+	int braceDepth = 0;
+	for (size_t i = openBrace; i < haystack.size(); ++i)
+	{
+		if (haystack[i] == '{')
 		{
-			if (std::isspace(ch))
-			{
-				inWhitespace = true;
-				continue;
-			}
-			if (inWhitespace && !normalized.empty())
-			{
-				normalized.push_back(' ');
-			}
-			normalized.push_back(static_cast<char>(ch));
-			inWhitespace = false;
+			++braceDepth;
 		}
-		return normalized;
-	};
-	return normalizeWhitespace(haystack).find(normalizeWhitespace(needle)) != std::string::npos;
+		else if (haystack[i] == '}')
+		{
+			--braceDepth;
+			if (braceDepth == 0)
+			{
+				closeBrace = i;
+				break;
+			}
+		}
+	}
+	if (closeBrace == std::string_view::npos)
+	{
+		std::cerr << "missing SurfelPathTracer struct closing brace in " << label << ": " << marker << '\n';
+		ok = false;
+		return {};
+	}
+
+	const size_t semicolon = haystack.find(';', closeBrace);
+	if (semicolon == std::string_view::npos)
+	{
+		std::cerr << "missing SurfelPathTracer struct semicolon in " << label << ": " << marker << '\n';
+		ok = false;
+		return {};
+	}
+	return std::string(haystack.substr(start, semicolon - start + 1u));
 }
 
 bool containsAllNeedles(std::string_view haystack, std::initializer_list<std::string_view> needles)
@@ -974,11 +1030,68 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    "float dielectricSpec;",
 	    "float ao;",
 	    "float3 emissive;"};
+	bool gBufferPayloadBlocksOk = true;
+	const std::string gBufferPayloadBlock =
+	    extractStructBlock(gBufferShader, "SurfelPathTracerGBufferPayload", "GBuffer raygen", gBufferPayloadBlocksOk);
+	const std::string gBufferClosestHitPayloadBlock =
+	    extractStructBlock(gBufferClosestHitShader, "SurfelPathTracerGBufferPayload", "GBuffer closest-hit", gBufferPayloadBlocksOk);
+	const std::string gBufferAnyHitPayloadBlock =
+	    extractStructBlock(gBufferAnyHitShader, "SurfelPathTracerGBufferPayload", "GBuffer any-hit", gBufferPayloadBlocksOk);
+	const std::string gBufferMissPayloadBlock =
+	    extractStructBlock(gBufferMissShader, "SurfelPathTracerGBufferPayload", "GBuffer miss", gBufferPayloadBlocksOk);
+	const std::string normalizedGBufferPayloadBlock = normalizeContractText(gBufferPayloadBlock);
+	auto gBufferPayloadBlockMatches = [&](std::string_view label, const std::string &payloadBlock) {
+		if (normalizeContractText(payloadBlock) != normalizedGBufferPayloadBlock)
+		{
+			std::cerr << "SurfelPathTracer GBuffer payload ABI mismatch in " << label << '\n';
+			return false;
+		}
+		return true;
+	};
+	const bool gBufferClosestHitPayloadMatches =
+	    gBufferPayloadBlockMatches("closest-hit", gBufferClosestHitPayloadBlock);
+	const bool gBufferAnyHitPayloadMatches = gBufferPayloadBlockMatches("any-hit", gBufferAnyHitPayloadBlock);
+	const bool gBufferMissPayloadMatches = gBufferPayloadBlockMatches("miss", gBufferMissPayloadBlock);
+	gBufferPayloadBlocksOk =
+	    gBufferPayloadBlocksOk &&
+	    gBufferClosestHitPayloadMatches &&
+	    gBufferAnyHitPayloadMatches &&
+	    gBufferMissPayloadMatches;
 	bool gBufferPayloadAbiOk =
+	    gBufferPayloadBlocksOk &&
 	    containsAllNeedles(gBufferShader, gBufferPayloadFields) &&
 	    containsAllNeedles(gBufferClosestHitShader, gBufferPayloadFields) &&
 	    containsAllNeedles(gBufferMissShader, gBufferPayloadFields) &&
 	    containsAllNeedles(gBufferAnyHitShader, gBufferPayloadFields) &&
+	    containsAllNeedles(gBufferShader,
+	                       {"uint sourceNodeId;",
+	                        "uint sourceInstanceId;",
+	                        "uint sourceInstanceCustomIndex;",
+	                        "uint sourcePrimitiveIndex;",
+	                        "float2 sourceBarycentrics;",
+	                        "float3 sourceObjectPosition;",
+	                        "float3 sourceObjectNormal;"}) &&
+	    containsAllNeedles(gBufferClosestHitShader,
+	                       {"uint sourceNodeId;",
+	                        "uint sourceInstanceId;",
+	                        "uint sourceInstanceCustomIndex;",
+	                        "uint sourcePrimitiveIndex;",
+	                        "float2 sourceBarycentrics;",
+	                        "float3 sourceObjectPosition;",
+	                        "float3 sourceObjectNormal;",
+	                        "uint sourceInstanceId = InstanceIndex()",
+	                        "uint sourceInstanceCustomIndex = instanceId",
+	                        "SurfelPathTracerSourceInstance sourceInstance = sourceInstanceBuffer[sourceInstanceId]",
+	                        "payload.sourceObjectPosition = surface.sourceObjectPosition",
+	                        "payload.sourceObjectNormal = surface.sourceObjectNormal"}) &&
+	    containsAllNeedles(gBufferAnyHitShader,
+	                       {"[[vk::binding(30, 1)]] StructuredBuffer<SurfelPathTracerSourceInstance> sourceInstanceBuffer",
+	                        "uint sourceInstanceId = InstanceIndex()",
+	                        "SurfelPathTracerSourceInstance sourceInstance = sourceInstanceBuffer[sourceInstanceId]",
+	                        "uint modelId = sourceInstance.modelId",
+	                        "uint primitiveOffset = sourceInstance.primitiveOffset",
+	                        "uint materialIndex = primitiveOffset + GeometryIndex()",
+	                        "MaterialData mat = globalMaterials[NonUniformResourceIndex(modelId)][materialIndex]"}) &&
 	    containsAllNeedles(gBufferShader,
 	                       {"SurfelPathTracerGBufferPayload makeVisibilityGBufferPayload()",
 	                        "payload.hitT = 1.0;",
