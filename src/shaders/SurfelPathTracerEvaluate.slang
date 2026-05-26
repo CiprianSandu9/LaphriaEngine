@@ -9,6 +9,8 @@
 [[vk::binding(8, 0)]] RWStructuredBuffer<uint> dirtyBuffer;
 [[vk::binding(11, 0)]] RWStructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer;
 [[vk::binding(13, 0)]] RWStructuredBuffer<uint> cellToSurfelBuffer;
+[[vk::binding(28, 0)]] StructuredBuffer<SurfelPathTracerPixelSource> gBufferSourceBuffer;
+[[vk::binding(29, 0)]] RWStructuredBuffer<SurfelPathTracerSource> surfelSourceBuffer;
 
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 

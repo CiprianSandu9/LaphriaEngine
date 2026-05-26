@@ -22,6 +22,7 @@ struct SurfelPathTracerGBufferPayload {
 [[vk::binding(20, 1)]] RWTexture2D<float4> gBufferAlbedo;
 [[vk::binding(21, 1)]] RWTexture2D<float4> gBufferMaterial;
 [[vk::binding(22, 1)]] RWTexture2D<float4> gBufferEmissive;
+[[vk::binding(28, 1)]] RWStructuredBuffer<SurfelPathTracerPixelSource> gBufferSourceBuffer;
 
 [[vk::binding(0, 2)]] ConstantBuffer<UniformBuffer> ubo;
 

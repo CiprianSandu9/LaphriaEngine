@@ -979,7 +979,7 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 
 	std::array<vk::DescriptorPoolSize, 2> poolSizes = {
 	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 18 * MAX_FRAMES_IN_FLIGHT},
-	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 10 * MAX_FRAMES_IN_FLIGHT}};
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 14 * MAX_FRAMES_IN_FLIGHT}};
 	vk::DescriptorPoolCreateInfo poolInfo{
 	    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
 	    .maxSets = MAX_FRAMES_IN_FLIGHT,
@@ -1013,7 +1013,31 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.referenceViews[i], .imageLayout = vk::ImageLayout::eGeneral}};
 		const std::array<uint32_t, 13> imageBindings = {0, 1, 2, 3, 14, 15, 16, 17, 18, 20, 21, 22, 27};
 
-		const std::array<vk::DescriptorBufferInfo, 10> bufferInfos = {
+		vk::DescriptorBufferInfo gBufferSourceInfo{
+		    .buffer = *surfelPathTracerResources.gBufferSourceBuffers[i],
+		    .offset = 0,
+		    .range = VK_WHOLE_SIZE,
+		};
+
+		vk::DescriptorBufferInfo surfelSourceInfo{
+		    .buffer = *surfelPathTracerResources.surfelSourceBuffer,
+		    .offset = 0,
+		    .range = VK_WHOLE_SIZE,
+		};
+
+		vk::DescriptorBufferInfo sourceInstanceInfo{
+		    .buffer = *surfelPathTracerResources.sourceInstanceBuffer,
+		    .offset = 0,
+		    .range = VK_WHOLE_SIZE,
+		};
+
+		vk::DescriptorBufferInfo sourceTransformInfo{
+		    .buffer = *surfelPathTracerResources.sourceTransformBuffer,
+		    .offset = 0,
+		    .range = VK_WHOLE_SIZE,
+		};
+
+		const std::array<vk::DescriptorBufferInfo, 14> bufferInfos = {
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.countersBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.surfelBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.aliveBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
@@ -1023,10 +1047,17 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.rayBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.cellInfoBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.cellCounterBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
-		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.cellToSurfelBuffer, .offset = 0, .range = VK_WHOLE_SIZE}};
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.cellToSurfelBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    gBufferSourceInfo,
+		    surfelSourceInfo,
+		    sourceInstanceInfo,
+		    sourceTransformInfo,
+		};
+
+		const std::array<uint32_t, 14> bufferBindings = {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 28, 29, 30, 31};
 
 		std::vector<vk::WriteDescriptorSet> writes;
-		writes.reserve(23);
+		writes.reserve(27);
 		for (size_t imageIndex = 0; imageIndex < imageInfos.size(); ++imageIndex)
 		{
 			writes.push_back(vk::WriteDescriptorSet{
@@ -1037,15 +1068,15 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 			    .descriptorType = vk::DescriptorType::eStorageImage,
 			    .pImageInfo = &imageInfos[imageIndex]});
 		}
-		for (uint32_t binding = 4; binding <= 13; ++binding)
+		for (size_t bufferIndex = 0; bufferIndex < bufferInfos.size(); ++bufferIndex)
 		{
 			writes.push_back(vk::WriteDescriptorSet{
 			    .dstSet = *surfelPathTracerStorageDescriptorSets[i],
-			    .dstBinding = binding,
+			    .dstBinding = bufferBindings[bufferIndex],
 			    .dstArrayElement = 0,
 			    .descriptorCount = 1,
 			    .descriptorType = vk::DescriptorType::eStorageBuffer,
-			    .pBufferInfo = &bufferInfos[binding - 4]});
+			    .pBufferInfo = &bufferInfos[bufferIndex]});
 		}
 
 		vulkan.logicalDevice.updateDescriptorSets(writes, {});

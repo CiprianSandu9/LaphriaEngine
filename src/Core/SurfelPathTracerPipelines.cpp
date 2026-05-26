@@ -162,7 +162,7 @@ void SurfelPathTracerPipelines::createDescriptorSetLayouts(const VulkanDevice &d
 	    vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eRaygenKHR |
 	    vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR |
 	    vk::ShaderStageFlagBits::eAnyHitKHR;
-	std::array<vk::DescriptorSetLayoutBinding, 28> storageBindings = {
+	std::array<vk::DescriptorSetLayoutBinding, 32> storageBindings = {
 	    vk::DescriptorSetLayoutBinding{.binding = 0, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 2, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
@@ -190,7 +190,11 @@ void SurfelPathTracerPipelines::createDescriptorSetLayouts(const VulkanDevice &d
 	    vk::DescriptorSetLayoutBinding{.binding = 24, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 25, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 26, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
-	    vk::DescriptorSetLayoutBinding{.binding = 27, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages}};
+	    vk::DescriptorSetLayoutBinding{.binding = 27, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 28, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = storageStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 29, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = storageStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 30, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = storageStages},
+	    vk::DescriptorSetLayoutBinding{.binding = 31, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = storageStages}};
 	vk::DescriptorSetLayoutCreateInfo storageLayoutInfo{
 	    .bindingCount = static_cast<uint32_t>(storageBindings.size()),
 	    .pBindings = storageBindings.data()};

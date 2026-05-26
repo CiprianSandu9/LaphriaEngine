@@ -5,6 +5,8 @@
 [[vk::binding(7, 0)]] RWStructuredBuffer<uint> deadBuffer;
 [[vk::binding(10, 0)]] RWStructuredBuffer<uint> rayBuffer;
 [[vk::binding(12, 0)]] RWByteAddressBuffer cellCounterBuffer;
+[[vk::binding(29, 0)]] RWStructuredBuffer<SurfelPathTracerSource> surfelSourceBuffer;
+[[vk::binding(31, 0)]] StructuredBuffer<SurfelPathTracerSourceTransform> sourceTransformBuffer;
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 
 struct UpdatePushConstants {

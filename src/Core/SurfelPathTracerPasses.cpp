@@ -705,9 +705,24 @@ void SurfelPathTracerPasses::recordImageBarrierGBufferToCompute(
 		    .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
 	}
 
+	vk::BufferMemoryBarrier2 sourceBufferBarrier{
+	    .srcStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .buffer = *resources.gBufferSourceBuffers[frameIndex],
+	    .offset = 0,
+	    .size = VK_WHOLE_SIZE,
+	};
+
 	vk::DependencyInfo dependency{
+	    .bufferMemoryBarrierCount = 1,
+	    .pBufferMemoryBarriers = &sourceBufferBarrier,
 	    .imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
-	    .pImageMemoryBarriers = barriers.data()};
+	    .pImageMemoryBarriers = barriers.data(),
+	};
 	commandBuffer.pipelineBarrier2(dependency);
 }
 

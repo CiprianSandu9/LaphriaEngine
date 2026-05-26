@@ -22,6 +22,7 @@ struct BuiltInTriangleIntersectionAttributes {
 [[vk::binding(6, 0)]] ByteAddressBuffer globalIndices[];
 [[vk::binding(7, 0)]] StructuredBuffer<MaterialData> globalMaterials[];
 [[vk::binding(8, 0)]] Sampler2D globalTextures[];
+[[vk::binding(30, 1)]] StructuredBuffer<SurfelPathTracerSourceInstance> sourceInstanceBuffer;
 
 [[vk::binding(0, 2)]] ConstantBuffer<UniformBuffer> ubo;
 

@@ -1220,7 +1220,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "std::vector<vk::raii::ImageView> referenceViews;",
 	                        "clearViewsThenDestroyImages(referenceViews, referenceImages);",
 	                        "createStorageImageSet(dev, width, height, vk::Format::eR16G16B16A16Sfloat, referenceImages, referenceViews);",
-	                        "std::array<vk::DescriptorSetLayoutBinding, 28> storageBindings",
+	                        "std::array<vk::DescriptorSetLayoutBinding, 32> storageBindings",
 	                        "vk::DescriptorSetLayoutBinding{.binding = 27",
 	                        "vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 18 * MAX_FRAMES_IN_FLIGHT}",
 	                        "referenceImages",
