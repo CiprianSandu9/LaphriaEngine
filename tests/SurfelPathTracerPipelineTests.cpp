@@ -810,6 +810,18 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        ".irradianceAtlasWidth = std::max(irradianceAtlasWidth, 1u)"}) &&
 	    containsAllNeedles(engineCore,
 	                       {"surfelPathTracerResources.maxRaysPerFrameCapacity(),\n\t\t                                                surfelSettings.enableGuidedSampling,\n\t\t                                                surfelSettings.irradianceAtlasWidth"});
+	const bool surfelSourceResourceArchitectureOk =
+	    containsAllNeedles(combined,
+	                       {"maxSourceInstances",
+	                        "maxSourceTransforms",
+	                        "SurfelPathTracer.SourceBuffer",
+	                        "SurfelPathTracer.SourceInstanceBuffer",
+	                        "SurfelPathTracer.SourceTransformBuffer",
+	                        "std::array<vk::DescriptorSetLayoutBinding, 32>",
+	                        "currentSurfelSourceInstanceCount",
+	                        "currentSurfelSourceTransformCount",
+	                        "surfelSourceNodeId",
+	                        "source.sourceNodeId >= push.sourceTransformCount"});
 	const std::string sceneNodeHeader =
 	    readTextFile(root / "src" / "SceneManagement" / "SceneNode.h", filesOk);
 	const std::string engineCoreHeader =
@@ -1531,7 +1543,8 @@ bool testSurfelPathTracerPipelineContractFiles()
 		referenceValidationOk = false;
 	}
 
-	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok && task10Ok && sourceInstanceTablesOk && task17Ok &&
+	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok && task10Ok &&
+	       surfelSourceResourceArchitectureOk && sourceInstanceTablesOk && task17Ok &&
 	       rtPushConstantStagesOk && materialAlbedoOk && surfelPrimaryLightingUnitsOk && surfelDiffuseGiOk && surfelIncidentRadianceOk &&
 	       gBufferPayloadAbiOk && gBufferSourceWriteOk && reflectionSurfelTerminationOk && guidedRayIntegrationOk && msmRadianceSharingOk &&
 	       debugViewsOk && neighborGatherOk && cellOccupancyDebugOk && primarySunVisibilityOk &&
