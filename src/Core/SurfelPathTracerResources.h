@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstddef>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -34,6 +35,70 @@ struct SurfelPathTracerSurfel
 	uint32_t materialKey = 0;
 	glm::vec4 varianceAndInconsistency{1.0f};
 };
+
+static constexpr uint32_t SURFEL_PT_SOURCE_FLAG_VALID = 1u << 0u;
+static constexpr uint32_t SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED = 1u << 1u;
+
+struct SurfelPathTracerSource
+{
+	uint32_t sourceNodeId = UINT32_MAX;
+	uint32_t sourceInstanceId = UINT32_MAX;
+	uint32_t sourceInstanceCustomIndex = UINT32_MAX;
+	uint32_t sourcePrimitiveIndex = UINT32_MAX;
+	glm::vec2 sourceBarycentrics{0.0f};
+	uint32_t sourceMaterialKey = 0u;
+	uint32_t sourceFlags = 0u;
+	glm::vec3 sourceObjectPosition{0.0f};
+	uint32_t sourceObjectNormal = 0u;
+};
+
+struct SurfelPathTracerPixelSource
+{
+	glm::vec3 sourceObjectPosition{0.0f};
+	uint32_t sourceObjectNormal = 0u;
+	glm::vec2 sourceBarycentrics{0.0f};
+	uint32_t sourcePrimitiveIndex = UINT32_MAX;
+	uint32_t sourceInstanceId = UINT32_MAX;
+	uint32_t sourceNodeId = UINT32_MAX;
+	uint32_t sourceInstanceCustomIndex = UINT32_MAX;
+	uint32_t sourceMaterialKey = 0u;
+	uint32_t sourceFlags = 0u;
+};
+
+struct SurfelPathTracerSourceInstance
+{
+	uint32_t sourceNodeId = UINT32_MAX;
+	uint32_t modelId = 0u;
+	uint32_t primitiveOffset = 0u;
+	uint32_t flags = 0u;
+};
+
+struct SurfelPathTracerSourceTransform
+{
+	glm::mat4 objectToWorld{1.0f};
+	glm::mat4 worldToObject{1.0f};
+	uint32_t flags = 0u;
+	uint32_t padding0 = 0u;
+	uint32_t padding1 = 0u;
+	uint32_t padding2 = 0u;
+};
+
+static_assert(sizeof(SurfelPathTracerSource) == 48u);
+static_assert(offsetof(SurfelPathTracerSource, sourceBarycentrics) == 16u);
+static_assert(offsetof(SurfelPathTracerSource, sourceObjectPosition) == 32u);
+static_assert(offsetof(SurfelPathTracerSource, sourceObjectNormal) == 44u);
+
+static_assert(sizeof(SurfelPathTracerPixelSource) == 48u);
+static_assert(offsetof(SurfelPathTracerPixelSource, sourceObjectPosition) == 0u);
+static_assert(offsetof(SurfelPathTracerPixelSource, sourceObjectNormal) == 12u);
+static_assert(offsetof(SurfelPathTracerPixelSource, sourceBarycentrics) == 16u);
+
+static_assert(sizeof(SurfelPathTracerSourceInstance) == 16u);
+static_assert(offsetof(SurfelPathTracerSourceInstance, flags) == 12u);
+
+static_assert(sizeof(SurfelPathTracerSourceTransform) == 144u);
+static_assert(offsetof(SurfelPathTracerSourceTransform, worldToObject) == 64u);
+static_assert(offsetof(SurfelPathTracerSourceTransform, flags) == 128u);
 
 struct SurfelPathTracerCellInfo
 {

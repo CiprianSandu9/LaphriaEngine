@@ -10,6 +10,8 @@ static const uint SURFEL_PT_SLEEP_AWAKE = 0u;
 static const uint SURFEL_PT_SLEEP_SLEEPING = 1u;
 static const uint SURFEL_PT_SURFEL_FLAG_ACTIVE = 1u;
 static const uint SURFEL_PT_SURFEL_FLAG_PENDING_FREE = 2u;
+static const uint SURFEL_PT_SOURCE_FLAG_VALID = 1u << 0u;
+static const uint SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED = 1u << 1u;
 static const uint SURFEL_PT_STATUS_LAST_SEEN = 0x2u;
 static const uint SURFEL_PT_STATUS_LAST_REFERENCED = 0x4u;
 static const float SURFEL_PT_RAY_BIAS = 0.001;
@@ -56,6 +58,46 @@ struct SurfelPathTracerSurfel {
     uint sleepState;
     uint materialKey;
     float4 varianceAndInconsistency;
+};
+
+struct SurfelPathTracerSource {
+    uint sourceNodeId;
+    uint sourceInstanceId;
+    uint sourceInstanceCustomIndex;
+    uint sourcePrimitiveIndex;
+    float2 sourceBarycentrics;
+    uint sourceMaterialKey;
+    uint sourceFlags;
+    float3 sourceObjectPosition;
+    uint sourceObjectNormal;
+};
+
+struct SurfelPathTracerPixelSource {
+    float3 sourceObjectPosition;
+    uint sourceObjectNormal;
+    float2 sourceBarycentrics;
+    uint sourcePrimitiveIndex;
+    uint sourceInstanceId;
+    uint sourceNodeId;
+    uint sourceInstanceCustomIndex;
+    uint sourceMaterialKey;
+    uint sourceFlags;
+};
+
+struct SurfelPathTracerSourceInstance {
+    uint sourceNodeId;
+    uint modelId;
+    uint primitiveOffset;
+    uint flags;
+};
+
+struct SurfelPathTracerSourceTransform {
+    float4x4 objectToWorld;
+    float4x4 worldToObject;
+    uint flags;
+    uint padding0;
+    uint padding1;
+    uint padding2;
 };
 
 struct SurfelPathTracerCellInfo {
@@ -121,6 +163,12 @@ SurfelPathTracerPayload makeVisibilitySurfelPayload()
     payload.hitT = 1.0;
     payload.hitKind = 1u;
     return payload;
+}
+
+uint makeSurfelMaterialKey(uint modelId, uint materialIndex)
+{
+    // Packs 16-bit model and material values into a single stable surfel key.
+    return ((modelId & 0xFFFFu) << 16u) | (materialIndex & 0xFFFFu);
 }
 
 uint packNormalOctahedral(float3 normal) {
