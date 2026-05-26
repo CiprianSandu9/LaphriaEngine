@@ -121,6 +121,26 @@ float estimateCoverage(float3 position, float3 normal, out uint closestSurfelInd
     return coverage;
 }
 
+void writeSurfelSource(uint surfelIndex, uint2 pixel, uint materialKey)
+{
+    uint pixelIndex = pixel.y * max(push.width, 1u) + pixel.x;
+    SurfelPathTracerPixelSource pixelSource = gBufferSourceBuffer[pixelIndex];
+
+    SurfelPathTracerSource source;
+    source.sourceNodeId = pixelSource.sourceNodeId;
+    source.sourceInstanceId = pixelSource.sourceInstanceId;
+    source.sourceInstanceCustomIndex = pixelSource.sourceInstanceCustomIndex;
+    source.sourcePrimitiveIndex = pixelSource.sourcePrimitiveIndex;
+    source.sourceBarycentrics = pixelSource.sourceBarycentrics;
+    source.sourceMaterialKey = materialKey;
+    bool validSource = (pixelSource.sourceFlags & SURFEL_PT_SOURCE_FLAG_VALID) != 0u;
+    source.sourceFlags = validSource ? pixelSource.sourceFlags : 0u;
+    source.sourceObjectPosition = pixelSource.sourceObjectPosition;
+    source.sourceObjectNormal = pixelSource.sourceObjectNormal;
+
+    surfelSourceBuffer[surfelIndex] = source;
+}
+
 void allocateSurfel(uint2 pixel, float3 position, float3 normal, float radius, float3 seedRadiance, uint materialKey) {
     uint maxSurfels = max(push.maxSurfels, 1u);
     uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
@@ -177,6 +197,7 @@ void allocateSurfel(uint2 pixel, float3 position, float3 normal, float radius, f
     surfel.materialKey = materialKey;
     surfel.varianceAndInconsistency = float4(1.0, 1.0, 1.0, 1.0);
     surfelBuffer[surfelIndex] = surfel;
+    writeSurfelSource(surfelIndex, pixel, surfel.materialKey);
 
     counters.InterlockedAdd(SURFEL_PT_COUNTER_SPAWNED_SURFELS_OFFSET, 1u);
 
