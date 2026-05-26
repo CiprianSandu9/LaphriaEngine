@@ -18,9 +18,53 @@ struct UpdatePushConstants {
     uint minRaysPerSurfel;
     uint maxRaysPerSurfel;
     float varianceSensitivity;
+    uint sourceTransformCount;
+    uint pad0;
+    uint pad1;
+    uint pad2;
 };
 
 [[vk::push_constant]] UpdatePushConstants push;
+
+bool refreshAnchoredSurfel(uint surfelIndex, inout SurfelPathTracerSurfel surfel)
+{
+    SurfelPathTracerSource source = surfelSourceBuffer[surfelIndex];
+    if ((source.sourceFlags & SURFEL_PT_SOURCE_FLAG_VALID) == 0u)
+    {
+        return false;
+    }
+
+    if (source.sourceNodeId >= push.sourceTransformCount)
+    {
+        source.sourceFlags |= SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED;
+        surfelSourceBuffer[surfelIndex] = source;
+        return false;
+    }
+
+    SurfelPathTracerSourceTransform transform = sourceTransformBuffer[source.sourceNodeId];
+    if ((transform.flags & SURFEL_PT_SOURCE_FLAG_VALID) == 0u)
+    {
+        source.sourceFlags |= SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED;
+        surfelSourceBuffer[surfelIndex] = source;
+        return false;
+    }
+
+    float4 worldPosition = mul(transform.objectToWorld, float4(source.sourceObjectPosition, 1.0));
+    float3 objectNormal = unpackNormalOctahedral(source.sourceObjectNormal);
+    float3 worldNormal = normalize(mul(transpose((float3x3)transform.worldToObject), objectNormal));
+
+    surfel.position = worldPosition.xyz;
+    surfel.packedNormal = packNormalOctahedral(worldNormal);
+    surfel.materialKey = source.sourceMaterialKey;
+
+    if ((source.sourceFlags & SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED) != 0u)
+    {
+        source.sourceFlags &= ~SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED;
+        surfelSourceBuffer[surfelIndex] = source;
+    }
+
+    return true;
+}
 
 bool pushDeadSurfel(uint surfelIndex, uint maxSurfels)
 {
@@ -85,6 +129,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
         }
         return;
     }
+
+    refreshAnchoredSurfel(surfelIndex, surfel);
 
     uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
     uint deadCount = counters.Load(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET);

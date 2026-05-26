@@ -42,6 +42,7 @@ class SurfelPathTracerPasses
 	                      uint32_t maxRays,
 	                      float cellSize,
 	                      uint32_t cellDimension,
+	                      uint32_t sourceTransformCount,
 	                      uint32_t minRaysPerSurfel,
 	                      uint32_t maxRaysPerSurfel,
 	                      float varianceSensitivity,

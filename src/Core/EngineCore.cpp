@@ -117,6 +117,47 @@ uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
 	                          kPtFlagsEnvironmentBounceMask);
 }
 
+bool isFiniteMat4(const glm::mat4 &matrix)
+{
+	for (int column = 0; column < 4; ++column)
+	{
+		for (int row = 0; row < 4; ++row)
+		{
+			if (!std::isfinite(matrix[column][row]))
+			{
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+bool tryFinalizeSurfelSourceTransform(Laphria::SurfelPathTracerSourceTransform &sourceTransform)
+{
+	constexpr float kMinAbsLinearDeterminant = 1e-8f;
+
+	if (!isFiniteMat4(sourceTransform.objectToWorld))
+	{
+		return false;
+	}
+
+	const float linearDeterminant = glm::determinant(glm::mat3(sourceTransform.objectToWorld));
+	if (!std::isfinite(linearDeterminant) || std::abs(linearDeterminant) <= kMinAbsLinearDeterminant)
+	{
+		return false;
+	}
+
+	const glm::mat4 worldToObject = glm::inverse(sourceTransform.objectToWorld);
+	if (!isFiniteMat4(worldToObject))
+	{
+		return false;
+	}
+
+	sourceTransform.worldToObject = worldToObject;
+	sourceTransform.flags = Laphria::SURFEL_PT_SOURCE_FLAG_VALID;
+	return true;
+}
+
 std::filesystem::path resolveProjectRootPath()
 {
 	namespace fs = std::filesystem;
@@ -2211,6 +2252,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                        surfelPathTracerResources.maxRaysPerFrameCapacity(),
 		                                        surfelSettings.cellSize,
 		                                        surfelPathTracerResources.cellDimensionCapacity(),
+		                                        currentSurfelSourceTransformCount,
 		                                        surfelSettings.minRaysPerSurfel,
 		                                        surfelSettings.maxRaysPerSurfel,
 		                                        surfelSettings.varianceSensitivity,
@@ -3325,8 +3367,7 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 
 			Laphria::SurfelPathTracerSourceTransform sourceTransform{};
 			sourceTransform.objectToWorld = node->getWorldTransform();
-			sourceTransform.worldToObject = glm::inverse(sourceTransform.objectToWorld);
-			sourceTransform.flags = Laphria::SURFEL_PT_SOURCE_FLAG_VALID;
+			(void)tryFinalizeSurfelSourceTransform(sourceTransform);
 			surfelSourceTransforms[sourceNodeId] = sourceTransform;
 
 			glm::mat4 transform = node->getWorldTransform();
