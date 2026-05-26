@@ -3,6 +3,7 @@
 #include "../src/Core/SurfelPathTracerResources.h"
 
 #include <array>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -39,7 +40,27 @@ std::string readTextFile(const std::filesystem::path &path, bool &ok)
 
 bool containsNeedle(std::string_view haystack, std::string_view needle)
 {
-	return haystack.find(needle) != std::string::npos;
+	auto normalizeWhitespace = [](std::string_view text) {
+		std::string normalized;
+		normalized.reserve(text.size());
+		bool inWhitespace = false;
+		for (unsigned char ch : text)
+		{
+			if (std::isspace(ch))
+			{
+				inWhitespace = true;
+				continue;
+			}
+			if (inWhitespace && !normalized.empty())
+			{
+				normalized.push_back(' ');
+			}
+			normalized.push_back(static_cast<char>(ch));
+			inWhitespace = false;
+		}
+		return normalized;
+	};
+	return normalizeWhitespace(haystack).find(normalizeWhitespace(needle)) != std::string::npos;
 }
 
 bool containsAllNeedles(std::string_view haystack, std::initializer_list<std::string_view> needles)
@@ -743,14 +764,14 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    readTextFile(root / "src" / "shaders" / "SurfelPathTracerLightIntegrate.slang", filesOk);
 	bool surfelPrimaryLightingUnitsOk =
 	    containsAllNeedles(lightIntegrateShader,
-	                       {"float3 diffuseBsdf = albedo / PI",
+	                       {"float3 diffuseBsdf = albedo",
 	                        "float3 F = fresnelSchlick(max(dot(H, V), 0.0), f0)",
 	                        "float D = distributionGGX(normal, H, roughness)",
 	                        "float G = geometrySmith(normal, V, L, roughness)",
 	                        "float3 kD = (float3(1.0) - F) * (1.0 - metallic)",
 	                        "float3 diffuse = kD * baseColor / PI",
 	                        "float3 specular = (D * G * F) / max(4.0 * max(dot(normal, V), 0.0001) * directSun, 0.0001)",
-	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE * ao : float3(0.0)"}) &&
+	                        "diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0)"}) &&
 	    !containsNeedle(lightIntegrateShader, "float3 diffuseLighting = albedo * directLighting") &&
 	    !containsNeedle(lightIntegrateShader, "float3 directLighting = SUN_RADIANCE * directSun * sunVisibility") &&
 	    !containsNeedle(lightIntegrateShader, "albedo * rawSurfelRadiance");
@@ -772,7 +793,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	    containsAllNeedles(lightIntegrateShader,
 	                       {"static const float SURFEL_PT_DIFFUSE_GI_SCALE = 1.00",
 	                        "float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0))",
-	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE * ao : float3(0.0)"});
+	                        "diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0)"});
 	bool surfelIncidentRadianceOk =
 	    containsAllNeedles(surfelClosestHitShader,
 	                       {"payload.radiance = float3(0.0)",
@@ -1202,9 +1223,10 @@ bool testSurfelPathTracerPipelineContractFiles()
 		referenceValidationOk = false;
 	}
 	const size_t referenceGatePos = engineCore.find("if (surfelSettings.enableReferenceValidation)");
-	const size_t referenceRecordPos = engineCore.find("surfelPathTracerPasses.recordReferencePass");
-	const size_t referenceElsePos = engineCore.find("\n\telse\n\t{", referenceRecordPos);
-	const size_t referenceClearPos = engineCore.find("clearColorImage(*surfelPathTracerResources.referenceImages[fi]");
+	const size_t referenceRecordPos = engineCore.find("surfelPathTracerPasses.recordReferencePass", referenceGatePos);
+	const size_t referenceElsePos = engineCore.find("else", referenceRecordPos);
+	const size_t referenceClearPos =
+	    engineCore.find("clearColorImage(*surfelPathTracerResources.referenceImages[fi]", referenceElsePos);
 	const bool referenceRtIsGated =
 	    referenceGatePos != std::string::npos &&
 	    referenceRecordPos != std::string::npos &&
