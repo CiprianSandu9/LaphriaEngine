@@ -47,7 +47,7 @@ static const uint SURFEL_DEBUG_REFERENCE_DIFFERENCE = 12u;
 static const uint SURFEL_DEBUG_GBUFFER_ALBEDO = 13u;
 static const uint SURFEL_DEBUG_DIFFUSE_GI = 14u;
 static const uint SURFEL_DEBUG_SUN_VISIBILITY = 15u;
-static const float SURFEL_PT_DIFFUSE_GI_SCALE = 0.35;
+static const float SURFEL_PT_DIFFUSE_GI_SCALE = 1.00;
 
 float3 primaryRayDirection(uint2 pixel) {
     float2 uv = (float2(pixel) + float2(0.5, 0.5)) / float2(max(push.width, 1u), max(push.height, 1u));
@@ -197,8 +197,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 emissive = max(gBufferEmissive[pixel].rgb, float3(0.0));
     float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0));
     float surfelCoverage = max(outputImage[pixel].a, 0.0);
-    float3 diffuseBsdf = albedo / PI;
+    float3 diffuseBsdf = albedo;
     float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE * ao : float3(0.0);
+    diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0);
     float sunVisibility = saturate(gBufferNormal[pixel].w);
     float3 worldPosition = reconstructWorldPosition(pixel, depth);
     float3 viewDir = normalize(ubo.cameraPos.xyz - worldPosition);

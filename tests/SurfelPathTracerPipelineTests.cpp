@@ -770,7 +770,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        "return sampleWeightedSurfelRadiance(position, normal)",
 	                        "outputImage[pixel] = float4(resolveSurfelRadiance(position, normal), coverage)"}) &&
 	    containsAllNeedles(lightIntegrateShader,
-	                       {"static const float SURFEL_PT_DIFFUSE_GI_SCALE = 0.35",
+	                       {"static const float SURFEL_PT_DIFFUSE_GI_SCALE = 1.00",
 	                        "float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0))",
 	                        "float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE * ao : float3(0.0)"});
 	bool surfelIncidentRadianceOk =
