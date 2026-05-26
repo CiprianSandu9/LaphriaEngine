@@ -82,6 +82,17 @@ class EngineCore
 	mutable std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> surfelPathTracerPreviousHistoryIndex{};
 	mutable std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> surfelPathTracerCurrentHistoryIndex{};
 	mutable std::array<bool, MAX_FRAMES_IN_FLIGHT> surfelPathTracerTemporalHistoryValid{};
+	mutable std::vector<Laphria::SurfelPathTracerSourceInstance> surfelSourceInstances;
+	mutable std::vector<Laphria::SurfelPathTracerSourceTransform> surfelSourceTransforms;
+	mutable uint32_t currentSurfelSourceInstanceCount = 0u;
+	mutable uint32_t currentSurfelSourceTransformCount = 0u;
+	mutable uint32_t nextSurfelSourceNodeId = 0u;
+	mutable std::array<Laphria::VulkanUtils::VmaBuffer, MAX_FRAMES_IN_FLIGHT> surfelSourceInstanceStagingBuffers;
+	mutable std::array<Laphria::VulkanUtils::VmaBuffer, MAX_FRAMES_IN_FLIGHT> surfelSourceTransformStagingBuffers;
+	mutable std::array<void *, MAX_FRAMES_IN_FLIGHT> surfelSourceInstanceStagingMapped{};
+	mutable std::array<void *, MAX_FRAMES_IN_FLIGHT> surfelSourceTransformStagingMapped{};
+	mutable std::array<vk::DeviceSize, MAX_FRAMES_IN_FLIGHT> surfelSourceInstanceStagingSizes{};
+	mutable std::array<vk::DeviceSize, MAX_FRAMES_IN_FLIGHT> surfelSourceTransformStagingSizes{};
 	SurfelPathTracerStaticSettingsSnapshot surfelPathTracerStaticSettings{};
 	bool surfelPathTracerStaticSettingsInitialized = false;
 

@@ -635,6 +635,24 @@ void EngineCore::cleanupSwapChain()
 
 void EngineCore::cleanup()
 {
+	for (size_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+	{
+		if (surfelSourceInstanceStagingMapped[frameIndex])
+		{
+			surfelSourceInstanceStagingBuffers[frameIndex].memory.unmapMemory();
+			surfelSourceInstanceStagingMapped[frameIndex] = nullptr;
+		}
+		if (surfelSourceTransformStagingMapped[frameIndex])
+		{
+			surfelSourceTransformStagingBuffers[frameIndex].memory.unmapMemory();
+			surfelSourceTransformStagingMapped[frameIndex] = nullptr;
+		}
+		surfelSourceInstanceStagingBuffers[frameIndex].reset();
+		surfelSourceTransformStagingBuffers[frameIndex].reset();
+		surfelSourceInstanceStagingSizes[frameIndex] = 0;
+		surfelSourceTransformStagingSizes[frameIndex] = 0;
+	}
+
 	if (imguiInitialized)
 	{
 		ui.cleanup();
@@ -3252,6 +3270,20 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 	if (ui.renderMode != RenderMode::Rasterizer)
 	{
 		std::vector<vk::AccelerationStructureInstanceKHR> tlasInstances;
+		surfelSourceInstances.clear();
+		surfelSourceTransforms.clear();
+		currentSurfelSourceInstanceCount = 0u;
+		currentSurfelSourceTransformCount = 0u;
+
+		uint32_t nextSourceNodeId = 0u;
+		for (const auto &node : scene->getAllNodes())
+		{
+			if (node->surfelSourceNodeId != UINT32_MAX)
+			{
+				nextSourceNodeId = std::max(nextSourceNodeId, node->surfelSourceNodeId + 1u);
+			}
+		}
+
 		for (const auto &node : scene->getAllNodes())
 		{
 			if (node->modelId < 0)
@@ -3261,7 +3293,7 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 			if (node->modelId >= static_cast<int>(Laphria::EngineConfig::kBindlessModelCapacity))
 			{
 				throw std::runtime_error(
-				    "TLAS custom-index modelId " + std::to_string(node->modelId) +
+				    "TLAS source modelId " + std::to_string(node->modelId) +
 				    " exceeds bindless RT descriptor capacity " +
 				    std::to_string(Laphria::EngineConfig::kBindlessModelCapacity));
 			}
@@ -3271,6 +3303,31 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 			{
 				continue;
 			}
+
+			if (node->surfelSourceNodeId == UINT32_MAX)
+			{
+				node->surfelSourceNodeId = nextSourceNodeId++;
+			}
+
+			const uint32_t sourceNodeId = node->surfelSourceNodeId;
+			if (sourceNodeId >= surfelPathTracerResources.maxSourceTransforms)
+			{
+				throw std::runtime_error(
+				    "SurfelPathTracer source node id " + std::to_string(sourceNodeId) +
+				    " exceeds SurfelPathTracer source transform capacity " +
+				    std::to_string(surfelPathTracerResources.maxSourceTransforms));
+			}
+
+			if (surfelSourceTransforms.size() <= sourceNodeId)
+			{
+				surfelSourceTransforms.resize(sourceNodeId + 1u);
+			}
+
+			Laphria::SurfelPathTracerSourceTransform sourceTransform{};
+			sourceTransform.objectToWorld = node->getWorldTransform();
+			sourceTransform.worldToObject = glm::inverse(sourceTransform.objectToWorld);
+			sourceTransform.flags = Laphria::SURFEL_PT_SOURCE_FLAG_VALID;
+			surfelSourceTransforms[sourceNodeId] = sourceTransform;
 
 			glm::mat4 transform = node->getWorldTransform();
 
@@ -3299,9 +3356,28 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 					primitiveOffset += modelRes->meshes[i].primitives.size();
 				}
 
-				// Encode modelId in top bits, primitiveOffset in bottom 14 bits
-				// InstanceCustomIndex is exactly 24 bit in size.
-				uint32_t customIndex = (node->modelId << 14) | (primitiveOffset & 0x3FFF);
+				if (surfelSourceInstances.size() >= surfelPathTracerResources.maxSourceInstances)
+				{
+					throw std::runtime_error(
+					    "SurfelPathTracer source instance count " + std::to_string(surfelSourceInstances.size() + 1u) +
+					    " exceeds SurfelPathTracer source instance capacity " +
+					    std::to_string(surfelPathTracerResources.maxSourceInstances));
+				}
+
+				const uint32_t sourceInstanceId = static_cast<uint32_t>(surfelSourceInstances.size());
+				if (sourceInstanceId > 0x00FFFFFFu)
+				{
+					throw std::runtime_error(
+					    "SurfelPathTracer source instance id " + std::to_string(sourceInstanceId) +
+					    " exceeds Vulkan 24-bit instance custom index range");
+				}
+
+				Laphria::SurfelPathTracerSourceInstance sourceInstance{};
+				sourceInstance.sourceNodeId = sourceNodeId;
+				sourceInstance.modelId = static_cast<uint32_t>(node->modelId);
+				sourceInstance.primitiveOffset = primitiveOffset;
+				sourceInstance.flags = Laphria::SURFEL_PT_SOURCE_FLAG_VALID;
+				surfelSourceInstances.push_back(sourceInstance);
 
 				vk::AccelerationStructureDeviceAddressInfoKHR addressInfo{};
 				addressInfo.accelerationStructure = *blas;
@@ -3309,7 +3385,8 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 
 				vk::AccelerationStructureInstanceKHR instance{};
 				instance.transform                              = transformMatrix;
-				instance.instanceCustomIndex                    = customIndex;
+				const uint32_t legacyCustomIndex = (static_cast<uint32_t>(node->modelId) << 14u) | (primitiveOffset & 0x3FFFu);
+				instance.instanceCustomIndex                    = legacyCustomIndex;
 				instance.mask                                   = 0xFF;        // All rays hit
 				instance.instanceShaderBindingTableRecordOffset = 0;
 				instance.flags                                  = static_cast<uint32_t>(vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable);
@@ -3318,6 +3395,7 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 				tlasInstances.push_back(instance);
 			}
 		}
+		nextSurfelSourceNodeId = nextSourceNodeId;
 
 		if (tlasInstances.size() > frames.MAX_TLAS_INSTANCES)
 		{
@@ -3392,6 +3470,153 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 		    .memoryBarrierCount = 1,
 		    .pMemoryBarriers    = &asBuildToRayTracingBarrier};
 		commandBuffer.pipelineBarrier2(asDependencyInfo);
+
+		currentSurfelSourceInstanceCount = static_cast<uint32_t>(surfelSourceInstances.size());
+		currentSurfelSourceTransformCount = static_cast<uint32_t>(surfelSourceTransforms.size());
+
+		auto ensureSurfelSourceStagingBuffer =
+		    [&](Laphria::VulkanUtils::VmaBuffer &buffer,
+		        void *&mapped,
+		        vk::DeviceSize &capacity,
+		        vk::DeviceSize byteSize,
+		        const char *resourceName) {
+			    if (byteSize == 0 || (buffer.valid() && capacity >= byteSize))
+			    {
+				    return;
+			    }
+			    if (mapped)
+			    {
+				    buffer.memory.unmapMemory();
+				    mapped = nullptr;
+			    }
+			    buffer.reset();
+			    capacity = 0;
+			    try
+			    {
+				    Laphria::VulkanUtils::createBuffer(
+				        vulkan.logicalDevice,
+				        vulkan.physicalDevice,
+				        byteSize,
+				        vk::BufferUsageFlagBits::eTransferSrc,
+				        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+				        buffer);
+			    }
+			    catch (const std::exception &ex)
+			    {
+				    throw std::runtime_error(std::string(resourceName) + ": " + ex.what());
+			    }
+			    mapped = buffer.memory.mapMemory(0, byteSize);
+			    capacity = byteSize;
+		    };
+
+		struct SourceBufferUpload
+		{
+			vk::DeviceSize byteSize = 0;
+			const Laphria::VulkanUtils::VmaBuffer *destination = nullptr;
+		};
+
+		auto &instanceStagingBuffer = surfelSourceInstanceStagingBuffers[frames.frameIndex];
+		auto &instanceStagingMapped = surfelSourceInstanceStagingMapped[frames.frameIndex];
+		auto &instanceStagingSize = surfelSourceInstanceStagingSizes[frames.frameIndex];
+		auto &transformStagingBuffer = surfelSourceTransformStagingBuffers[frames.frameIndex];
+		auto &transformStagingMapped = surfelSourceTransformStagingMapped[frames.frameIndex];
+		auto &transformStagingSize = surfelSourceTransformStagingSizes[frames.frameIndex];
+
+		std::vector<SourceBufferUpload> sourceUploads;
+		if (surfelPathTracerResources.initialized())
+		{
+			if (!surfelSourceInstances.empty() && surfelPathTracerResources.sourceInstanceBuffer.valid())
+			{
+				const vk::DeviceSize byteSize = surfelSourceInstances.size() * sizeof(Laphria::SurfelPathTracerSourceInstance);
+				ensureSurfelSourceStagingBuffer(instanceStagingBuffer,
+				                                instanceStagingMapped,
+				                                instanceStagingSize,
+				                                byteSize,
+				                                "SurfelPathTracer.SourceInstanceStagingBuffer");
+				std::memcpy(instanceStagingMapped, surfelSourceInstances.data(), static_cast<size_t>(byteSize));
+				sourceUploads.push_back(SourceBufferUpload{
+				    .byteSize = byteSize,
+				    .destination = &surfelPathTracerResources.sourceInstanceBuffer});
+			}
+			if (!surfelSourceTransforms.empty() && surfelPathTracerResources.sourceTransformBuffer.valid())
+			{
+				const vk::DeviceSize byteSize = surfelSourceTransforms.size() * sizeof(Laphria::SurfelPathTracerSourceTransform);
+				ensureSurfelSourceStagingBuffer(transformStagingBuffer,
+				                                transformStagingMapped,
+				                                transformStagingSize,
+				                                byteSize,
+				                                "SurfelPathTracer.SourceTransformStagingBuffer");
+				std::memcpy(transformStagingMapped, surfelSourceTransforms.data(), static_cast<size_t>(byteSize));
+				sourceUploads.push_back(SourceBufferUpload{
+				    .byteSize = byteSize,
+				    .destination = &surfelPathTracerResources.sourceTransformBuffer});
+			}
+		}
+
+		if (!sourceUploads.empty())
+		{
+			std::vector<vk::BufferMemoryBarrier2> shaderReadToTransferBarriers;
+			shaderReadToTransferBarriers.reserve(sourceUploads.size());
+			for (const SourceBufferUpload &upload : sourceUploads)
+			{
+				shaderReadToTransferBarriers.push_back(vk::BufferMemoryBarrier2{
+				    .srcStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR | vk::PipelineStageFlagBits2::eComputeShader,
+				    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
+				    .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+				    .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+				    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				    .buffer = **upload.destination,
+				    .offset = 0,
+				    .size = VK_WHOLE_SIZE});
+			}
+
+			vk::DependencyInfo shaderReadToTransferDependency{
+			    .bufferMemoryBarrierCount = static_cast<uint32_t>(shaderReadToTransferBarriers.size()),
+			    .pBufferMemoryBarriers = shaderReadToTransferBarriers.data()};
+			commandBuffer.pipelineBarrier2(shaderReadToTransferDependency);
+
+			vk::MemoryBarrier2 hostToTransferBarrier{
+			    .srcStageMask = vk::PipelineStageFlagBits2::eHost,
+			    .srcAccessMask = vk::AccessFlagBits2::eHostWrite,
+			    .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+			    .dstAccessMask = vk::AccessFlagBits2::eTransferRead};
+			vk::DependencyInfo hostToTransferDependency{
+			    .memoryBarrierCount = 1,
+			    .pMemoryBarriers = &hostToTransferBarrier};
+			commandBuffer.pipelineBarrier2(hostToTransferDependency);
+
+			std::vector<vk::BufferMemoryBarrier2> transferToShaderBarriers;
+			transferToShaderBarriers.reserve(sourceUploads.size());
+			for (const SourceBufferUpload &upload : sourceUploads)
+			{
+				vk::BufferCopy copyRegion{};
+				copyRegion.size = upload.byteSize;
+				if (upload.destination == &surfelPathTracerResources.sourceInstanceBuffer)
+				{
+					commandBuffer.copyBuffer(*instanceStagingBuffer, *surfelPathTracerResources.sourceInstanceBuffer, copyRegion);
+				}
+				else
+				{
+					commandBuffer.copyBuffer(*transformStagingBuffer, *surfelPathTracerResources.sourceTransformBuffer, copyRegion);
+				}
+				transferToShaderBarriers.push_back(vk::BufferMemoryBarrier2{
+				    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+				    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+				    .dstStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR | vk::PipelineStageFlagBits2::eComputeShader,
+				    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
+				    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				    .buffer = **upload.destination,
+				    .offset = 0,
+				    .size = upload.byteSize});
+			}
+
+			vk::DependencyInfo transferToShaderDependency{
+			    .bufferMemoryBarrierCount = static_cast<uint32_t>(transferToShaderBarriers.size()),
+			    .pBufferMemoryBarriers = transferToShaderBarriers.data()};
+			commandBuffer.pipelineBarrier2(transferToShaderDependency);
+		}
 	}
 	// --- End TLAS Build ---
 

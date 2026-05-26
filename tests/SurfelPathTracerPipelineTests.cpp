@@ -748,6 +748,77 @@ bool testSurfelPathTracerPipelineContractFiles()
 	                        ".irradianceAtlasWidth = std::max(irradianceAtlasWidth, 1u)"}) &&
 	    containsAllNeedles(engineCore,
 	                       {"surfelPathTracerResources.maxRaysPerFrameCapacity(),\n\t\t                                                surfelSettings.enableGuidedSampling,\n\t\t                                                surfelSettings.irradianceAtlasWidth"});
+	const std::string sceneNodeHeader =
+	    readTextFile(root / "src" / "SceneManagement" / "SceneNode.h", filesOk);
+	const std::string engineCoreHeader =
+	    readTextFile(root / "src" / "Core" / "EngineCore.h", filesOk);
+	bool sourceInstanceTablesOk =
+	    containsAllNeedles(sceneNodeHeader,
+	                       {"#include <cstdint>",
+	                        "uint32_t surfelSourceNodeId = UINT32_MAX;"}) &&
+	    containsAllNeedles(engineCoreHeader,
+	                       {"mutable std::vector<Laphria::SurfelPathTracerSourceInstance> surfelSourceInstances;",
+	                        "mutable std::vector<Laphria::SurfelPathTracerSourceTransform> surfelSourceTransforms;",
+	                        "mutable uint32_t currentSurfelSourceInstanceCount = 0u;",
+	                        "mutable uint32_t currentSurfelSourceTransformCount = 0u;",
+	                        "mutable uint32_t nextSurfelSourceNodeId = 0u;",
+	                        "mutable std::array<Laphria::VulkanUtils::VmaBuffer, MAX_FRAMES_IN_FLIGHT> surfelSourceInstanceStagingBuffers;",
+	                        "mutable std::array<Laphria::VulkanUtils::VmaBuffer, MAX_FRAMES_IN_FLIGHT> surfelSourceTransformStagingBuffers;",
+	                        "mutable std::array<void *, MAX_FRAMES_IN_FLIGHT> surfelSourceInstanceStagingMapped{};",
+	                        "mutable std::array<void *, MAX_FRAMES_IN_FLIGHT> surfelSourceTransformStagingMapped{};",
+	                        "mutable std::array<vk::DeviceSize, MAX_FRAMES_IN_FLIGHT> surfelSourceInstanceStagingSizes{};",
+	                        "mutable std::array<vk::DeviceSize, MAX_FRAMES_IN_FLIGHT> surfelSourceTransformStagingSizes{};"}) &&
+	    containsAllNeedles(engineCore,
+	                       {"surfelSourceInstances.clear();",
+	                        "surfelSourceTransforms.clear();",
+	                        "currentSurfelSourceInstanceCount = 0u;",
+	                        "currentSurfelSourceTransformCount = 0u;",
+	                        "uint32_t nextSourceNodeId = 0u;",
+	                        "for (const auto &node : scene->getAllNodes())",
+	                        "if (node->surfelSourceNodeId != UINT32_MAX)",
+	                        "nextSourceNodeId = std::max(nextSourceNodeId, node->surfelSourceNodeId + 1u);",
+	                        "if (node->surfelSourceNodeId == UINT32_MAX)",
+	                        "node->surfelSourceNodeId = nextSourceNodeId++;",
+	                        "const uint32_t sourceNodeId = node->surfelSourceNodeId;",
+	                        "sourceNodeId >= surfelPathTracerResources.maxSourceTransforms",
+	                        "exceeds SurfelPathTracer source transform capacity",
+	                        "surfelSourceTransforms.resize(sourceNodeId + 1u);",
+	                        "sourceTransform.objectToWorld = node->getWorldTransform();",
+	                        "sourceTransform.worldToObject = glm::inverse(sourceTransform.objectToWorld);",
+	                        "sourceTransform.flags = Laphria::SURFEL_PT_SOURCE_FLAG_VALID;",
+	                        "surfelSourceTransforms[sourceNodeId] = sourceTransform;",
+	                        "surfelSourceInstances.size() >= surfelPathTracerResources.maxSourceInstances",
+	                        "exceeds SurfelPathTracer source instance capacity",
+	                        "const uint32_t sourceInstanceId = static_cast<uint32_t>(surfelSourceInstances.size());",
+	                        "sourceInstanceId > 0x00FFFFFFu",
+	                        "exceeds Vulkan 24-bit instance custom index range",
+	                        "sourceInstance.sourceNodeId = sourceNodeId;",
+	                        "sourceInstance.modelId = static_cast<uint32_t>(node->modelId);",
+	                        "sourceInstance.primitiveOffset = primitiveOffset;",
+	                        "sourceInstance.flags = Laphria::SURFEL_PT_SOURCE_FLAG_VALID;",
+	                        "surfelSourceInstances.push_back(sourceInstance);",
+	                        "const uint32_t legacyCustomIndex = (static_cast<uint32_t>(node->modelId) << 14u) | (primitiveOffset & 0x3FFFu);",
+	                        "instance.instanceCustomIndex = legacyCustomIndex;",
+	                        "nextSurfelSourceNodeId = nextSourceNodeId;",
+	                        "auto &instanceStagingBuffer = surfelSourceInstanceStagingBuffers[frames.frameIndex];",
+	                        "auto &instanceStagingMapped = surfelSourceInstanceStagingMapped[frames.frameIndex];",
+	                        "auto &instanceStagingSize = surfelSourceInstanceStagingSizes[frames.frameIndex];",
+	                        "auto &transformStagingBuffer = surfelSourceTransformStagingBuffers[frames.frameIndex];",
+	                        "auto &transformStagingMapped = surfelSourceTransformStagingMapped[frames.frameIndex];",
+	                        "auto &transformStagingSize = surfelSourceTransformStagingSizes[frames.frameIndex];",
+	                        "commandBuffer.copyBuffer(*instanceStagingBuffer, *surfelPathTracerResources.sourceInstanceBuffer,",
+	                        "commandBuffer.copyBuffer(*transformStagingBuffer, *surfelPathTracerResources.sourceTransformBuffer,",
+	                        "currentSurfelSourceInstanceCount = static_cast<uint32_t>(surfelSourceInstances.size());",
+	                        "currentSurfelSourceTransformCount = static_cast<uint32_t>(surfelSourceTransforms.size());"});
+	sourceInstanceTablesOk = sourceInstanceTablesOk &&
+	                         appearsBefore(engineCore,
+	                                       "surfelSourceInstances.clear();",
+	                                       "recordSurfelPathTracerCommandBuffer(commandBuffer, imageIndex)") &&
+	                         !containsNeedle(engineCore, "surfelSourceInstanceStagingBuffer;") &&
+	                         !containsNeedle(engineCore, "surfelSourceTransformStagingBuffer;") &&
+	                         !containsNeedle(engineCore, "instance.instanceCustomIndex = sourceInstanceId;") &&
+	                         !containsNeedle(engineCore,
+	                                         "uint32_t customIndex = (node->modelId << 14) | (primitiveOffset & 0x3FFF);");
 	bool rtPushConstantStagesOk =
 	    containsAllNeedles(passesCpp,
 	                       {"kSurfelRtPushStages",
@@ -1285,7 +1356,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 		referenceValidationOk = false;
 	}
 
-	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok && task10Ok && task17Ok &&
+	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok && task10Ok && sourceInstanceTablesOk && task17Ok &&
 	       rtPushConstantStagesOk && materialAlbedoOk && surfelPrimaryLightingUnitsOk && surfelDiffuseGiOk && surfelIncidentRadianceOk &&
 	       gBufferPayloadAbiOk && reflectionSurfelTerminationOk && guidedRayIntegrationOk && msmRadianceSharingOk &&
 	       debugViewsOk && neighborGatherOk && cellOccupancyDebugOk && primarySunVisibilityOk &&
