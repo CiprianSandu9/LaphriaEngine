@@ -63,6 +63,56 @@ SurfelPathTracerGBufferPayload makeVisibilityGBufferPayload()
     return payload;
 }
 
+bool isValidSourceNormal(float3 normal)
+{
+    float lengthSq = dot(normal, normal);
+    return isFinite3(normal) && lengthSq > 1.0e-8;
+}
+
+void writeSurfelSource(uint2 pixel, uint2 launchSize, SurfelPathTracerGBufferPayload payload)
+{
+    uint pixelIndex = pixel.y * launchSize.x + pixel.x;
+
+    SurfelPathTracerPixelSource source;
+    source.sourceObjectPosition = payload.sourceObjectPosition;
+    source.sourceObjectNormal = 0u;
+    source.sourceBarycentrics = payload.sourceBarycentrics;
+    source.sourcePrimitiveIndex = payload.sourcePrimitiveIndex;
+    source.sourceInstanceId = payload.sourceInstanceId;
+    source.sourceNodeId = payload.sourceNodeId;
+    source.sourceInstanceCustomIndex = payload.sourceInstanceCustomIndex;
+    source.sourceMaterialKey = makeSurfelMaterialKey(payload.modelId, payload.materialIndex);
+    source.sourceFlags = 0u;
+
+    if (!isValidSourceNormal(payload.sourceObjectNormal)) {
+        gBufferSourceBuffer[pixelIndex] = source;
+        return;
+    }
+
+    source.sourceObjectNormal = packNormalOctahedral(payload.sourceObjectNormal);
+    source.sourceFlags = SURFEL_PT_SOURCE_FLAG_VALID;
+
+    gBufferSourceBuffer[pixelIndex] = source;
+}
+
+void clearSurfelSource(uint2 pixel, uint2 launchSize)
+{
+    uint pixelIndex = pixel.y * launchSize.x + pixel.x;
+
+    SurfelPathTracerPixelSource source;
+    source.sourceObjectPosition = float3(0.0);
+    source.sourceObjectNormal = 0u;
+    source.sourceBarycentrics = float2(0.0);
+    source.sourcePrimitiveIndex = SURFEL_PT_INVALID_INDEX;
+    source.sourceInstanceId = SURFEL_PT_INVALID_INDEX;
+    source.sourceNodeId = SURFEL_PT_INVALID_INDEX;
+    source.sourceInstanceCustomIndex = SURFEL_PT_INVALID_INDEX;
+    source.sourceMaterialKey = 0u;
+    source.sourceFlags = 0u;
+
+    gBufferSourceBuffer[pixelIndex] = source;
+}
+
 float traceSunVisibility(float3 position, float3 normal, float3 sunDir)
 {
     RayDesc shadowRay;
@@ -110,6 +160,7 @@ void main() {
         gBufferAlbedo[launchID] = float4(0.0, 0.0, 0.0, 0.0);
         gBufferMaterial[launchID] = float4(1.0, 0.0, 1.0, 1.0);
         gBufferEmissive[launchID] = float4(0.0, 0.0, 0.0, 0.0);
+        clearSurfelSource(launchID, launchSize);
         return;
     }
 
@@ -123,6 +174,7 @@ void main() {
     float3 sunDir = normalize(-ubo.lightDir.xyz);
     float directSun = max(dot(normal, sunDir), 0.0);
     float sunVisibility = directSun > 0.0 ? traceSunVisibility(hitPos, normal, sunDir) : 0.0;
+    writeSurfelSource(launchID, launchSize, payload);
     outputImage[launchID] = float4(payload.baseColor, 1.0);
     gBufferNormal[launchID] = float4(normal, sunVisibility);
     gBufferDepth[launchID] = payload.hitT;

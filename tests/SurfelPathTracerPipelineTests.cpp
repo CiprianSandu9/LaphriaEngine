@@ -1108,6 +1108,20 @@ bool testSurfelPathTracerPipelineContractFiles()
 		std::cerr << "SurfelPathTracer GBuffer visibility rays must skip closest-hit and start occluded\n";
 		gBufferPayloadAbiOk = false;
 	}
+	bool gBufferSourceWriteOk =
+	    containsAllNeedles(gBufferShader,
+	                       {"void writeSurfelSource(uint2 pixel, uint2 launchSize, SurfelPathTracerGBufferPayload payload)",
+	                        "bool isValidSourceNormal(float3 normal)",
+	                        "source.sourceFlags = 0u",
+	                        "source.sourceFlags = SURFEL_PT_SOURCE_FLAG_VALID",
+	                        "source.sourceObjectNormal = packNormalOctahedral(payload.sourceObjectNormal)",
+	                        "source.sourceMaterialKey = makeSurfelMaterialKey(payload.modelId, payload.materialIndex)",
+	                        "gBufferSourceBuffer[pixelIndex] = source",
+	                        "clearSurfelSource(launchID, launchSize)",
+	                        "writeSurfelSource(launchID, launchSize, payload)"}) &&
+	    appearsBefore(gBufferShader,
+	                  "if (!isValidSourceNormal(payload.sourceObjectNormal))",
+	                  "source.sourceObjectNormal = packNormalOctahedral(payload.sourceObjectNormal)");
 	bool reflectionSurfelTerminationOk =
 	    containsAllNeedles(reflectionShader,
 	                       {"float3 cachedIncident = terminatePathWithSurfels(payload.hitPosition",
@@ -1471,7 +1485,7 @@ bool testSurfelPathTracerPipelineContractFiles()
 
 	return filesOk && ok && task5Ok && task6Ok && task7Ok && task8Ok && task9Ok && task10Ok && sourceInstanceTablesOk && task17Ok &&
 	       rtPushConstantStagesOk && materialAlbedoOk && surfelPrimaryLightingUnitsOk && surfelDiffuseGiOk && surfelIncidentRadianceOk &&
-	       gBufferPayloadAbiOk && reflectionSurfelTerminationOk && guidedRayIntegrationOk && msmRadianceSharingOk &&
+	       gBufferPayloadAbiOk && gBufferSourceWriteOk && reflectionSurfelTerminationOk && guidedRayIntegrationOk && msmRadianceSharingOk &&
 	       debugViewsOk && neighborGatherOk && cellOccupancyDebugOk && primarySunVisibilityOk &&
 	       representativeCellOverflowOk && reflectionRisOk && temporalHistoryPingPongOk && referenceValidationOk;
 }
