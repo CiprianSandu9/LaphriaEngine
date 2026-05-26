@@ -59,12 +59,15 @@ Persist enough source-geometry identity per surfel to refresh position, normal, 
 Extend `SurfelPathTracerSurfel` in both C++ and Slang with compact source fields:
 
 - `sourceInstanceId`
+- `sourceNodeId` or equivalent stable scene-node/transform id
 - `sourcePrimitiveIndex`
 - `sourceBarycentrics`, packed as two floats or a compact equivalent
 - `sourceFlags`
 - `materialKey`
 
 `materialKey` already exists in the current struct, but it is not yet meaningfully populated. It should become part of the source identity and reuse/removal logic.
+
+`sourceInstanceId` must not be assumed to be a unique scene instance. In the current TLAS build, the instance custom index is packed from model id and primitive offset. True scene-node animation support requires a stable transform/source-node identity and compute-visible transform data, so the implementation should add or expose that identity explicitly.
 
 The source flags should distinguish:
 
@@ -80,24 +83,34 @@ When a surfel is allocated from a visible GBuffer sample, store the source ident
 The GBuffer path currently needs enough payload/image data to preserve or reconstruct:
 
 - source instance id
+- source node or transform id
 - primitive index
 - barycentrics
 - material key
 
 If full geometry identity does not fit cleanly into the existing GBuffer images, add a dedicated storage image or structured buffer for source identity rather than overloading unrelated channels.
 
+The source identity must support true scene-node animation. A surfel anchored to an instanced mesh should refresh from the current transform of the node that produced it, not only from the shared model mesh.
+
 ### Update
 
 During `SurfelPathTracerUpdate.slang`, attempt to refresh anchored surfels before cell counting:
 
 1. Validate source fields.
-2. Reconstruct or fetch source triangle data.
+2. Reconstruct or fetch source triangle data and the current source transform.
 3. Recompute world position and normal from barycentrics.
 4. Refresh material key.
 5. If refresh succeeds, continue with normal lifetime, cell, and ray allocation logic.
 6. If refresh fails, mark source as failed and use current world-space recycling behavior.
 
 The fallback path is important. It lets existing scenes and partially initialized surfels remain valid while the anchored path rolls out.
+
+The implementation plan must choose one of two data-access strategies before coding the refresh path:
+
+1. Extend compute descriptors so `SurfelPathTracerUpdate.slang` can read the same vertex, index, material, and transform data needed to reconstruct the anchored surface.
+2. Add a dedicated surfel source metadata path that stores enough resolved source data for update without binding broad scene geometry arrays.
+
+The choice should be made by comparing descriptor churn, memory cost, shader complexity, and compatibility with animated scene-node transforms. Until that choice is made, source refresh should be planned as a separate task after source identity capture.
 
 ### Expected Impact
 
@@ -137,11 +150,24 @@ Add an enum setting for grid mode:
 
 The first committed behavior should keep `Uniform` as the default. Non-uniform mode should be behind UI/debug settings and shader defines until verified.
 
+Grid mode and grid parameters must participate in persistent resource recreation. The resource layer should expose a grid capacity calculation, such as `gridCellCount(settings)`, rather than assuming `cellDimension^3` everywhere.
+
 ### Non-Uniform Grid
 
 After the helper layer is stable, add a non-uniform/frustum-biased grid inspired by SurfelPlus. The design goal is better distribution of cell capacity around the camera and viewable region without increasing total cell count aggressively.
 
 The non-uniform grid must provide the same helper interface as the uniform grid. Passes should not know which grid mode is active except through helper calls and push constants/defines.
+
+The non-uniform implementation must define:
+
+- total cell count
+- maximum cells touched per surfel
+- cell counter buffer size
+- cell-to-surfel buffer size
+- per-cell storage policy
+- debug mapping from flat cell index to a readable occupancy visualization
+
+These values must be shared by C++ resource allocation and shader helper code. A mismatch between resource sizing and shader indexing is a correctness bug, not a tunable artifact.
 
 ### Expected Impact
 
@@ -213,13 +239,16 @@ Recommended implementation order:
 
 1. Add source identity fields and contract tests without changing behavior.
 2. Populate source identity from the GBuffer path.
-3. Refresh anchored surfels in update pass with fallback behavior.
-4. Extract uniform grid helper layer and update all passes to use it.
-5. Add grid mode setting and non-uniform experimental implementation.
-6. Add depth-aware surfel visibility.
-7. Add tile-min placement.
-8. Add material-aware contribution filtering.
-9. Expand diagnostics and tune defaults.
+3. Add stable scene-node/transform identity and compute-visible transform data needed for true animation-aware anchoring.
+4. Choose and implement the source-data access strategy for update-pass refresh.
+5. Refresh anchored surfels in update pass with fallback behavior.
+6. Extract uniform grid helper layer and update all passes to use it.
+7. Add grid capacity/resource sizing helpers and make grid mode participate in persistent resource recreation.
+8. Add grid mode setting and non-uniform experimental implementation.
+9. Add depth-aware surfel visibility.
+10. Add tile-min placement.
+11. Add material-aware contribution filtering.
+12. Expand diagnostics and tune defaults.
 
 Each item should be its own task or small group of tasks in the implementation plan.
 
@@ -239,7 +268,7 @@ This design does not require:
 The upgrade is successful when:
 
 - existing uniform-grid surfel rendering still works
-- anchored surfels refresh from source geometry when source data is valid
+- anchored surfels refresh from source geometry and current scene-node transforms when source data is valid
 - fallback surfels continue to render and recycle safely
 - all cell-dependent passes use a shared grid helper interface
 - non-uniform grid can be toggled experimentally without breaking uniform mode
