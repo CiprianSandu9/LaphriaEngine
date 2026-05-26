@@ -3317,7 +3317,7 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 		currentSurfelSourceInstanceCount = 0u;
 		currentSurfelSourceTransformCount = 0u;
 
-		uint32_t nextSourceNodeId = 0u;
+		uint32_t nextSourceNodeId = nextSurfelSourceNodeId;
 		for (const auto &node : scene->getAllNodes())
 		{
 			if (node->surfelSourceNodeId != UINT32_MAX)

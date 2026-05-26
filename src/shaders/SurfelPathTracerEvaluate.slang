@@ -121,9 +121,19 @@ float estimateCoverage(float3 position, float3 normal, out uint closestSurfelInd
     return coverage;
 }
 
+uint sourcePixelIndex(uint2 pixel)
+{
+    return pixel.y * max(push.width, 1u) + pixel.x;
+}
+
+uint loadPixelMaterialKey(uint2 pixel)
+{
+    return gBufferSourceBuffer[sourcePixelIndex(pixel)].sourceMaterialKey;
+}
+
 void writeSurfelSource(uint surfelIndex, uint2 pixel, uint materialKey)
 {
-    uint pixelIndex = pixel.y * max(push.width, 1u) + pixel.x;
+    uint pixelIndex = sourcePixelIndex(pixel);
     SurfelPathTracerPixelSource pixelSource = gBufferSourceBuffer[pixelIndex];
 
     SurfelPathTracerSource source;
@@ -299,7 +309,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         float coverage = estimateCoverage(position, normal, closestSurfelIndex, false);
         if (push.lockSurfels == 0u && push.enablePlacement != 0u && coverage < push.placementThreshold) {
             float radius = surfelRadius(depth, push.surfelTargetArea, push.surfelMinRadius, push.cellSize * push.surfelMaxRadiusScale);
-            allocateSurfel(pixel, position, normal, radius, resolveSurfelRadiance(position, normal), 0u);
+            allocateSurfel(pixel, position, normal, radius, resolveSurfelRadiance(position, normal), loadPixelMaterialKey(pixel));
         }
         if (push.lockSurfels == 0u &&
             push.enableRemoval != 0u &&
