@@ -17,6 +17,11 @@ static const uint SURFEL_PT_STATUS_LAST_SEEN = 0x2u;
 static const uint SURFEL_PT_STATUS_LAST_REFERENCED = 0x4u;
 static const float SURFEL_PT_RAY_BIAS = 0.001;
 static const float SURFEL_PT_MAX_RADIANCE_LUMINANCE = 32.0;
+// Stored as a negative value in the R16F alpha channel of each guide texel.
+// Integers in this range are represented exactly, allowing recycled surfels
+// to reject atlas data that belongs to an older allocation without another
+// GPU resource. The sign also distinguishes it from the former luma layout.
+static const uint SURFEL_PT_GUIDE_TOKEN_COUNT = 1023u;
 
 static const uint SURFEL_PT_COUNTER_ALIVE_SURFELS_OFFSET = 0u;
 static const uint SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET = 4u;
@@ -355,15 +360,16 @@ bool shouldRecycleSurfel(SurfelPathTracerSurfel surfel, uint frameIndex, float d
 uint adaptiveRayCountForSurfel(SurfelPathTracerSurfel surfel,
                                uint minRays,
                                uint maxRays,
-                               float varianceSensitivity,
-                               uint currentFrame)
+                               float varianceSensitivity)
 {
     uint safeMinRays = max(minRays, 1u);
     uint safeMaxRays = max(maxRays, safeMinRays);
     float variance = length(max(surfel.varianceAndInconsistency.xyz, float3(0.0)));
-    uint ageSinceSeen = currentFrame >= surfel.lastSeenFrame ? currentFrame - surfel.lastSeenFrame : 0u;
-    float ageBoost = ageSinceSeen < 20u ? 1.0 : 0.0;
-    float varianceT = saturate(variance * varianceSensitivity + ageBoost);
+    // Give newly allocated surfels a short full-budget warm-up. Using
+    // ageSinceSeen here kept every visible surfel permanently at max rays,
+    // because RaySchedule marks it seen immediately before this call.
+    float warmupBoost = surfel.shortMeanAndLife.w <= 16.0 ? 1.0 : 0.0;
+    float varianceT = saturate(variance * varianceSensitivity + warmupBoost);
     uint count = uint(round(lerp(float(safeMinRays), float(safeMaxRays), varianceT)));
     if (surfel.sleepState == SURFEL_PT_SLEEP_SLEEPING)
     {

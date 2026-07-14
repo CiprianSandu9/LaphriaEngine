@@ -27,9 +27,17 @@ struct SurfelRayTracePushConstants {
 
 [[vk::binding(0, 2)]] ConstantBuffer<UniformBuffer> ubo;
 
-float luminanceAtAtlasCoord(uint2 coord, RWTexture2D<float4> atlas)
+float luminanceAtAtlasCoord(uint2 coord,
+                            uint guideToken,
+                            RWTexture2D<float4> atlas,
+                            out bool isCurrentAllocation)
 {
-    return max(atlas[coord].a, 0.0);
+    float4 guideSample = atlas[coord];
+    float decodedToken = -guideSample.a;
+    isCurrentAllocation = isfinite(decodedToken) &&
+                          decodedToken >= 1.0 &&
+                          uint(round(decodedToken)) == guideToken;
+    return isCurrentAllocation ? max(luminance(max(guideSample.rgb, float3(0.0))), 0.0) : 0.0;
 }
 
 // The guide uses six uniform octahedral UV bins per axis. Corner bins do not
@@ -52,6 +60,8 @@ static const float kGuidedBinSolidAngle[36] = {
     0.000000000, 0.000000000, 0.111341014, 0.111341014, 0.000000000, 0.000000000
 };
 static const float kGuidedProposalProbability = 0.75;
+static const uint kGuidedMinimumLife = 16u;
+static const uint kGuidedMinimumValidBins = 8u;
 
 uint guidedBinIndex(uint2 coord)
 {
@@ -62,32 +72,55 @@ float upperOctahedralJacobian(float2 uv)
 {
     float3 unnormalizedDirection = float3(uv.x, uv.y, 1.0 - abs(uv.x) - abs(uv.y));
     float directionLength = max(length(unnormalizedDirection), 1e-5);
-    return sqrt(3.0) / (directionLength * directionLength * directionLength);
+    // For n = normalize(u, v, 1 - |u| - |v|), the solid-angle
+    // differential is du dv / |(u, v, 1 - |u| - |v|)|^3.
+    return 1.0 / (directionLength * directionLength * directionLength);
 }
 
 float guidedBinWeight(uint2 localCoord,
                       uint2 atlasBase,
-                      RWTexture2D<float4> atlas)
+                      uint guideToken,
+                      RWTexture2D<float4> atlas,
+                      out bool isCurrentAllocation)
 {
     uint binIndex = guidedBinIndex(localCoord);
-    return luminanceAtAtlasCoord(atlasBase + localCoord, atlas) * kGuidedBinSolidAngle[binIndex];
+    if (kGuidedBinSolidAngle[binIndex] <= 0.0)
+    {
+        isCurrentAllocation = false;
+        return 0.0;
+    }
+    return luminanceAtAtlasCoord(atlasBase + localCoord,
+                                 guideToken,
+                                 atlas,
+                                 isCurrentAllocation) * kGuidedBinSolidAngle[binIndex];
 }
 
-float guidedDistributionTotal(uint surfelIndex,
-                              RWTexture2D<float4> atlas,
-                              uint atlasWidth)
+void guidedDistributionStats(uint surfelIndex,
+                             uint guideToken,
+                             RWTexture2D<float4> atlas,
+                             uint atlasWidth,
+                             out float total,
+                             out uint validBinCount)
 {
     uint2 base = atlasTileBase(surfelIndex, atlasWidth);
-    float total = 0.0;
+    total = 0.0;
+    validBinCount = 0u;
     for (uint y = 0u; y < SURFEL_PT_ATLAS_TILE_SIZE; ++y)
     for (uint x = 0u; x < SURFEL_PT_ATLAS_TILE_SIZE; ++x)
     {
-        total += guidedBinWeight(uint2(x, y), base, atlas);
+        uint binIndex = guidedBinIndex(uint2(x, y));
+        if (kGuidedBinSolidAngle[binIndex] <= 0.0)
+        {
+            continue;
+        }
+        bool isCurrentAllocation;
+        total += guidedBinWeight(uint2(x, y), base, guideToken, atlas, isCurrentAllocation);
+        validBinCount += isCurrentAllocation ? 1u : 0u;
     }
-    return total;
 }
 
 float guidedPdfForDirection(uint surfelIndex,
+                            uint guideToken,
                             float3 localDirection,
                             RWTexture2D<float4> atlas,
                             uint atlasWidth,
@@ -107,14 +140,20 @@ float guidedPdfForDirection(uint surfelIndex,
     }
 
     uint2 base = atlasTileBase(surfelIndex, atlasWidth);
-    float probabilityMass = guidedBinWeight(localCoord, base, atlas) / distributionTotal;
+    bool isCurrentAllocation;
+    float probabilityMass = guidedBinWeight(localCoord,
+                                            base,
+                                            guideToken,
+                                            atlas,
+                                            isCurrentAllocation) / distributionTotal;
     float jacobian = upperOctahedralJacobian(dirToOctUv(localDirection));
     return probabilityMass / max(uvArea * jacobian, 1e-5);
 }
 
 bool hasGuidedSurfelHistory(SurfelPathTracerSurfel surfel)
 {
-    return surfel.shortMeanAndLife.w > 2.0;
+    return surfel.irradianceAtlasOffset != 0u &&
+           surfel.shortMeanAndLife.w > float(kGuidedMinimumLife);
 }
 
 float3 cosineSampleHemisphereLocal(float2 xi)
@@ -126,6 +165,7 @@ float3 cosineSampleHemisphereLocal(float2 xi)
 }
 
 bool sampleGuidedSurfelDirection(uint surfelIndex,
+                                 uint guideToken,
                                  float cdfXi,
                                  float2 jitterXi,
                                  RWTexture2D<float4> atlas,
@@ -148,7 +188,17 @@ bool sampleGuidedSurfelDirection(uint surfelIndex,
     for (uint x = 0u; x < SURFEL_PT_ATLAS_TILE_SIZE; ++x)
     {
         uint2 localCoord = uint2(x, y);
-        float weight = guidedBinWeight(localCoord, base, atlas);
+        uint binIndex = guidedBinIndex(localCoord);
+        if (kGuidedBinSolidAngle[binIndex] <= 0.0)
+        {
+            continue;
+        }
+        bool isCurrentAllocation;
+        float weight = guidedBinWeight(localCoord,
+                                       base,
+                                       guideToken,
+                                       atlas,
+                                       isCurrentAllocation);
         if (weight <= 0.0)
         {
             continue;
@@ -167,7 +217,6 @@ bool sampleGuidedSurfelDirection(uint surfelIndex,
                 oct -= outsideUpperDiamond * octSign;
             }
             localDirection = octUvToDir(oct);
-            uint binIndex = guidedBinIndex(localCoord);
             float jacobian = upperOctahedralJacobian(oct);
             float probabilityMass = weight / distributionTotal;
             pdf = probabilityMass / max(kGuidedBinUvArea[binIndex] * jacobian, 1e-5);
@@ -376,14 +425,25 @@ void main() {
     float3 localDir;
     float pdf;
     bool guideAvailable = push.enableGuidedSampling != 0u && hasGuidedSurfelHistory(surfel);
-    float guideTotal = guideAvailable
-                       ? guidedDistributionTotal(surfelIndex, irradianceAtlas, push.irradianceAtlasWidth)
-                       : 0.0;
-    guideAvailable = guideAvailable && guideTotal > 1e-5;
+    float guideTotal = 0.0;
+    uint validGuideBins = 0u;
+    if (guideAvailable)
+    {
+        guidedDistributionStats(surfelIndex,
+                                surfel.irradianceAtlasOffset,
+                                irradianceAtlas,
+                                push.irradianceAtlasWidth,
+                                guideTotal,
+                                validGuideBins);
+    }
+    guideAvailable = guideAvailable &&
+                     guideTotal > 1e-5 &&
+                     validGuideBins >= kGuidedMinimumValidBins;
     float guidedComponentPdf = 0.0;
     bool guided = guideAvailable &&
                   guideXi.y < kGuidedProposalProbability &&
                   sampleGuidedSurfelDirection(surfelIndex,
+                                              surfel.irradianceAtlasOffset,
                                               guideXi.x,
                                               guideJitter,
                                               irradianceAtlas,
@@ -397,6 +457,7 @@ void main() {
         float cosinePdf = max(localDir.z / PI, 0.0);
         guidedComponentPdf = guideAvailable
                              ? guidedPdfForDirection(surfelIndex,
+                                                     surfel.irradianceAtlasOffset,
                                                      localDir,
                                                      irradianceAtlas,
                                                      push.irradianceAtlasWidth,

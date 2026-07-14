@@ -46,11 +46,14 @@ void main(uint3 tid : SV_DispatchThreadID) {
 		counters.Store(SURFEL_PT_INDIRECT_RAY_WIDTH_OFFSET, 0u);
 		counters.Store(SURFEL_PT_INDIRECT_RAY_HEIGHT_OFFSET, 1u);
 		counters.Store(SURFEL_PT_INDIRECT_RAY_DEPTH_OFFSET, 1u);
-        counters.InterlockedAdd(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET, 1u);
-
         if (push.resetPersistent != 0u) {
+            // Start every cache generation from the same sampling sequence.
+            // Lifecycle ages are then local to the current cache as well.
+            counters.Store(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET, 0u);
             counters.Store(SURFEL_PT_COUNTER_ALIVE_SURFELS_OFFSET, 0u);
             counters.Store(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET, maxSurfels);
+        } else {
+            counters.InterlockedAdd(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET, 1u);
         }
     }
 

@@ -39,7 +39,13 @@ float3 loadRayLocalDirection(uint rayIndex) {
     return unpackRayLocalDirection(rayBuffer[rayIndex * SURFEL_PT_RAY_RECORD_UINTS + SURFEL_PT_RAY_LOCAL_DIRECTION]);
 }
 
-void writeAtlas(uint surfelIndex, float3 localDirection, float3 radiance, float depth, uint width, uint height) {
+void writeAtlas(uint surfelIndex,
+                uint guideToken,
+                float3 localDirection,
+                float3 incidentRadiance,
+                float depth,
+                uint width,
+                uint height) {
     if (width == 0u || height == 0u) {
         return;
     }
@@ -49,8 +55,17 @@ void writeAtlas(uint surfelIndex, float3 localDirection, float3 radiance, float 
         return;
     }
 
-    float newLuma = luminance(radiance);
-    irradianceAtlas[coord] = float4(radiance, max(newLuma, 1e-5));
+    float3 sampleRadiance = clampLuminance(max(incidentRadiance, float3(0.0)),
+                                           SURFEL_PT_MAX_RADIANCE_LUMINANCE);
+    float4 previous = irradianceAtlas[coord];
+    float decodedPreviousToken = -previous.a;
+    uint previousToken = isfinite(decodedPreviousToken) && decodedPreviousToken >= 1.0
+                         ? uint(round(decodedPreviousToken))
+                         : 0u;
+    float3 filteredRadiance = previousToken == guideToken
+                              ? lerp(previous.rgb, sampleRadiance, 0.125)
+                              : sampleRadiance;
+    irradianceAtlas[coord] = float4(filteredRadiance, -float(guideToken));
     surfelDepthAtlas[coord] = depth;
 }
 
@@ -102,7 +117,16 @@ void main(uint3 tid : SV_DispatchThreadID) {
         accumulatedRadiance += weightedRadiance;
         accumulatedDepth += rayDepth;
         sampleCount += 1u;
-        writeAtlas(surfelIndex, localDirection, rayRadiance * integrationWeight, rayDepth, atlasWidth, atlasHeight);
+        // The guide estimates the directional incident-radiance distribution.
+        // Do not feed the guide its own cosine/PDF importance weight: that
+        // creates a positive feedback loop and amplifies noisy low-PDF rays.
+        writeAtlas(surfelIndex,
+                   surfel.irradianceAtlasOffset,
+                   localDirection,
+                   rayRadiance,
+                   rayDepth,
+                   atlasWidth,
+                   atlasHeight);
     }
 
     if (sampleCount == 0u) {

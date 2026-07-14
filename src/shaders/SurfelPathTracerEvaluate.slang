@@ -191,7 +191,10 @@ void allocateSurfel(uint2 pixel, float3 position, float3 normal, float radius, f
     surfel.packedNormal = packNormalOctahedral(normal);
     surfel.rayOffset = 0u;
     surfel.rayCount = 1u;
-    surfel.irradianceAtlasOffset = surfelIndex;
+    // The atlas tile is still addressed by surfelIndex. This value identifies
+    // the allocation currently owning the tile so stale per-frame atlas data
+    // from a recycled surfel is ignored until fresh samples arrive.
+    surfel.irradianceAtlasOffset = (frameIndex % SURFEL_PT_GUIDE_TOKEN_COUNT) + 1u;
     surfel.flags = SURFEL_PT_SURFEL_FLAG_ACTIVE;
     surfel.meanAndVariance = float4(surfel.radiance, 1.0);
     surfel.shortMeanAndLife = float4(surfel.radiance, 1.0);

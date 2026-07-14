@@ -57,8 +57,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         uint rayRequestCount = adaptiveRayCountForSurfel(surfel,
                                                          push.minRaysPerSurfel,
                                                          push.maxRaysPerSurfel,
-                                                         push.varianceSensitivity,
-                                                         frameIndex);
+                                                         push.varianceSensitivity);
         if (rayRequestCount == 0u || push.maxRays == 0u) {
             continue;
         }
