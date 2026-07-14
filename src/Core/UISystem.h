@@ -135,6 +135,7 @@ public:
         uint32_t deadSurfels = 0;
         uint32_t dirtySurfels = 0;
         uint32_t requestedRays = 0;
+        uint32_t rayBudget = 0;
         uint32_t filledCells = 0;
         uint32_t rejectedStores = 0;
         uint32_t recycledSurfels = 0;
@@ -144,6 +145,19 @@ public:
         uint32_t cosineRays = 0;
         uint32_t surfelTerminatedPaths = 0;
         uint32_t pathMisses = 0;
+        float gBufferMs = 0.0f;
+        float cacheUpdateMs = 0.0f;
+        float prepareMs = 0.0f;
+        float generateMs = 0.0f;
+        float updateMs = 0.0f;
+        float cellInfoMs = 0.0f;
+        float cellMapMs = 0.0f;
+        float rayScheduleMs = 0.0f;
+        float surfelRayTraceMs = 0.0f;
+        float integrateMs = 0.0f;
+        float evaluateMs = 0.0f;
+        float reflectionMs = 0.0f;
+        float postProcessMs = 0.0f;
         float totalFrameMs = 0.0f;
     };
 

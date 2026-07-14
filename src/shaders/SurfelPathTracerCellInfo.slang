@@ -19,6 +19,12 @@ static const uint CELL_RUNNING_TOTAL_OFFSET = 0u;
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
     uint cellIndex = tid.x;
+    if (cellIndex == 0u) {
+        counters.Store(SURFEL_PT_INDIRECT_RAY_WIDTH_OFFSET,
+                       counters.Load(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET));
+        counters.Store(SURFEL_PT_INDIRECT_RAY_HEIGHT_OFFSET, 1u);
+        counters.Store(SURFEL_PT_INDIRECT_RAY_DEPTH_OFFSET, 1u);
+    }
     if (cellIndex >= push.cellCount) {
         return;
     }

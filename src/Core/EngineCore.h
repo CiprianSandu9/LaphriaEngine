@@ -78,9 +78,8 @@ class EngineCore
 	vk::raii::DescriptorPool             surfelPathTracerRtDescriptorPool{nullptr};
 	std::vector<vk::raii::DescriptorSet> surfelPathTracerRtDescriptorSets;
 	mutable bool                         surfelPathTracerPersistentImageLayoutsInitialized = false;
-	mutable std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> surfelPathTracerPreviousHistoryIndex{};
-	mutable std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> surfelPathTracerCurrentHistoryIndex{};
-	mutable std::array<bool, MAX_FRAMES_IN_FLIGHT> surfelPathTracerTemporalHistoryValid{};
+	mutable uint32_t surfelPathTracerPreviousHistoryFrameIndex = 0;
+	mutable bool surfelPathTracerTemporalHistoryValid = false;
 	mutable std::vector<Laphria::SurfelPathTracerSourceInstance> surfelSourceInstances;
 	mutable std::vector<Laphria::SurfelPathTracerSourceTransform> surfelSourceTransforms;
 	mutable uint32_t currentSurfelSourceInstanceCount = 0u;
@@ -99,9 +98,9 @@ class EngineCore
 	vk::raii::DescriptorPool             denoiserDescriptorPool{nullptr};
 	std::vector<vk::raii::DescriptorSet> denoiserDescriptorSets;
 
-	vk::raii::QueryPool                  ptTimestampQueryPool{nullptr};
+	vk::raii::QueryPool                  gpuTimestampQueryPool{nullptr};
 	float                                timestampPeriodNs = 1.0f;
-	std::array<bool, MAX_FRAMES_IN_FLIGHT>       ptTimestampsValid{};
+	std::array<bool, MAX_FRAMES_IN_FLIGHT>       gpuTimestampsValid{};
 	std::array<RenderMode, MAX_FRAMES_IN_FLIGHT> submittedRenderModes{};
 	std::vector<vk::Fence>                       imagesInFlight;
 
@@ -174,10 +173,11 @@ class EngineCore
 	void createDescriptorSets();
 	void createTimestampQueryPool();
 	void collectPathTracerTimings(uint32_t frameSlot);
+	void collectSurfelPathTracerTimings(uint32_t frameSlot);
 	void updatePathTracerTimingPercentiles();
 	void updateAdaptivePathTracerSettings();
 
-	[[nodiscard]] uint32_t getPathTracerQueryBase(uint32_t frameSlot) const;
+	[[nodiscard]] uint32_t getGpuTimestampQueryBase(uint32_t frameSlot) const;
 
 	void recordCommandBuffer(uint32_t imageIndex) const;
 

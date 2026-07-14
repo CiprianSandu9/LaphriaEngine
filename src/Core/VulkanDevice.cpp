@@ -302,8 +302,17 @@ void VulkanDevice::createLogicalDevice()
 	auto &asFeatures                 = featureChain.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>();
 	asFeatures.accelerationStructure = vk::True;
 
-	auto &rtFeatures              = featureChain.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
+	const auto supportedRtFeatureChain = physicalDevice.getFeatures2<
+	    vk::PhysicalDeviceFeatures2,
+	    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
+	const auto &supportedRtFeatures =
+	    supportedRtFeatureChain.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
+	rayTracingPipelineTraceRaysIndirect = supportedRtFeatures.rayTracingPipelineTraceRaysIndirect == vk::True;
+
+	auto &rtFeatures = featureChain.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
 	rtFeatures.rayTracingPipeline = vk::True;
+	rtFeatures.rayTracingPipelineTraceRaysIndirect =
+	    rayTracingPipelineTraceRaysIndirect ? vk::True : vk::False;
 
 	float                     queuePriority = 0.5f;
 	vk::DeviceQueueCreateInfo deviceQueueCreateInfo{

@@ -39,6 +39,10 @@ using namespace Laphria;
 namespace
 {
 constexpr uint32_t    kPtTimestampQueryCountPerFrame         = 8;
+constexpr uint32_t    kSurfelTimestampQueryCountPerFrame     = 24;
+constexpr uint32_t    kSurfelTimestampQueryOffset            = kPtTimestampQueryCountPerFrame;
+constexpr uint32_t    kGpuTimestampQueryCountPerFrame        =
+    kPtTimestampQueryCountPerFrame + kSurfelTimestampQueryCountPerFrame;
 constexpr uint32_t    kPtMaterialMaxBounceShift              = 26u;
 constexpr uint32_t    kPtMaterialMaxBounceMask               = 0x3u;
 constexpr uint32_t    kPtMaterialDirectSunShift              = 28u;
@@ -216,6 +220,34 @@ enum PtTimestampSlot : uint32_t
 	kPtTS_ReprojectionEnd   = 5,
 	kPtTS_DenoiserStart     = 6,
 	kPtTS_DenoiserEnd       = 7
+};
+
+enum SurfelTimestampSlot : uint32_t
+{
+	kSurfelTS_GBufferStart       = 0,
+	kSurfelTS_GBufferEnd         = 1,
+	kSurfelTS_PrepareStart       = 2,
+	kSurfelTS_PrepareEnd         = 3,
+	kSurfelTS_GenerateStart      = 4,
+	kSurfelTS_GenerateEnd        = 5,
+	kSurfelTS_UpdateStart        = 6,
+	kSurfelTS_UpdateEnd          = 7,
+	kSurfelTS_CellInfoStart      = 8,
+	kSurfelTS_CellInfoEnd        = 9,
+	kSurfelTS_CellMapStart       = 10,
+	kSurfelTS_CellMapEnd         = 11,
+	kSurfelTS_RayScheduleStart   = 12,
+	kSurfelTS_RayScheduleEnd     = 13,
+	kSurfelTS_RayTraceStart      = 14,
+	kSurfelTS_RayTraceEnd        = 15,
+	kSurfelTS_IntegrateStart     = 16,
+	kSurfelTS_IntegrateEnd       = 17,
+	kSurfelTS_EvaluateStart      = 18,
+	kSurfelTS_EvaluateEnd        = 19,
+	kSurfelTS_ReflectionStart    = 20,
+	kSurfelTS_ReflectionEnd      = 21,
+	kSurfelTS_PostProcessStart   = 22,
+	kSurfelTS_PostProcessEnd     = 23
 };
 
 struct SponzaScenarioPreset
@@ -1109,9 +1141,8 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 
 void EngineCore::resetSurfelPathTracerTemporalHistory() const
 {
-	surfelPathTracerPreviousHistoryIndex.fill(0);
-	surfelPathTracerCurrentHistoryIndex.fill(1);
-	surfelPathTracerTemporalHistoryValid.fill(false);
+	surfelPathTracerPreviousHistoryFrameIndex = 0;
+	surfelPathTracerTemporalHistoryValid = false;
 }
 
 void EngineCore::updateSurfelPathTracerHistoryDescriptors(uint32_t frameIndex) const
@@ -1120,31 +1151,28 @@ void EngineCore::updateSurfelPathTracerHistoryDescriptors(uint32_t frameIndex) c
 	{
 		throw std::runtime_error("Surfel path tracer history descriptors require a storage set for the frame");
 	}
-	const uint32_t previousHistoryIndex = surfelPathTracerPreviousHistoryIndex[frameIndex];
-	const uint32_t currentHistoryIndex = surfelPathTracerCurrentHistoryIndex[frameIndex];
-	if (previousHistoryIndex >= surfelPathTracerResources.filteredReflectionHistoryViews.size() ||
-	    currentHistoryIndex >= surfelPathTracerResources.filteredReflectionHistoryViews.size())
+	constexpr uint32_t historyBank = 0;
+	const uint32_t previousFrameIndex = surfelPathTracerTemporalHistoryValid
+	                                        ? surfelPathTracerPreviousHistoryFrameIndex
+	                                        : frameIndex;
+	if (surfelPathTracerTemporalHistoryValid && previousFrameIndex == frameIndex)
 	{
-		throw std::runtime_error("Surfel path tracer history descriptor bank index is invalid");
+		throw std::runtime_error("Surfel path tracer valid temporal history requires distinct frame slots");
 	}
-	if (surfelPathTracerTemporalHistoryValid[frameIndex] && previousHistoryIndex == currentHistoryIndex)
-	{
-		throw std::runtime_error("Surfel path tracer valid temporal history requires distinct descriptor banks");
-	}
-	if (frameIndex >= surfelPathTracerResources.filteredReflectionHistoryViews[previousHistoryIndex].size() ||
-	    frameIndex >= surfelPathTracerResources.filteredReflectionHistoryViews[currentHistoryIndex].size() ||
-	    frameIndex >= surfelPathTracerResources.taaHistoryViews[previousHistoryIndex].size() ||
-	    frameIndex >= surfelPathTracerResources.taaHistoryViews[currentHistoryIndex].size())
+	if (previousFrameIndex >= surfelPathTracerResources.filteredReflectionHistoryViews[historyBank].size() ||
+	    frameIndex >= surfelPathTracerResources.filteredReflectionHistoryViews[historyBank].size() ||
+	    previousFrameIndex >= surfelPathTracerResources.taaHistoryViews[historyBank].size() ||
+	    frameIndex >= surfelPathTracerResources.taaHistoryViews[historyBank].size())
 	{
 		throw std::runtime_error("Surfel path tracer history image views are incomplete");
 	}
 
 	const std::array<vk::DescriptorImageInfo, 5> imageInfos = {
-	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.taaHistoryViews[currentHistoryIndex][frameIndex], .imageLayout = vk::ImageLayout::eGeneral},
-	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.filteredReflectionHistoryViews[previousHistoryIndex][frameIndex], .imageLayout = vk::ImageLayout::eGeneral},
-	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.filteredReflectionHistoryViews[currentHistoryIndex][frameIndex], .imageLayout = vk::ImageLayout::eGeneral},
-	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.taaHistoryViews[previousHistoryIndex][frameIndex], .imageLayout = vk::ImageLayout::eGeneral},
-	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.taaHistoryViews[currentHistoryIndex][frameIndex], .imageLayout = vk::ImageLayout::eGeneral}};
+	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.taaHistoryViews[historyBank][frameIndex], .imageLayout = vk::ImageLayout::eGeneral},
+	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.filteredReflectionHistoryViews[historyBank][previousFrameIndex], .imageLayout = vk::ImageLayout::eGeneral},
+	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.filteredReflectionHistoryViews[historyBank][frameIndex], .imageLayout = vk::ImageLayout::eGeneral},
+	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.taaHistoryViews[historyBank][previousFrameIndex], .imageLayout = vk::ImageLayout::eGeneral},
+	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.taaHistoryViews[historyBank][frameIndex], .imageLayout = vk::ImageLayout::eGeneral}};
 	const std::array<uint32_t, 5> imageBindings = {19, 23, 24, 25, 26};
 
 	std::array<vk::WriteDescriptorSet, 5> writes{};
@@ -1569,7 +1597,7 @@ void EngineCore::recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &com
 void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
 {
 	const uint32_t fi         = frames.frameIndex;
-	const uint32_t queryBase  = getPathTracerQueryBase(fi);
+	const uint32_t queryBase  = getGpuTimestampQueryBase(fi);
 	const size_t   atrousBase = static_cast<size_t>(fi) * 2;
 	const size_t   atrousA    = atrousBase + 0;
 	const size_t   atrousB    = atrousBase + 1;
@@ -1613,16 +1641,16 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	                                                vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
 	                                                0, rtPush);
 
-	if (*ptTimestampQueryPool)
+	if (*gpuTimestampQueryPool)
 	{
-		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eRayTracingShaderKHR, *ptTimestampQueryPool, queryBase + kPtTS_RayTraceStart);
+		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eRayTracingShaderKHR, *gpuTimestampQueryPool, queryBase + kPtTS_RayTraceStart);
 	}
 	vk::StridedDeviceAddressRegionKHR callableRegion{};
 	commandBuffer.traceRaysKHR(pipelines.raygenRegion, pipelines.missRegion, pipelines.hitRegion,
 	                           callableRegion, rtWidth, rtHeight, 1);
-	if (*ptTimestampQueryPool)
+	if (*gpuTimestampQueryPool)
 	{
-		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eRayTracingShaderKHR, *ptTimestampQueryPool, queryBase + kPtTS_RayTraceEnd);
+		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eRayTracingShaderKHR, *gpuTimestampQueryPool, queryBase + kPtTS_RayTraceEnd);
 	}
 
 	// 3. Make both this dispatch and earlier same-queue PT submissions visible to
@@ -1682,14 +1710,14 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 		    .resetHistory          = ptForceHistoryReset ? 1 : 0};
 		commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
 		                                                  vk::ShaderStageFlagBits::eCompute, 0, reproPush);
-		if (*ptTimestampQueryPool)
+		if (*gpuTimestampQueryPool)
 		{
-			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_ReprojectionStart);
+			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *gpuTimestampQueryPool, queryBase + kPtTS_ReprojectionStart);
 		}
 		commandBuffer.dispatch(gx, gy, 1);
-		if (*ptTimestampQueryPool)
+		if (*gpuTimestampQueryPool)
 		{
-			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_ReprojectionEnd);
+			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *gpuTimestampQueryPool, queryBase + kPtTS_ReprojectionEnd);
 		}
 	}
 
@@ -1715,9 +1743,9 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	}
 	const int useRawInput = ui.pathTracerSettings.enableReprojection ? 0 : 1;
 
-	if (*ptTimestampQueryPool)
+	if (*gpuTimestampQueryPool)
 	{
-		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_DenoiserStart);
+		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *gpuTimestampQueryPool, queryBase + kPtTS_DenoiserStart);
 	}
 
 	if (atrousIterations == 0)
@@ -1765,9 +1793,9 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 		}
 	}
 
-	if (*ptTimestampQueryPool)
+	if (*gpuTimestampQueryPool)
 	{
-		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_DenoiserEnd);
+		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *gpuTimestampQueryPool, queryBase + kPtTS_DenoiserEnd);
 	}
 
 	// 6. Blit denoised image to swapchain.
@@ -1847,6 +1875,15 @@ void EngineCore::transitionPersistentSurfelImagesToGeneral(uint32_t frameIndex) 
 void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
 {
 	const uint32_t fi = frames.frameIndex;
+	const uint32_t queryBase = getGpuTimestampQueryBase(fi);
+	auto writeSurfelTimestamp = [&](SurfelTimestampSlot slot) {
+		if (*gpuTimestampQueryPool)
+		{
+			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eAllCommands,
+			                              *gpuTimestampQueryPool,
+			                              queryBase + kSurfelTimestampQueryOffset + static_cast<uint32_t>(slot));
+		}
+	};
 	if (!surfelPathTracerResources.initialized())
 	{
 		throw std::runtime_error("Surfel path tracer resources are not initialized");
@@ -1927,7 +1964,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		transitionSwapchainForBlit();
 		recordSurfelFinalBlit();
 		transitionSwapchainForUi();
-		surfelPathTracerTemporalHistoryValid.fill(false);
+		surfelPathTracerTemporalHistoryValid = false;
 	};
 
 	const auto &surfelSettings = mutableUi.surfelPathTracerSettings;
@@ -1962,11 +1999,14 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	    surfelSettings.debugView == UISystem::SurfelPathTracerDebugView::FinalColor;
 	if (ptForceHistoryReset || resetPersistent || !renderingFinalColor)
 	{
-		surfelPathTracerTemporalHistoryValid.fill(false);
+		surfelPathTracerTemporalHistoryValid = false;
 	}
-	const bool historyReady = !ptForceHistoryReset && surfelPathTracerTemporalHistoryValid[fi];
+	const bool historyReady = !ptForceHistoryReset &&
+	                          surfelPathTracerTemporalHistoryValid &&
+	                          surfelPathTracerPreviousHistoryFrameIndex != fi;
 	updateSurfelPathTracerHistoryDescriptors(fi);
 
+	writeSurfelTimestamp(kSurfelTS_GBufferStart);
 	auto transitionSurfelGBufferToRtWrite = [&](vk::Image image) {
 		transition_image_layout(image,
 		                        vk::ImageLayout::eGeneral,
@@ -1984,20 +2024,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferMaterialImages[fi]);
 	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferEmissiveImages[fi]);
 
-	commandBuffer.fillBuffer(*surfelPathTracerResources.gBufferSourceBuffers[fi], 0, VK_WHOLE_SIZE, 0u);
 	std::vector<vk::BufferMemoryBarrier2> sourceClearBarriers;
-	sourceClearBarriers.push_back(vk::BufferMemoryBarrier2{
-	    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
-	    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-	    .dstStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR |
-	                    vk::PipelineStageFlagBits2::eComputeShader,
-	    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
-	                     vk::AccessFlagBits2::eShaderStorageWrite,
-	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-	    .buffer = *surfelPathTracerResources.gBufferSourceBuffers[fi],
-	    .offset = 0,
-	    .size = VK_WHOLE_SIZE});
 	if (resetPersistent)
 	{
 		commandBuffer.fillBuffer(*surfelPathTracerResources.surfelSourceBuffer, 0, VK_WHOLE_SIZE, 0u);
@@ -2029,8 +2056,10 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                         *descriptorSets[fi],
 	                                         swapchain.extent);
 	surfelPathTracerPasses.recordImageBarrierGBufferToCompute(commandBuffer, surfelPathTracerResources, fi);
+	writeSurfelTimestamp(kSurfelTS_GBufferEnd);
 
 	const bool updateSurfels = !surfelSettings.lockSurfels || resetPersistent;
+	writeSurfelTimestamp(kSurfelTS_PrepareStart);
 	if (updateSurfels)
 	{
 		surfelPathTracerPasses.recordPreparePass(commandBuffer,
@@ -2042,7 +2071,9 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                         surfelPathTracerResources.perCellSurfelLimitCapacity());
 		mutableSurfelPathTracerResources.markPersistentResetConsumed();
 		mutableUi.surfelPathTracerSettings.resetSurfels = false;
+		writeSurfelTimestamp(kSurfelTS_PrepareEnd);
 
+		writeSurfelTimestamp(kSurfelTS_GenerateStart);
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		surfelPathTracerPasses.recordEvaluatePass(commandBuffer,
 		                                          pipelines.surfelPathTracerPipelines,
@@ -2063,6 +2094,8 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                          surfelSettings.enableSurfelRemoval,
 		                                          surfelSettings.maxSurfelSamplesPerQuery,
 		                                          swapchain.extent);
+		writeSurfelTimestamp(kSurfelTS_GenerateEnd);
+		writeSurfelTimestamp(kSurfelTS_UpdateStart);
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		surfelPathTracerPasses.recordUpdatePass(commandBuffer,
 		                                        pipelines.surfelPathTracerPipelines,
@@ -2077,12 +2110,16 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                        surfelSettings.maxRaysPerSurfel,
 		                                        surfelSettings.varianceSensitivity,
 		                                        surfelSettings.lockSurfels);
+		writeSurfelTimestamp(kSurfelTS_UpdateEnd);
+		writeSurfelTimestamp(kSurfelTS_CellInfoStart);
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		surfelPathTracerPasses.recordCellInfoPass(commandBuffer,
 		                                          pipelines.surfelPathTracerPipelines,
 		                                          *surfelPathTracerStorageDescriptorSets[fi],
 		                                          surfelPathTracerResources.cellCount(),
 		                                          surfelPathTracerResources.perCellSurfelLimitCapacity());
+		writeSurfelTimestamp(kSurfelTS_CellInfoEnd);
+		writeSurfelTimestamp(kSurfelTS_CellMapStart);
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		surfelPathTracerPasses.recordCellToSurfelPass(commandBuffer,
 		                                              pipelines.surfelPathTracerPipelines,
@@ -2092,6 +2129,20 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                              surfelSettings.cellSize,
 		                                              surfelPathTracerResources.cellDimensionCapacity(),
 		                                              surfelPathTracerResources.perCellSurfelLimitCapacity());
+		writeSurfelTimestamp(kSurfelTS_CellMapEnd);
+		writeSurfelTimestamp(kSurfelTS_RayScheduleStart);
+		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		surfelPathTracerPasses.recordRaySchedulePass(commandBuffer,
+		                                            pipelines.surfelPathTracerPipelines,
+		                                            *surfelPathTracerStorageDescriptorSets[fi],
+		                                            surfelPathTracerResources.cellCount(),
+		                                            surfelPathTracerResources.maxSurfelsCapacity(),
+		                                            surfelPathTracerResources.maxRaysPerFrameCapacity(),
+		                                            surfelSettings.minRaysPerSurfel,
+		                                            surfelSettings.maxRaysPerSurfel,
+		                                            surfelSettings.varianceSensitivity);
+		writeSurfelTimestamp(kSurfelTS_RayScheduleEnd);
+		writeSurfelTimestamp(kSurfelTS_RayTraceStart);
 		surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
 		surfelPathTracerPasses.recordSurfelRayTracePass(commandBuffer,
 		                                                pipelines.surfelPathTracerPipelines,
@@ -2100,6 +2151,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                                *surfelPathTracerStorageDescriptorSets[fi],
 		                                                *descriptorSets[fi],
 		                                                surfelPathTracerResources.maxRaysPerFrameCapacity(),
+		                                                vulkan.rayTracingPipelineTraceRaysIndirect,
 		                                                surfelSettings.enableGuidedSampling,
 		                                                surfelSettings.irradianceAtlasWidth,
 		                                                surfelSettings.activeMaxDepth,
@@ -2108,6 +2160,8 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                                surfelSettings.maxSurfelSamplesPerQuery,
 		                                                surfelSettings.cellSize,
 		                                                surfelPathTracerResources.cellDimensionCapacity());
+		writeSurfelTimestamp(kSurfelTS_RayTraceEnd);
+		writeSurfelTimestamp(kSurfelTS_IntegrateStart);
 		surfelPathTracerPasses.recordStorageBarrierRtToCompute(commandBuffer);
 		surfelPathTracerPasses.recordIntegratePass(commandBuffer,
 		                                           pipelines.surfelPathTracerPipelines,
@@ -2119,11 +2173,28 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                           surfelPathTracerResources.cellDimensionCapacity(),
 		                                           surfelSettings.cellSize);
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		writeSurfelTimestamp(kSurfelTS_IntegrateEnd);
 	}
 	else
 	{
+		writeSurfelTimestamp(kSurfelTS_PrepareEnd);
+		writeSurfelTimestamp(kSurfelTS_GenerateStart);
+		writeSurfelTimestamp(kSurfelTS_GenerateEnd);
+		writeSurfelTimestamp(kSurfelTS_UpdateStart);
+		writeSurfelTimestamp(kSurfelTS_UpdateEnd);
+		writeSurfelTimestamp(kSurfelTS_CellInfoStart);
+		writeSurfelTimestamp(kSurfelTS_CellInfoEnd);
+		writeSurfelTimestamp(kSurfelTS_CellMapStart);
+		writeSurfelTimestamp(kSurfelTS_CellMapEnd);
+		writeSurfelTimestamp(kSurfelTS_RayScheduleStart);
+		writeSurfelTimestamp(kSurfelTS_RayScheduleEnd);
+		writeSurfelTimestamp(kSurfelTS_RayTraceStart);
+		writeSurfelTimestamp(kSurfelTS_RayTraceEnd);
+		writeSurfelTimestamp(kSurfelTS_IntegrateStart);
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		writeSurfelTimestamp(kSurfelTS_IntegrateEnd);
 	}
+	writeSurfelTimestamp(kSurfelTS_EvaluateStart);
 	surfelPathTracerPasses.recordEvaluatePass(commandBuffer,
 	                                          pipelines.surfelPathTracerPipelines,
 	                                          *surfelPathTracerStorageDescriptorSets[fi],
@@ -2143,7 +2214,9 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                          false,
 	                                          surfelSettings.maxSurfelSamplesPerQuery,
 	                                          swapchain.extent);
+	writeSurfelTimestamp(kSurfelTS_EvaluateEnd);
 
+	writeSurfelTimestamp(kSurfelTS_ReflectionStart);
 	surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
 	surfelPathTracerPasses.recordReflectionPass(commandBuffer,
 	                                            pipelines.surfelPathTracerPipelines,
@@ -2158,6 +2231,8 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                            fi,
 	                                            surfelSettings.enableSurfelTermination,
 	                                            surfelSettings.maxSurfelSamplesPerQuery);
+	writeSurfelTimestamp(kSurfelTS_ReflectionEnd);
+	writeSurfelTimestamp(kSurfelTS_PostProcessStart);
 	surfelPathTracerPasses.recordStorageBarrierRtToCompute(commandBuffer);
 	surfelPathTracerPasses.recordReflectionFilterPass(commandBuffer,
 	                                                  pipelines.surfelPathTracerPipelines,
@@ -2244,9 +2319,27 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                     !historyReady,
 	                                     swapchain.extent,
 	                                     fi);
+	constexpr uint32_t historyBank = 0;
+	transition_image_layout(*surfelPathTracerResources.filteredReflectionHistoryImages[historyBank][fi],
+	                        vk::ImageLayout::eGeneral,
+	                        vk::ImageLayout::eGeneral,
+	                        vk::AccessFlagBits2::eShaderWrite,
+	                        vk::AccessFlagBits2::eShaderRead,
+	                        vk::PipelineStageFlagBits2::eComputeShader,
+	                        vk::PipelineStageFlagBits2::eComputeShader,
+	                        vk::ImageAspectFlagBits::eColor);
+	transition_image_layout(*surfelPathTracerResources.taaHistoryImages[historyBank][fi],
+	                        vk::ImageLayout::eGeneral,
+	                        vk::ImageLayout::eGeneral,
+	                        vk::AccessFlagBits2::eShaderWrite,
+	                        vk::AccessFlagBits2::eShaderRead,
+	                        vk::PipelineStageFlagBits2::eComputeShader,
+	                        vk::PipelineStageFlagBits2::eComputeShader,
+	                        vk::ImageAspectFlagBits::eColor);
+	writeSurfelTimestamp(kSurfelTS_PostProcessEnd);
 	auto advanceSurfelPathTracerTemporalHistory = [&]() {
-		std::swap(surfelPathTracerPreviousHistoryIndex[fi], surfelPathTracerCurrentHistoryIndex[fi]);
-		surfelPathTracerTemporalHistoryValid[fi] = true;
+		surfelPathTracerPreviousHistoryFrameIndex = fi;
+		surfelPathTracerTemporalHistoryValid = true;
 	};
 	if (taaHistoryEnabled)
 	{
@@ -2258,7 +2351,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	}
 	else
 	{
-		surfelPathTracerTemporalHistoryValid.fill(false);
+		surfelPathTracerTemporalHistoryValid = false;
 	}
 	surfelPathTracerResources.recordStatsReadback(commandBuffer, fi);
 
@@ -2364,19 +2457,19 @@ void EngineCore::createTimestampQueryPool()
 {
 	vk::QueryPoolCreateInfo queryPoolInfo{
 	    .queryType  = vk::QueryType::eTimestamp,
-	    .queryCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * kPtTimestampQueryCountPerFrame};
-	ptTimestampQueryPool = vk::raii::QueryPool(vulkan.logicalDevice, queryPoolInfo);
+	    .queryCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * kGpuTimestampQueryCountPerFrame};
+	gpuTimestampQueryPool = vk::raii::QueryPool(vulkan.logicalDevice, queryPoolInfo);
 	timestampPeriodNs    = vulkan.physicalDevice.getProperties().limits.timestampPeriod;
 }
 
-uint32_t EngineCore::getPathTracerQueryBase(uint32_t frameSlot) const
+uint32_t EngineCore::getGpuTimestampQueryBase(uint32_t frameSlot) const
 {
-	return frameSlot * kPtTimestampQueryCountPerFrame;
+	return frameSlot * kGpuTimestampQueryCountPerFrame;
 }
 
 void EngineCore::collectPathTracerTimings(uint32_t frameSlot)
 {
-	if (!*ptTimestampQueryPool || !ptTimestampsValid[frameSlot])
+	if (!*gpuTimestampQueryPool || !gpuTimestampsValid[frameSlot])
 	{
 		return;
 	}
@@ -2384,8 +2477,8 @@ void EngineCore::collectPathTracerTimings(uint32_t frameSlot)
 	std::array<uint64_t, kPtTimestampQueryCountPerFrame> timestamps{};
 	const VkResult                                       queryResult = vkGetQueryPoolResults(
         static_cast<VkDevice>(*vulkan.logicalDevice),
-        static_cast<VkQueryPool>(*ptTimestampQueryPool),
-        getPathTracerQueryBase(frameSlot),
+        static_cast<VkQueryPool>(*gpuTimestampQueryPool),
+		getGpuTimestampQueryBase(frameSlot),
         kPtTimestampQueryCountPerFrame,
         sizeof(timestamps),
         timestamps.data(),
@@ -2435,6 +2528,56 @@ void EngineCore::collectPathTracerTimings(uint32_t frameSlot)
 
 	updatePathTracerTimingPercentiles();
 }
+
+void EngineCore::collectSurfelPathTracerTimings(uint32_t frameSlot)
+{
+	if (!*gpuTimestampQueryPool || !gpuTimestampsValid[frameSlot])
+	{
+		return;
+	}
+
+	std::array<uint64_t, kSurfelTimestampQueryCountPerFrame> timestamps{};
+	const VkResult queryResult = vkGetQueryPoolResults(
+	    static_cast<VkDevice>(*vulkan.logicalDevice),
+	    static_cast<VkQueryPool>(*gpuTimestampQueryPool),
+	    getGpuTimestampQueryBase(frameSlot) + kSurfelTimestampQueryOffset,
+	    kSurfelTimestampQueryCountPerFrame,
+	    sizeof(timestamps),
+	    timestamps.data(),
+	    sizeof(uint64_t),
+	    VK_QUERY_RESULT_64_BIT);
+	if (queryResult != VK_SUCCESS)
+	{
+		return;
+	}
+
+	auto toMs = [this](uint64_t start, uint64_t end) -> float {
+		if (end <= start)
+		{
+			return 0.0f;
+		}
+		const double deltaTicks = static_cast<double>(end - start);
+		const double deltaNs = deltaTicks * static_cast<double>(timestampPeriodNs);
+		return static_cast<float>(deltaNs * 1e-6);
+	};
+
+	auto &stats = ui.surfelPathTracerStats;
+	stats.gBufferMs = toMs(timestamps[kSurfelTS_GBufferStart], timestamps[kSurfelTS_GBufferEnd]);
+	stats.prepareMs = toMs(timestamps[kSurfelTS_PrepareStart], timestamps[kSurfelTS_PrepareEnd]);
+	stats.generateMs = toMs(timestamps[kSurfelTS_GenerateStart], timestamps[kSurfelTS_GenerateEnd]);
+	stats.updateMs = toMs(timestamps[kSurfelTS_UpdateStart], timestamps[kSurfelTS_UpdateEnd]);
+	stats.cellInfoMs = toMs(timestamps[kSurfelTS_CellInfoStart], timestamps[kSurfelTS_CellInfoEnd]);
+	stats.cellMapMs = toMs(timestamps[kSurfelTS_CellMapStart], timestamps[kSurfelTS_CellMapEnd]);
+	stats.rayScheduleMs = toMs(timestamps[kSurfelTS_RayScheduleStart], timestamps[kSurfelTS_RayScheduleEnd]);
+	stats.cacheUpdateMs = toMs(timestamps[kSurfelTS_PrepareStart], timestamps[kSurfelTS_RayScheduleEnd]);
+	stats.surfelRayTraceMs = toMs(timestamps[kSurfelTS_RayTraceStart], timestamps[kSurfelTS_RayTraceEnd]);
+	stats.integrateMs = toMs(timestamps[kSurfelTS_IntegrateStart], timestamps[kSurfelTS_IntegrateEnd]);
+	stats.evaluateMs = toMs(timestamps[kSurfelTS_EvaluateStart], timestamps[kSurfelTS_EvaluateEnd]);
+	stats.reflectionMs = toMs(timestamps[kSurfelTS_ReflectionStart], timestamps[kSurfelTS_ReflectionEnd]);
+	stats.postProcessMs = toMs(timestamps[kSurfelTS_PostProcessStart], timestamps[kSurfelTS_PostProcessEnd]);
+	stats.totalFrameMs = toMs(timestamps[kSurfelTS_GBufferStart], timestamps[kSurfelTS_PostProcessEnd]);
+}
+
 
 void EngineCore::updatePathTracerTimingPercentiles()
 {
@@ -2495,10 +2638,10 @@ void EngineCore::updateAdaptivePathTracerSettings()
 void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 {
 	auto          &commandBuffer = frames.commandBuffers[frames.frameIndex];
-	const uint32_t queryBase     = getPathTracerQueryBase(frames.frameIndex);
-	if (*ptTimestampQueryPool)
+	const uint32_t queryBase     = getGpuTimestampQueryBase(frames.frameIndex);
+	if (*gpuTimestampQueryPool)
 	{
-		commandBuffer.resetQueryPool(*ptTimestampQueryPool, queryBase, kPtTimestampQueryCountPerFrame);
+		commandBuffer.resetQueryPool(*gpuTimestampQueryPool, queryBase, kGpuTimestampQueryCountPerFrame);
 	}
 
 	vk::ClearValue clearColor = vk::ClearColorValue(0.02f, 0.02f, 0.02f, 1.0f);
@@ -2692,14 +2835,14 @@ void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
 		buildRange.transformOffset = 0;
 
 		const vk::AccelerationStructureBuildRangeInfoKHR *pBuildRange = &buildRange;
-		if (*ptTimestampQueryPool)
+		if (*gpuTimestampQueryPool)
 		{
-			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, *ptTimestampQueryPool, queryBase + kPtTS_TlasStart);
+			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, *gpuTimestampQueryPool, queryBase + kPtTS_TlasStart);
 		}
 		commandBuffer.buildAccelerationStructuresKHR(buildInfo, pBuildRange);
-		if (*ptTimestampQueryPool)
+		if (*gpuTimestampQueryPool)
 		{
-			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, *ptTimestampQueryPool, queryBase + kPtTS_TlasEnd);
+			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, *gpuTimestampQueryPool, queryBase + kPtTS_TlasEnd);
 		}
 
 		// Memory barrier to ensure TLAS build finishes before the ray tracing shader reads it
@@ -3236,6 +3379,10 @@ void EngineCore::drawFrame()
 		collectPathTracerTimings(frames.frameIndex);
 		updateAdaptivePathTracerSettings();
 	}
+	else if (submittedRenderModes[frames.frameIndex] == RenderMode::SurfelPathTracer)
+	{
+		collectSurfelPathTracerTimings(frames.frameIndex);
+	}
 
 	auto [result, imageIndex] = swapchain.swapChain.acquireNextImage(
 	    UINT64_MAX, *frames.presentCompleteSemaphores[frames.frameIndex], nullptr);
@@ -3324,7 +3471,12 @@ void EngineCore::drawFrame()
 		ptForceHistoryReset = false;
 	}
 	submittedRenderModes[frames.frameIndex] = ui.renderMode;
-	ptTimestampsValid[frames.frameIndex]    = (ui.renderMode == RenderMode::PathTracer);
+	const bool hasRenderableSurfelScene =
+	    ui.renderMode == RenderMode::SurfelPathTracer &&
+	    ui.surfelPathTracerSettings.enabled &&
+	    resourceManager && resourceManager->getModelCount() > 0;
+	gpuTimestampsValid[frames.frameIndex] =
+	    ui.renderMode == RenderMode::PathTracer || hasRenderableSurfelScene;
 
 	// The swapchain image is accessed at eColorAttachmentOutput (main/ImGui pass) and at
 	// eTransfer (blit in compute and RT paths). Both stages must wait for vkAcquireNextImage.

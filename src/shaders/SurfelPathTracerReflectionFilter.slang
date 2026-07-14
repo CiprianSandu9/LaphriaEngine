@@ -54,6 +54,25 @@ bool reflectionHistoryKeyMatches(float storedKey, float currentKey) {
     return abs(storedKey - currentKey) <= (1.5 / 1023.0);
 }
 
+bool reprojectReflectionHistory(uint2 fullPixel, float2 motion, out uint2 previousHalfPixel) {
+    if (!isFiniteScalar(motion.x) || !isFiniteScalar(motion.y)) {
+        previousHalfPixel = uint2(0u);
+        return false;
+    }
+
+    float2 currentUv = (float2(fullPixel) + 0.5) /
+                       float2(max(push.fullWidth, 1u), max(push.fullHeight, 1u));
+    float2 previousUv = currentUv - motion;
+    if (any(previousUv < float2(0.0)) || any(previousUv > float2(1.0))) {
+        previousHalfPixel = uint2(0u);
+        return false;
+    }
+
+    previousHalfPixel = min(uint2(previousUv * float2(push.width, push.height)),
+                            uint2(push.width - 1u, push.height - 1u));
+    return true;
+}
+
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
@@ -79,7 +98,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     float3 centerNormal = normalize(centerNormalRaw);
-    float2 centerMaterial = gBufferMotionMaterial[fullPixel].zw;
+    float4 centerMotionMaterial = gBufferMotionMaterial[fullPixel];
+    float2 centerMaterial = centerMotionMaterial.zw;
     float currentKey = makeReflectionHistoryKey(centerDepth, centerNormal, centerMaterial);
 
     float3 sum = float3(0.0);
@@ -106,10 +126,17 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     float3 spatialReconstruction = weightSum > 0.0001 ? sum / weightSum : raw.rgb;
 
-    float4 previousFiltered = push.resetHistory == 0u ? previousFilteredReflectionHistory[pixel] : float4(0.0);
-    bool historyUsable = push.resetHistory == 0u &&
-                         isFinite3(previousFiltered.rgb) &&
-                         reflectionHistoryKeyMatches(previousFiltered.a, currentKey);
+    uint2 previousHalfPixel = uint2(0u);
+    bool historyReprojected = push.resetHistory == 0u &&
+                              reprojectReflectionHistory(fullPixel,
+                                                         centerMotionMaterial.xy,
+                                                         previousHalfPixel);
+    float4 previousFiltered = historyReprojected
+                              ? previousFilteredReflectionHistory[previousHalfPixel]
+                              : float4(0.0);
+    bool historyUsable = historyReprojected &&
+                          isFinite3(previousFiltered.rgb) &&
+                          reflectionHistoryKeyMatches(previousFiltered.a, currentKey);
     float historyAlpha = 0.16;
     float3 filtered = historyUsable ? lerp(previousFiltered.rgb, spatialReconstruction, historyAlpha) : spatialReconstruction;
     float4 filteredValue = float4(clampLuminance(filtered, SURFEL_PT_MAX_RADIANCE_LUMINANCE), currentKey);

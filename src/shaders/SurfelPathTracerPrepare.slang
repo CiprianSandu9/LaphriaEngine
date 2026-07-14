@@ -42,6 +42,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
         counters.Store(SURFEL_PT_COUNTER_COSINE_RAYS_OFFSET, 0u);
         counters.Store(SURFEL_PT_COUNTER_SURFEL_TERMINATED_PATHS_OFFSET, 0u);
         counters.Store(SURFEL_PT_COUNTER_PATH_MISSES_OFFSET, 0u);
+		counters.Store(SURFEL_PT_INDIRECT_RAY_WIDTH_OFFSET, 0u);
+		counters.Store(SURFEL_PT_INDIRECT_RAY_HEIGHT_OFFSET, 1u);
+		counters.Store(SURFEL_PT_INDIRECT_RAY_DEPTH_OFFSET, 1u);
         counters.InterlockedAdd(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET, 1u);
 
         if (push.resetPersistent != 0u) {

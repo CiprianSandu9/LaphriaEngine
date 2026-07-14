@@ -270,6 +270,7 @@ void SurfelPathTracerPipelines::createComputePipelines(const VulkanDevice &dev)
 	updatePipeline = createComputePipeline(dev, *computePipelineLayout, "Shaders/SurfelPathTracerUpdate.slang.spv", "main");
 	cellInfoPipeline = createComputePipeline(dev, *computePipelineLayout, "Shaders/SurfelPathTracerCellInfo.slang.spv", "main");
 	cellToSurfelPipeline = createComputePipeline(dev, *computePipelineLayout, "Shaders/SurfelPathTracerCellToSurfel.slang.spv", "main");
+	raySchedulePipeline = createComputePipeline(dev, *computePipelineLayout, "Shaders/SurfelPathTracerRaySchedule.slang.spv", "main");
 	integratePipeline = createComputePipeline(dev, *computePipelineLayout, "Shaders/SurfelPathTracerIntegrate.slang.spv", "main");
 	evaluatePipeline = createComputePipeline(dev, *computePipelineLayout, "Shaders/SurfelPathTracerEvaluate.slang.spv", "main");
 	reflectionFilterPipeline = createComputePipeline(dev, *computePipelineLayout, "Shaders/SurfelPathTracerReflectionFilter.slang.spv", "main");

@@ -197,9 +197,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 emissive = max(gBufferEmissive[pixel].rgb, float3(0.0));
     float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0));
     float surfelCoverage = max(outputImage[pixel].a, 0.0);
-    float3 diffuseBsdf = albedo;
-    float3 diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE * ao : float3(0.0);
-    diffuseGi = push.enableDiffuseGi != 0u ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE : float3(0.0);
+    float3 diffuseBsdf = albedo / PI;
+    float3 diffuseGi = push.enableDiffuseGi != 0u
+                       ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE * ao
+                       : float3(0.0);
     float sunVisibility = saturate(gBufferNormal[pixel].w);
     float3 worldPosition = reconstructWorldPosition(pixel, depth);
     float3 viewDir = normalize(ubo.cameraPos.xyz - worldPosition);

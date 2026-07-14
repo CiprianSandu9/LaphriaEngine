@@ -268,6 +268,7 @@ UISystem::SurfelPathTracerStats SurfelPathTracerResources::readStats(uint32_t fr
 	stats.aliveSurfels = settings_.maxSurfels - deadSurfels;
 	stats.dirtySurfels = counters->dirtySurfels;
 	stats.requestedRays = counters->requestedRays;
+	stats.rayBudget = settings_.maxRaysPerFrame;
 	stats.filledCells = counters->filledCells;
 	stats.rejectedStores = counters->rejectedStores;
 	stats.recycledSurfels = counters->recycledSurfels;
@@ -327,13 +328,20 @@ void SurfelPathTracerResources::createPersistentBuffers(
 
 	createBuffer(sizeof(SurfelPathTracerCounters), countersBuffer,
 	             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-	             vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc,
+	             vk::BufferUsageFlagBits::eStorageBuffer |
+	                 vk::BufferUsageFlagBits::eTransferSrc |
+	                 vk::BufferUsageFlagBits::eIndirectBuffer |
+	                 vk::BufferUsageFlagBits::eShaderDeviceAddress,
 	             "SurfelPathTracer.CountersBuffer");
+	rayDispatchIndirectAddress_ = VulkanUtils::getBufferDeviceAddress(dev.logicalDevice, countersBuffer) +
+	                              offsetof(SurfelPathTracerCounters, indirectRayWidth);
 	mappedCounters = countersBuffer.memory.mapMemory(0, sizeof(SurfelPathTracerCounters));
 	std::memset(mappedCounters, 0, sizeof(SurfelPathTracerCounters));
 	auto *initialCounters = static_cast<SurfelPathTracerCounters *>(mappedCounters);
 	initialCounters->aliveSurfels = 0;
 	initialCounters->deadSurfels = maxSurfels;
+	initialCounters->indirectRayHeight = 1;
+	initialCounters->indirectRayDepth = 1;
 	for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 	{
 		createBuffer(sizeof(SurfelPathTracerCounters), statsReadbackBuffers_[frameIndex],
@@ -468,6 +476,7 @@ void SurfelPathTracerResources::destroyPersistentBuffers()
 		countersBuffer.memory.unmapMemory();
 	}
 	mappedCounters = nullptr;
+	rayDispatchIndirectAddress_ = 0;
 	for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 	{
 		if (statsReadbackMapped_[frameIndex])

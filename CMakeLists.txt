@@ -42,6 +42,7 @@ set(SHADER_SOURCES
         "SurfelPathTracerUpdate.slang|main"
         "SurfelPathTracerCellInfo.slang|main"
         "SurfelPathTracerCellToSurfel.slang|main"
+        "SurfelPathTracerRaySchedule.slang|main"
         "SurfelPathTracerRaygen.slang|main"
         "SurfelPathTracerMiss.slang|main"
         "SurfelPathTracerClosestHit.slang|main"

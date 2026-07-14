@@ -68,28 +68,22 @@ bool refreshAnchoredSurfel(uint surfelIndex, inout SurfelPathTracerSurfel surfel
 
 bool pushDeadSurfel(uint surfelIndex, uint maxSurfels)
 {
-    uint deadCount = counters.Load(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET);
-    uint previousDeadCount = deadCount;
-    for (uint attempt = 0u; attempt < 16u; ++attempt)
+    // Each invocation owns a distinct active surfel, so every successful call
+    // contributes exactly one new dead slot. The old CAS retry loop serialized
+    // recycling waves for milliseconds. A single atomic reservation preserves
+    // the dead-list invariant: deadCount + activeCount cannot exceed capacity.
+    uint deadSlot = 0u;
+    counters.InterlockedAdd(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET, 1u, deadSlot);
+    if (deadSlot >= maxSurfels)
     {
-        if (deadCount >= maxSurfels)
-        {
-            return false;
-        }
-
-        uint desiredDeadCount = deadCount + 1u;
-        counters.InterlockedCompareExchange(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET,
-                                            deadCount,
-                                            desiredDeadCount,
-                                            previousDeadCount);
-        if (previousDeadCount == deadCount)
-        {
-            deadBuffer[deadCount] = surfelIndex;
-            return true;
-        }
-        deadCount = previousDeadCount;
+        // Defensive recovery for a corrupted counter; this path is not expected
+        // while each surfel is freed at most once.
+        counters.InterlockedMin(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET, maxSurfels);
+        return false;
     }
-    return false;
+
+    deadBuffer[deadSlot] = surfelIndex;
+    return true;
 }
 
 [shader("compute")]
@@ -101,6 +95,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     SurfelPathTracerSurfel surfel = surfelBuffer[surfelIndex];
+    surfel.flags &= ~SURFEL_PT_SURFEL_FLAG_RAY_SCHEDULED;
+    surfel.rayOffset = 0u;
+    surfel.rayCount = 0u;
     if ((surfel.flags & SURFEL_PT_SURFEL_FLAG_PENDING_FREE) != 0u)
     {
         if (pushDeadSurfel(surfelIndex, push.maxSurfels))
@@ -186,32 +183,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
         surfel.rayCount = 0u;
         surfelBuffer[surfelIndex] = surfel;
         return;
-    }
-
-    uint rayRequestCount = adaptiveRayCountForSurfel(surfel,
-                                                     push.minRaysPerSurfel,
-                                                     push.maxRaysPerSurfel,
-                                                     push.varianceSensitivity,
-                                                     frameIndex);
-    if (rayRequestCount > 0u && push.maxRays > 0u) {
-        uint rayOffset = 0u;
-        counters.InterlockedAdd(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET, rayRequestCount, rayOffset);
-        uint writableRayCount = rayOffset < push.maxRays ? min(rayRequestCount, push.maxRays - rayOffset) : 0u;
-        if (writableRayCount < rayRequestCount) {
-            counters.InterlockedMin(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET, push.maxRays);
-        }
-
-        surfel.rayOffset = rayOffset;
-        surfel.rayCount = writableRayCount;
-        for (uint ray = 0u; ray < writableRayCount; ++ray) {
-            uint rayIndex = rayOffset + ray;
-            uint base = rayIndex * SURFEL_PT_RAY_RECORD_UINTS;
-            rayBuffer[base + SURFEL_PT_RAY_SURFEL_INDEX] = surfelIndex;
-            rayBuffer[base + SURFEL_PT_RAY_FLAGS] = 0u;
-        }
-    } else {
-        surfel.rayOffset = 0u;
-        surfel.rayCount = 0u;
     }
 
     surfelBuffer[surfelIndex] = surfel;

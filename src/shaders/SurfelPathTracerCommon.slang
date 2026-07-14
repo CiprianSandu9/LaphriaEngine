@@ -10,6 +10,7 @@ static const uint SURFEL_PT_SLEEP_AWAKE = 0u;
 static const uint SURFEL_PT_SLEEP_SLEEPING = 1u;
 static const uint SURFEL_PT_SURFEL_FLAG_ACTIVE = 1u;
 static const uint SURFEL_PT_SURFEL_FLAG_PENDING_FREE = 2u;
+static const uint SURFEL_PT_SURFEL_FLAG_RAY_SCHEDULED = 4u;
 static const uint SURFEL_PT_SOURCE_FLAG_VALID = 1u << 0u;
 static const uint SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED = 1u << 1u;
 static const uint SURFEL_PT_STATUS_LAST_SEEN = 0x2u;
@@ -31,6 +32,9 @@ static const uint SURFEL_PT_COUNTER_GUIDED_RAYS_OFFSET = 44u;
 static const uint SURFEL_PT_COUNTER_COSINE_RAYS_OFFSET = 48u;
 static const uint SURFEL_PT_COUNTER_SURFEL_TERMINATED_PATHS_OFFSET = 52u;
 static const uint SURFEL_PT_COUNTER_PATH_MISSES_OFFSET = 56u;
+static const uint SURFEL_PT_INDIRECT_RAY_WIDTH_OFFSET = 64u;
+static const uint SURFEL_PT_INDIRECT_RAY_HEIGHT_OFFSET = 68u;
+static const uint SURFEL_PT_INDIRECT_RAY_DEPTH_OFFSET = 72u;
 
 static const uint SURFEL_PT_RAY_RECORD_UINTS = 8u;
 static const uint SURFEL_PT_RAY_SURFEL_INDEX = 0u;
@@ -122,6 +126,10 @@ struct SurfelPathTracerCounters {
     uint surfelTerminatedPaths;
     uint pathMisses;
     uint pad1;
+    uint indirectRayWidth;
+    uint indirectRayHeight;
+    uint indirectRayDepth;
+    uint pad2;
 };
 
 struct SurfelPathTracerPayload {
@@ -255,8 +263,10 @@ uint2 atlasTileBase(uint surfelIndex, uint atlasWidth)
 uint2 atlasDirectionCoord(float3 localDirection)
 {
     float2 uv = dirToOctUv(localDirection);
-    int2 offset = int2(round(clamp(uv, float2(-1.0), float2(1.0)) * 2.5 + float2(2.5)));
-    return uint2(clamp(offset, int2(0), int2(5)));
+    float2 unitUv = saturate(uv * 0.5 + 0.5);
+    uint2 offset = min(uint2(unitUv * float(SURFEL_PT_ATLAS_TILE_SIZE)),
+                       uint2(SURFEL_PT_ATLAS_TILE_SIZE - 1u));
+    return offset;
 }
 
 bool isFiniteScalar(float value) {

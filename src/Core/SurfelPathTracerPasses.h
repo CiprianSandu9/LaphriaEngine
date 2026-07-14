@@ -63,6 +63,16 @@ class SurfelPathTracerPasses
 	                            uint32_t cellDimension,
 	                            uint32_t perCellSurfelLimit) const;
 
+	void recordRaySchedulePass(const vk::raii::CommandBuffer &commandBuffer,
+	                           const SurfelPathTracerPipelines &pipelines,
+	                           vk::DescriptorSet imageSet,
+	                           uint32_t cellCount,
+	                           uint32_t maxSurfels,
+	                           uint32_t maxRays,
+	                           uint32_t minRaysPerSurfel,
+	                           uint32_t maxRaysPerSurfel,
+	                           float varianceSensitivity) const;
+
 	void recordSurfelRayTracePass(const vk::raii::CommandBuffer &commandBuffer,
 	                              const SurfelPathTracerPipelines &pipelines,
 	                              const SurfelPathTracerResources &resources,
@@ -70,6 +80,7 @@ class SurfelPathTracerPasses
 	                              vk::DescriptorSet storageSet,
 	                              vk::DescriptorSet globalSet,
 	                              uint32_t rayCount,
+	                              bool useIndirectDispatch,
 	                              bool enableGuidedSampling,
 	                              uint32_t irradianceAtlasWidth,
 	                              uint32_t activeMaxDepth,

@@ -154,12 +154,6 @@ void writeSurfelSource(uint surfelIndex, uint2 pixel, uint materialKey)
 void allocateSurfel(uint2 pixel, float3 position, float3 normal, float radius, float3 seedRadiance, uint materialKey) {
     uint maxSurfels = max(push.maxSurfels, 1u);
     uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
-    uint generationPhaseX = frameIndex & 7u;
-    uint generationPhaseY = (frameIndex >> 3u) & 7u;
-    if ((pixel.x & 7u) != generationPhaseX || (pixel.y & 7u) != generationPhaseY) {
-        return;
-    }
-
     uint deadCount = counters.Load(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET);
     uint previousDeadCount = deadCount;
     uint deadSlot = SURFEL_PT_INVALID_INDEX;
@@ -287,6 +281,17 @@ float3 resolveSurfelRadiance(float3 position, float3 normal) {
 [numthreads(16, 16, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
     uint2 pixel = tid.xy;
+    if (push.mode == SURFEL_PT_EVALUATE_GENERATE) {
+        uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
+        uint generationPhaseX = frameIndex & 7u;
+        uint generationPhaseY = (frameIndex >> 3u) & 7u;
+        // The generation dispatch is 1/8 resolution in each dimension. Map its
+        // densely packed lanes to the same one-pixel-per-8x8-tile temporal phase
+        // that placement has always used. This avoids mostly-empty waves while
+        // still considering every screen pixel once over a 64-frame cycle.
+        pixel = tid.xy * 8u + uint2(generationPhaseX, generationPhaseY);
+    }
+
     if (pixel.x >= push.width || pixel.y >= push.height) {
         return;
     }
@@ -307,9 +312,19 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     if (push.mode == SURFEL_PT_EVALUATE_GENERATE) {
         float coverage = estimateCoverage(position, normal, closestSurfelIndex, false);
-        if (push.lockSurfels == 0u && push.enablePlacement != 0u && coverage < push.placementThreshold) {
+        bool wantsPlacement = push.lockSurfels == 0u &&
+                              push.enablePlacement != 0u &&
+                              coverage < push.placementThreshold;
+        // Thousands of uncovered pixels used to compute seed radiance and then
+        // spin on the same dead-list CAS, although only a small fraction could
+        // win. Keep one deterministic candidate per subgroup. This preserves
+        // broad screen coverage while reducing both seed searches and global
+        // atomic contention by approximately the subgroup width.
+        bool placeFromThisLane = wantsPlacement && WavePrefixCountBits(wantsPlacement) == 0u;
+        if (placeFromThisLane) {
             float radius = surfelRadius(depth, push.surfelTargetArea, push.surfelMinRadius, push.cellSize * push.surfelMaxRadiusScale);
-            allocateSurfel(pixel, position, normal, radius, resolveSurfelRadiance(position, normal), loadPixelMaterialKey(pixel));
+            float3 seedRadiance = resolveSurfelRadiance(position, normal);
+            allocateSurfel(pixel, position, normal, radius, seedRadiance, loadPixelMaterialKey(pixel));
         }
         if (push.lockSurfels == 0u &&
             push.enableRemoval != 0u &&

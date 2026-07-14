@@ -53,6 +53,18 @@ struct SurfelCellToSurfelPushConstants
 	uint32_t perCellSurfelLimit = 0;
 };
 
+struct SurfelRaySchedulePushConstants
+{
+	uint32_t cellCount = 0;
+	uint32_t maxSurfels = 0;
+	uint32_t maxRays = 0;
+	uint32_t minRaysPerSurfel = 1;
+	uint32_t maxRaysPerSurfel = 1;
+	float varianceSensitivity = 1.0f;
+	uint32_t pad0 = 0;
+	uint32_t pad1 = 0;
+};
+
 struct SurfelRayTracePushConstants
 {
 	uint32_t rayCount = 0;
@@ -243,13 +255,17 @@ void SurfelPathTracerPasses::recordPreparePass(const vk::raii::CommandBuffer &co
 	                                                        0,
 	                                                        push);
 
-	const uint64_t cellEntryCount = static_cast<uint64_t>(push.cellCount) * push.perCellSurfelLimit;
 	const uint64_t cellCounterCount = 1ull + static_cast<uint64_t>(push.cellCount) * 2ull;
-	const uint64_t resetEntryCount = static_cast<uint64_t>(push.maxSurfels) * 4ull;
-	const uint64_t workItemCount = std::max({static_cast<uint64_t>(push.maxSurfels),
-	                                         cellEntryCount,
-	                                         cellCounterCount,
-	                                         resetEntryCount});
+	uint64_t workItemCount = cellCounterCount;
+	if (resetPersistent)
+	{
+		const uint64_t cellEntryCount = static_cast<uint64_t>(push.cellCount) * push.perCellSurfelLimit;
+		const uint64_t resetEntryCount = static_cast<uint64_t>(push.maxSurfels) * 4ull;
+		workItemCount = std::max({static_cast<uint64_t>(push.maxSurfels),
+		                          cellEntryCount,
+		                          cellCounterCount,
+		                          resetEntryCount});
+	}
 	commandBuffer.dispatch(linearGroupCount(workItemCount), 1, 1);
 }
 
@@ -341,6 +357,33 @@ void SurfelPathTracerPasses::recordCellToSurfelPass(const vk::raii::CommandBuffe
 	commandBuffer.dispatch(linearGroupCount(push.maxSurfels), 1, 1);
 }
 
+void SurfelPathTracerPasses::recordRaySchedulePass(const vk::raii::CommandBuffer &commandBuffer,
+                                                   const SurfelPathTracerPipelines &pipelines,
+                                                   vk::DescriptorSet imageSet,
+                                                   uint32_t cellCount,
+                                                   uint32_t maxSurfels,
+                                                   uint32_t maxRays,
+                                                   uint32_t minRaysPerSurfel,
+                                                   uint32_t maxRaysPerSurfel,
+                                                   float varianceSensitivity) const
+{
+	bindComputeStorageSet(commandBuffer, pipelines, pipelines.raySchedulePipeline, imageSet);
+	const SurfelRaySchedulePushConstants push{
+	    .cellCount = cellCount,
+	    .maxSurfels = std::max(maxSurfels, 1u),
+	    .maxRays = std::max(maxRays, 1u),
+	    .minRaysPerSurfel = std::max(minRaysPerSurfel, 1u),
+	    .maxRaysPerSurfel = std::max(maxRaysPerSurfel, std::max(minRaysPerSurfel, 1u)),
+	    .varianceSensitivity = std::max(varianceSensitivity, 0.0f),
+	    .pad0 = 0,
+	    .pad1 = 0};
+	commandBuffer.pushConstants<SurfelRaySchedulePushConstants>(*pipelines.computePipelineLayout,
+	                                                            vk::ShaderStageFlagBits::eCompute,
+	                                                            0,
+	                                                            push);
+	commandBuffer.dispatch(linearGroupCount(push.cellCount), 1, 1);
+}
+
 void SurfelPathTracerPasses::recordSurfelRayTracePass(const vk::raii::CommandBuffer &commandBuffer,
                                                       const SurfelPathTracerPipelines &pipelines,
                                                       const SurfelPathTracerResources &resources,
@@ -348,6 +391,7 @@ void SurfelPathTracerPasses::recordSurfelRayTracePass(const vk::raii::CommandBuf
                                                       vk::DescriptorSet storageSet,
                                                       vk::DescriptorSet globalSet,
                                                       uint32_t rayCount,
+	                                                  bool useIndirectDispatch,
                                                       bool enableGuidedSampling,
                                                       uint32_t irradianceAtlasWidth,
                                                       uint32_t activeMaxDepth,
@@ -382,13 +426,24 @@ void SurfelPathTracerPasses::recordSurfelRayTracePass(const vk::raii::CommandBuf
 	                                                         push);
 
 	vk::StridedDeviceAddressRegionKHR callableRegion{};
-	commandBuffer.traceRaysKHR(pipelines.surfelSbt.raygenRegion,
-	                           pipelines.surfelSbt.missRegion,
-	                           pipelines.surfelSbt.hitRegion,
-	                           callableRegion,
-	                           push.rayCount,
-	                           1,
-	                           1);
+	if (useIndirectDispatch && resources.rayDispatchIndirectAddress() != 0)
+	{
+		commandBuffer.traceRaysIndirectKHR(pipelines.surfelSbt.raygenRegion,
+		                                   pipelines.surfelSbt.missRegion,
+		                                   pipelines.surfelSbt.hitRegion,
+		                                   callableRegion,
+		                                   resources.rayDispatchIndirectAddress());
+	}
+	else
+	{
+		commandBuffer.traceRaysKHR(pipelines.surfelSbt.raygenRegion,
+		                           pipelines.surfelSbt.missRegion,
+		                           pipelines.surfelSbt.hitRegion,
+		                           callableRegion,
+		                           push.rayCount,
+		                           1,
+		                           1);
+	}
 }
 
 void SurfelPathTracerPasses::recordIntegratePass(const vk::raii::CommandBuffer &commandBuffer,
@@ -472,8 +527,14 @@ void SurfelPathTracerPasses::recordEvaluatePass(const vk::raii::CommandBuffer &c
 	                                                         0,
 	                                                         push);
 
-	const uint32_t groupCountX = (push.width + 15u) / 16u;
-	const uint32_t groupCountY = (push.height + 15u) / 16u;
+	// Generation evaluates one temporal sample per 8x8 pixel tile. Dispatch the
+	// compact candidate grid so every wave contains useful lanes; the shader maps
+	// those lanes back to the current full-resolution temporal phase.
+	const bool generationPass = mode == SurfelPathTracerEvaluateMode::Generate;
+	const uint32_t dispatchWidth = generationPass ? (push.width + 7u) / 8u : push.width;
+	const uint32_t dispatchHeight = generationPass ? (push.height + 7u) / 8u : push.height;
+	const uint32_t groupCountX = (dispatchWidth + 15u) / 16u;
+	const uint32_t groupCountY = (dispatchHeight + 15u) / 16u;
 	commandBuffer.dispatch(groupCountX, groupCountY, 1);
 }
 
@@ -752,8 +813,11 @@ void SurfelPathTracerPasses::recordStorageBarrierComputeToRt(
 	vk::MemoryBarrier2 storageBufferBarrier{
 	    .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
 	    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-	    .dstStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-	    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite};
+	    .dstStageMask = vk::PipelineStageFlagBits2::eDrawIndirect |
+	                    vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .dstAccessMask = vk::AccessFlagBits2::eIndirectCommandRead |
+	                     vk::AccessFlagBits2::eShaderStorageRead |
+	                     vk::AccessFlagBits2::eShaderStorageWrite};
 	vk::DependencyInfo dependency{
 	    .memoryBarrierCount = 1,
 	    .pMemoryBarriers = &storageBufferBarrier};

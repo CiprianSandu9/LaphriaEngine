@@ -124,7 +124,14 @@ struct SurfelPathTracerCounters
 	uint32_t surfelTerminatedPaths = 0;
 	uint32_t pathMisses = 0;
 	uint32_t pad1 = 0;
+	uint32_t indirectRayWidth = 0;
+	uint32_t indirectRayHeight = 1;
+	uint32_t indirectRayDepth = 1;
+	uint32_t pad2 = 0;
 };
+
+static_assert(offsetof(SurfelPathTracerCounters, indirectRayWidth) == 64u);
+static_assert(sizeof(SurfelPathTracerCounters) == 80u);
 
 struct SurfelPathTracerCellAddress
 {
@@ -159,6 +166,7 @@ class SurfelPathTracerResources
 	[[nodiscard]] uint32_t maxRaysPerFrameCapacity() const { return settings_.maxRaysPerFrame; }
 	[[nodiscard]] uint32_t cellDimensionCapacity() const { return settings_.cellDimension; }
 	[[nodiscard]] uint32_t perCellSurfelLimitCapacity() const { return settings_.perCellSurfelLimit; }
+	[[nodiscard]] vk::DeviceAddress rayDispatchIndirectAddress() const { return rayDispatchIndirectAddress_; }
 	[[nodiscard]] bool needsPersistentResourceRecreate(
 	    const UISystem::SurfelPathTracerSettings &settings) const;
 	[[nodiscard]] bool needsPersistentReset() const { return needsPersistentReset_; }
@@ -208,6 +216,7 @@ class SurfelPathTracerResources
 	VmaBuffer cellCounterBuffer;
 	VmaBuffer cellToSurfelBuffer;
 	void *mappedCounters = nullptr;
+	vk::DeviceAddress rayDispatchIndirectAddress_ = 0;
 	uint32_t maxSourceInstances = 65536u;
 	uint32_t maxSourceTransforms = 65536u;
 

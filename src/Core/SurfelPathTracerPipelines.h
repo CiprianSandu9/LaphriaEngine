@@ -49,6 +49,7 @@ class SurfelPathTracerPipelines
 	vk::raii::Pipeline updatePipeline{nullptr};
 	vk::raii::Pipeline cellInfoPipeline{nullptr};
 	vk::raii::Pipeline cellToSurfelPipeline{nullptr};
+	vk::raii::Pipeline raySchedulePipeline{nullptr};
 	vk::raii::Pipeline integratePipeline{nullptr};
 	vk::raii::Pipeline evaluatePipeline{nullptr};
 	vk::raii::Pipeline reflectionFilterPipeline{nullptr};

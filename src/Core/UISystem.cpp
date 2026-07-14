@@ -1226,13 +1226,14 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
                                static_cast<int>(SurfelPathTracerDebugView::FinalColor),
                                static_cast<int>(SurfelPathTracerDebugView::SunVisibility));
         settings.debugView = static_cast<SurfelPathTracerDebugView>(debugView);
-
         ImGui::Text("Surfels: %u alive / %u dead / %u dirty",
                     surfelPathTracerStats.aliveSurfels,
                     surfelPathTracerStats.deadSurfels,
                     surfelPathTracerStats.dirtySurfels);
-        ImGui::Text("Rays: %u | Cells: %u | Rejected Stores: %u",
+        ImGui::Text("Rays: %u requested / %u budget",
                     surfelPathTracerStats.requestedRays,
+                    surfelPathTracerStats.rayBudget);
+        ImGui::Text("Cells: %u | Rejected Stores: %u",
                     surfelPathTracerStats.filledCells,
                     surfelPathTracerStats.rejectedStores);
         ImGui::Text("Recycled Surfels: %u", surfelPathTracerStats.recycledSurfels);
@@ -1242,7 +1243,27 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         ImGui::Text("Cosine Rays: %u", surfelPathTracerStats.cosineRays);
         ImGui::Text("Surfel-Terminated Paths: %u", surfelPathTracerStats.surfelTerminatedPaths);
         ImGui::Text("Path Misses: %u", surfelPathTracerStats.pathMisses);
-        ImGui::Text("Total: %.3f ms", surfelPathTracerStats.totalFrameMs);
+        ImGui::SeparatorText("GPU timings");
+        ImGui::Text("GBuffer: %.3f ms | Cache update: %.3f ms",
+                    surfelPathTracerStats.gBufferMs,
+                    surfelPathTracerStats.cacheUpdateMs);
+        ImGui::Text("Prepare: %.3f | Generate: %.3f | Update: %.3f ms",
+                    surfelPathTracerStats.prepareMs,
+                    surfelPathTracerStats.generateMs,
+                    surfelPathTracerStats.updateMs);
+        ImGui::Text("Cell info: %.3f ms | Cell map: %.3f ms",
+                    surfelPathTracerStats.cellInfoMs,
+                    surfelPathTracerStats.cellMapMs);
+        ImGui::Text("Ray schedule: %.3f ms", surfelPathTracerStats.rayScheduleMs);
+        ImGui::Text("Surfel rays: %.3f ms | Integrate: %.3f ms",
+                    surfelPathTracerStats.surfelRayTraceMs,
+                    surfelPathTracerStats.integrateMs);
+        ImGui::Text("Evaluate: %.3f ms | Reflections: %.3f ms",
+                    surfelPathTracerStats.evaluateMs,
+                    surfelPathTracerStats.reflectionMs);
+        ImGui::Text("Post: %.3f ms | Total: %.3f ms",
+                    surfelPathTracerStats.postProcessMs,
+                    surfelPathTracerStats.totalFrameMs);
     }
 
     ImGui::Separator();
