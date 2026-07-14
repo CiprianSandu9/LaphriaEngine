@@ -219,7 +219,6 @@ void UISystem::draw(GLFWwindow *window, Scene &scene, PhysicsSystem &physics,
 
     drawMainMenuBar(window);
     drawAssetBrowser(scene, rm, matLayout);
-    drawValidationPanel();
     drawSceneHierarchy(scene);
     drawInspector(rm);
     drawPhysicsUI(scene, physics, rm, matLayout);
@@ -946,69 +945,6 @@ void UISystem::drawAssetBrowser(Scene &scene, ResourceManager &rm, vk::Descripto
             }
         }
     }
-
-    ImGui::End();
-}
-
-void UISystem::drawValidationPanel()
-{
-    ImGui::Begin("Validation");
-
-    ImGui::TextWrapped("Validate project and scene JSON for structural issues.");
-
-    if (ImGui::Button("Run Project Validation"))
-    {
-        lastValidationReport = LaphriaEditor::EditorValidator::validateProjectFile(projectPath);
-        hasValidationReport = true;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Run Scene Validation"))
-    {
-        lastValidationReport = LaphriaEditor::EditorValidator::validateSceneFile(scenePath);
-        hasValidationReport = true;
-    }
-
-    if (ImGui::Button("Run Full Validation"))
-    {
-        const std::string sceneToValidate = hasLoadedProject ? project.sceneOutputPath : std::string(scenePath);
-        lastValidationReport = LaphriaEditor::EditorValidator::validateProjectAndScene(projectPath, sceneToValidate);
-        hasValidationReport = true;
-    }
-
-    if (!hasValidationReport)
-    {
-        ImGui::Separator();
-        ImGui::TextUnformatted("No validation run yet.");
-        ImGui::End();
-        return;
-    }
-
-    const size_t errorCount = lastValidationReport.errorCount();
-    const size_t warningCount = lastValidationReport.warningCount();
-    ImGui::Separator();
-    ImGui::Text("Errors: %llu | Warnings: %llu",
-                static_cast<unsigned long long>(errorCount),
-                static_cast<unsigned long long>(warningCount));
-
-    if (lastValidationReport.messages.empty())
-    {
-        ImGui::TextColored(ImVec4(0.55f, 0.90f, 0.55f, 1.0f), "No issues detected.");
-        ImGui::End();
-        return;
-    }
-
-    ImGui::BeginChild("ValidationMessages", ImVec2(0, 240), true);
-    for (const auto &message : lastValidationReport.messages)
-    {
-        const bool isError = message.severity == LaphriaEditor::ValidationSeverity::Error;
-        const ImVec4 color = isError ? ImVec4(1.0f, 0.40f, 0.40f, 1.0f) : ImVec4(1.0f, 0.76f, 0.35f, 1.0f);
-
-        ImGui::TextColored(color, "[%s] %s", LaphriaEditor::validationSeverityToString(message.severity), message.message.c_str());
-        ImGui::TextWrapped("File: %s", message.file.c_str());
-        ImGui::TextWrapped("Field: %s", message.fieldPath.c_str());
-        ImGui::Separator();
-    }
-    ImGui::EndChild();
 
     ImGui::End();
 }

@@ -67,7 +67,6 @@ bool EditorProject::loadFromFile(const std::string &path, EditorProject &outProj
 		project.importSettings.importAnimations = settings.value("import_animations", true);
 		project.importSettings.importMaterials = settings.value("import_materials", true);
 		project.importSettings.importSkins = settings.value("import_skins", true);
-		project.importSettings.strictValidation = settings.value("strict_validation", false);
 	}
 
 	if (project.assetRoots.empty())
@@ -89,8 +88,7 @@ bool EditorProject::saveToFile(const std::string &path, const EditorProject &pro
 	payload["import_settings"] = {
 	    {"import_animations", project.importSettings.importAnimations},
 	    {"import_materials", project.importSettings.importMaterials},
-	    {"import_skins", project.importSettings.importSkins},
-	    {"strict_validation", project.importSettings.strictValidation}};
+	    {"import_skins", project.importSettings.importSkins}};
 
 	const std::filesystem::path outputPath(path);
 	if (!outputPath.parent_path().empty())

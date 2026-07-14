@@ -8,7 +8,6 @@
 
 #include "../Physics/PhysicsSystem.h"
 #include "../SceneManagement/Scene.h"
-#include "EditorValidation.h"
 #include "EditorProject.h"
 #include "Camera.h"
 #include "EngineAuxiliary.h"
@@ -284,8 +283,6 @@ private:
     std::vector<std::string> cachedAssetFiles;
     std::string selectedAssetPath;
     std::vector<std::string> lastImportMessages;
-    LaphriaEditor::ValidationReport lastValidationReport;
-    bool hasValidationReport = false;
     SceneNode::Ptr nodePendingReparent{nullptr};
     std::mt19937 rng{std::random_device{}()};
     TransformGizmoMode transformGizmoMode = TransformGizmoMode::Translate;
@@ -305,7 +302,6 @@ private:
     void drawInspector(ResourceManager &rm);
 
     void drawAssetBrowser(Scene &scene, ResourceManager &rm, vk::DescriptorSetLayout matLayout);
-    void drawValidationPanel();
     void drawPathTracerMainControls();
     void drawPathTracerDebugLab();
     void drawPathTracerBenchmarkControls();

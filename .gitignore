@@ -3,17 +3,7 @@
 /build*
 /bin
 /docs
-/docs/architecture/*
-!/docs/
-!/docs/architecture/
-!/docs/architecture/restir-gi-sponza-handoff.md
-!/docs/architecture/restir-gi-approach-decision.md
-/tools
-!/tools/
-/tools/*
-!/tools/assets/
-/tools/assets/*
-!/tools/assets/prepare_gltf_assets.py
+/node_modules/
 
 ##############################
 #CLion specific

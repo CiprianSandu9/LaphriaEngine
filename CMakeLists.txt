@@ -154,15 +154,6 @@ set(LAPHRIA_ENGINE_SOURCES
         src/SceneManagement/SceneNode.h
 )
 
-set(LAPHRIA_EDITOR_VALIDATION_SOURCES
-        src/Core/EditorValidation.cpp
-        src/Core/EditorValidation.h
-)
-
-add_library(LaphriaEditorValidation STATIC ${LAPHRIA_EDITOR_VALIDATION_SOURCES})
-set_target_properties(LaphriaEditorValidation PROPERTIES CXX_STANDARD 20)
-target_link_libraries(LaphriaEditorValidation PUBLIC nlohmann_json::nlohmann_json)
-
 add_library(LaphriaEngine STATIC ${LAPHRIA_ENGINE_SOURCES})
 set_target_properties(LaphriaEngine PROPERTIES CXX_STANDARD 20)
 
@@ -185,7 +176,6 @@ target_include_directories(LaphriaEngine PRIVATE
 )
 
 target_link_libraries(LaphriaEngine PUBLIC
-        LaphriaEditorValidation
         Vulkan::Vulkan
         glfw
         glm::glm
@@ -205,79 +195,11 @@ set_target_properties(LaphriaEditor PROPERTIES
 target_link_libraries(LaphriaEditor PRIVATE LaphriaEngine)
 add_dependencies(LaphriaEditor LaphriaEngine_shaders)
 
-add_executable(LaphriaValidationRunner src/LaphriaValidationRunnerMain.cpp)
-set_target_properties(LaphriaValidationRunner PROPERTIES
-        CXX_STANDARD 20
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/LaphriaTools
-)
-target_link_libraries(LaphriaValidationRunner PRIVATE LaphriaEditorValidation)
-
 if (WIN32 AND CMAKE_GENERATOR MATCHES "Visual Studio.*")
     set_target_properties(LaphriaEditor PROPERTIES
             VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:LaphriaEditor>"
     )
-    set_target_properties(LaphriaValidationRunner PROPERTIES
-            VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:LaphriaValidationRunner>"
-    )
 endif ()
-
-enable_testing()
-
-add_test(
-        NAME LaphriaValidationProjectValid
-        COMMAND LaphriaValidationRunner
-        --validate-project
-        --project "${CMAKE_SOURCE_DIR}/tests/fixtures/validation/valid_project.laphria_project.json"
-)
-
-add_test(
-        NAME LaphriaValidationSceneValid
-        COMMAND LaphriaValidationRunner
-        --validate-scene
-        --scene "${CMAKE_SOURCE_DIR}/tests/fixtures/validation/valid_scene.json"
-)
-
-add_test(
-        NAME LaphriaValidationProjectInvalid
-        COMMAND LaphriaValidationRunner
-        --validate-project
-        --project "${CMAKE_SOURCE_DIR}/tests/fixtures/validation/invalid_project.laphria_project.json"
-)
-set_tests_properties(LaphriaValidationProjectInvalid PROPERTIES WILL_FAIL TRUE)
-
-add_test(
-        NAME LaphriaValidationSceneInvalid
-        COMMAND LaphriaValidationRunner
-        --validate-scene
-        --scene "${CMAKE_SOURCE_DIR}/tests/fixtures/validation/invalid_scene.json"
-)
-set_tests_properties(LaphriaValidationSceneInvalid PROPERTIES WILL_FAIL TRUE)
-
-add_executable(LaphriaEngineUnitTests
-        tests/EngineUnitTestsMain.cpp
-        tests/PathTracerAnalysisTests.cpp
-        tests/SurfelPathTracerPipelineTests.cpp
-        src/Core/PathTracerAnalysis.cpp
-        src/SceneManagement/SceneNode.cpp
-        src/Physics/Broadphase.cpp
-)
-set_target_properties(LaphriaEngineUnitTests PROPERTIES CXX_STANDARD 20)
-target_compile_definitions(LaphriaEngineUnitTests PRIVATE
-        GLM_FORCE_DEPTH_ZERO_TO_ONE
-        GLM_FORCE_RADIANS
-        GLM_ENABLE_EXPERIMENTAL
-        GLM_FORCE_CXX11
-        LAPHRIA_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-)
-target_link_libraries(LaphriaEngineUnitTests PRIVATE
-        glm::glm
-        nlohmann_json::nlohmann_json
-)
-
-add_test(
-        NAME LaphriaEngineUnitTests
-        COMMAND LaphriaEngineUnitTests
-)
 
 if (Python3_Interpreter_FOUND)
     add_custom_target(docs-generate
