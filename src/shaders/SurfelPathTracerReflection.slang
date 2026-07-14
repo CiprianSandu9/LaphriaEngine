@@ -12,7 +12,7 @@ struct ReflectionPushConstants {
     uint enabled;
     uint enableSurfelTermination;
     uint maxSurfelSamplesPerQuery;
-    uint pad2;
+    uint useOriginalStyleGiNormalization;
 };
 
 [[vk::push_constant]] ReflectionPushConstants push;
@@ -42,47 +42,6 @@ float3 primaryRayDirection(uint2 pixel) {
 
 float3 reconstructWorldPosition(uint2 pixel, float depth) {
     return ubo.cameraPos.xyz + primaryRayDirection(pixel) * depth;
-}
-
-float3 terminatePathWithSurfels(float3 position,
-                                float3 normal,
-                                uint maxSamples,
-                                uint maxSurfels,
-                                float cellSize,
-                                uint cellDimension,
-                                float3 cameraPosition,
-                                RWStructuredBuffer<SurfelPathTracerSurfel> surfels,
-                                RWStructuredBuffer<SurfelPathTracerCellInfo> cells,
-                                RWStructuredBuffer<uint> cellToSurfels)
-{
-    uint cellIndex = cameraRelativeCellIndexForPosition(position, cameraPosition, cellSize, cellDimension);
-    if (cellIndex == SURFEL_PT_INVALID_INDEX) {
-        return float3(0.0);
-    }
-
-    SurfelPathTracerCellInfo cellInfo = cells[cellIndex];
-    uint count = min(cellInfo.surfelCount, maxSamples);
-    float3 sum = float3(0.0);
-    float weightSum = 0.0;
-    for (uint i = 0u; i < count; ++i) {
-        uint surfelIndex = cellToSurfels[cellInfo.surfelOffset + i];
-        if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= maxSurfels) {
-            continue;
-        }
-
-        SurfelPathTracerSurfel surfel = surfels[surfelIndex];
-        if (!isActiveSurfel(surfel)) {
-            continue;
-        }
-
-        float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
-        float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(surfel.radius, 1e-4));
-        float normalWeight = saturate(dot(normal, surfelNormal));
-        float weight = distanceWeight * normalWeight;
-        sum += surfel.radiance * weight;
-        weightSum += weight;
-    }
-    return weightSum > 1e-5 ? sum / weightSum : float3(0.0);
 }
 
 float traceSunVisibility(float3 position, float3 normal, float3 sunDir)
@@ -213,17 +172,24 @@ void main() {
                                                    sunDir,
                                                    sunVisibility) + payload.emission;
         if (push.enableSurfelTermination != 0u) {
-            float3 cachedIncident = terminatePathWithSurfels(payload.hitPosition,
-                                                             payload.hitNormal,
-                                                             push.maxSurfelSamplesPerQuery,
-                                                             push.maxSurfels,
-                                                             push.cellSize,
-                                                             push.cellDimension,
-                                                             ubo.cameraPos.xyz,
-                                                             surfelBuffer,
-                                                             cellInfoBuffer,
-                                                             cellToSurfelBuffer);
-            reflected += (1.0 - payload.metallic) * payload.baseColor / PI * cachedIncident;
+            float3 cachedIncident;
+            bool cacheHit = sampleSurfelIrradianceCell(payload.hitPosition,
+                                                       payload.hitNormal,
+                                                       push.maxSurfelSamplesPerQuery,
+                                                       seed,
+                                                       push.maxSurfels,
+                                                       push.cellSize,
+                                                       push.cellDimension,
+                                                       ubo.cameraPos.xyz,
+                                                       surfelBuffer,
+                                                       cellInfoBuffer,
+                                                       cellToSurfelBuffer,
+                                                       cachedIncident);
+            if (cacheHit) {
+                float diffuseNormalization = push.useOriginalStyleGiNormalization != 0u ? 1.0 : (1.0 / PI);
+                reflected += (1.0 - payload.metallic) * payload.baseColor *
+                             diffuseNormalization * cachedIncident;
+            }
         }
     }
     float3 radiance = reflected;

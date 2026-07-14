@@ -2093,6 +2093,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                          surfelSettings.enableSurfelPlacement,
 		                                          surfelSettings.enableSurfelRemoval,
 		                                          surfelSettings.maxSurfelSamplesPerQuery,
+		                                          surfelPathTracerResources.perCellSurfelLimitCapacity(),
 		                                          swapchain.extent);
 		writeSurfelTimestamp(kSurfelTS_GenerateEnd);
 		writeSurfelTimestamp(kSurfelTS_UpdateStart);
@@ -2157,6 +2158,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                                surfelSettings.activeMaxDepth,
 		                                                surfelSettings.sleepingMaxDepth,
 		                                                surfelSettings.enableSurfelTermination,
+		                                                surfelSettings.useOriginalStyleGiNormalization,
 		                                                surfelSettings.maxSurfelSamplesPerQuery,
 		                                                surfelSettings.cellSize,
 		                                                surfelPathTracerResources.cellDimensionCapacity());
@@ -2213,6 +2215,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                          false,
 	                                          false,
 	                                          surfelSettings.maxSurfelSamplesPerQuery,
+	                                          surfelPathTracerResources.perCellSurfelLimitCapacity(),
 	                                          swapchain.extent);
 	writeSurfelTimestamp(kSurfelTS_EvaluateEnd);
 
@@ -2230,6 +2233,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                            swapchain.extent,
 	                                            fi,
 	                                            surfelSettings.enableSurfelTermination,
+	                                            surfelSettings.useOriginalStyleGiNormalization,
 	                                            surfelSettings.maxSurfelSamplesPerQuery);
 	writeSurfelTimestamp(kSurfelTS_ReflectionEnd);
 	writeSurfelTimestamp(kSurfelTS_PostProcessStart);
@@ -2300,6 +2304,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                                surfelSettings.enableDiffuseGi,
 	                                                surfelSettings.enableReflections,
 	                                                useBilateralReflection,
+	                                                surfelSettings.useOriginalStyleGiNormalization,
 	                                                surfelSettings.cellSize,
 	                                                surfelSettings.surfelMaxRadiusScale,
 	                                                surfelPathTracerResources.cellDimensionCapacity(),

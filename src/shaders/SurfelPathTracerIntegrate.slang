@@ -54,45 +54,6 @@ void writeAtlas(uint surfelIndex, float3 localDirection, float3 radiance, float 
     surfelDepthAtlas[coord] = depth;
 }
 
-float3 terminatePathWithSurfels(float3 position,
-                                float3 normal,
-                                uint maxSamples,
-                                uint maxSurfels,
-                                float cellSize,
-                                uint cellDimension,
-                                float3 cameraPosition)
-{
-    uint cellIndex = cameraRelativeCellIndexForPosition(position, cameraPosition, cellSize, cellDimension);
-    uint cellCount = cellDimension * cellDimension * cellDimension;
-    if (cellIndex == SURFEL_PT_INVALID_INDEX || cellIndex >= cellCount) {
-        return float3(0.0);
-    }
-
-    SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
-    uint count = min(cellInfo.surfelCount, maxSamples);
-    float3 sum = float3(0.0);
-    float weightSum = 0.0;
-    for (uint i = 0u; i < count; ++i) {
-        uint surfelIndex = cellToSurfelBuffer[cellInfo.surfelOffset + i];
-        if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= maxSurfels) {
-            continue;
-        }
-
-        SurfelPathTracerSurfel surfel = surfelBuffer[surfelIndex];
-        if (!isActiveSurfel(surfel)) {
-            continue;
-        }
-
-        float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
-        float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(surfel.radius, 1e-4));
-        float normalWeight = saturate(dot(normal, surfelNormal));
-        float weight = distanceWeight * normalWeight;
-        sum += surfel.radiance * weight;
-        weightSum += weight;
-    }
-    return weightSum > 1e-5 ? sum / weightSum : float3(0.0);
-}
-
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
@@ -153,14 +114,20 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float invSampleCount = 1.0 / float(sampleCount);
     float3 sampleRadiance = clampLuminance(accumulatedRadiance * invSampleCount, SURFEL_PT_MAX_RADIANCE_LUMINANCE);
     if (push.enableRadianceSharing != 0u) {
-        float3 shared = terminatePathWithSurfels(surfel.position,
-                                                 unpackNormalOctahedral(surfel.packedNormal),
-                                                 push.maxRadianceSharingSamples,
-                                                 push.maxSurfels,
-                                                 push.cellSize,
-                                                 push.cellDimension,
-                                                 ubo.cameraPos.xyz);
-        if (luminance(shared) > 1e-5) {
+        float3 shared;
+        bool cacheHit = sampleSurfelIrradianceCell(surfel.position,
+                                                   unpackNormalOctahedral(surfel.packedNormal),
+                                                   push.maxRadianceSharingSamples,
+                                                   surfelIndex ^ counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET),
+                                                   push.maxSurfels,
+                                                   push.cellSize,
+                                                   push.cellDimension,
+                                                   ubo.cameraPos.xyz,
+                                                   surfelBuffer,
+                                                   cellInfoBuffer,
+                                                   cellToSurfelBuffer,
+                                                   shared);
+        if (cacheHit && luminance(shared) > 1e-5) {
             sampleRadiance = lerp(sampleRadiance, shared, 0.25);
         }
     }

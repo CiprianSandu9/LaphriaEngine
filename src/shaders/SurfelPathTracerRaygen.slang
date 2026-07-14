@@ -11,6 +11,7 @@ struct SurfelRayTracePushConstants {
     uint maxSurfelSamplesPerQuery;
     uint cellDimension;
     float cellSize;
+    uint useOriginalStyleGiNormalization;
 };
 
 [[vk::push_constant]] SurfelRayTracePushConstants push;
@@ -236,52 +237,10 @@ float3 evaluateShadowedDirectLighting(float3 viewDir,
     return (diffuse + specular) * directSun * SUN_RADIANCE * sunVisibility;
 }
 
-float3 terminatePathWithSurfels(float3 position,
-                                float3 normal,
-                                uint maxSamples,
-                                uint maxSurfels,
-                                float cellSize,
-                                uint cellDimension,
-                                float3 cameraPosition,
-                                RWStructuredBuffer<SurfelPathTracerSurfel> surfels,
-                                RWStructuredBuffer<SurfelPathTracerCellInfo> cells,
-                                RWStructuredBuffer<uint> cellToSurfels)
-{
-    uint cellIndex = cameraRelativeCellIndexForPosition(position, cameraPosition, cellSize, cellDimension);
-    if (cellIndex == SURFEL_PT_INVALID_INDEX)
-    {
-        return float3(0.0);
-    }
-
-    SurfelPathTracerCellInfo cellInfo = cells[cellIndex];
-    uint count = min(cellInfo.surfelCount, maxSamples);
-    float3 sum = float3(0.0);
-    float weightSum = 0.0;
-    for (uint i = 0u; i < count; ++i)
-    {
-        uint surfelIndex = cellToSurfels[cellInfo.surfelOffset + i];
-        if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= maxSurfels)
-        {
-            continue;
-        }
-
-        SurfelPathTracerSurfel surfel = surfels[surfelIndex];
-        if (!isActiveSurfel(surfel))
-        {
-            continue;
-        }
-
-        float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
-        float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(surfel.radius, 1e-4));
-        float normalWeight = saturate(dot(normal, surfelNormal));
-        float weight = distanceWeight * normalWeight;
-        sum += surfel.radiance * weight;
-        weightSum += weight;
-    }
-    return weightSum > 1e-5 ? sum / weightSum : float3(0.0);
-}
-
-float3 traceSurfelPath(RayDesc initialRay, uint maxDepth, uint surfelIndex, uint seed, out float firstHitT)
+float3 traceSurfelPath(RayDesc initialRay,
+                       uint maxDepth,
+                       uint seed,
+                       out float firstHitT)
 {
     float3 throughput = float3(1.0);
     float3 radiance = float3(0.0);
@@ -317,19 +276,32 @@ float3 traceSurfelPath(RayDesc initialRay, uint maxDepth, uint surfelIndex, uint
 
         if (push.enableSurfelTermination != 0u && depth + 1u >= maxDepth)
         {
-            float3 cachedIncident = terminatePathWithSurfels(payload.hitPosition,
-                                                             payload.hitNormal,
-                                                             push.maxSurfelSamplesPerQuery,
-                                                             push.maxSurfels,
-                                                             push.cellSize,
-                                                             push.cellDimension,
-                                                             ubo.cameraPos.xyz,
-                                                             surfelBuffer,
-                                                             cellInfoBuffer,
-                                                             cellToSurfelBuffer);
-            float3 diffuseBrdf = (1.0 - payload.metallic) * payload.baseColor / PI;
-            radiance += throughput * diffuseBrdf * cachedIncident;
-            counters.InterlockedAdd(SURFEL_PT_COUNTER_SURFEL_TERMINATED_PATHS_OFFSET, 1u);
+            counters.InterlockedAdd(SURFEL_PT_COUNTER_SURFEL_TERMINATION_ATTEMPTS_OFFSET, 1u);
+            float3 cachedIncident;
+            bool cacheHit = sampleSurfelIrradianceCell(payload.hitPosition,
+                                                       payload.hitNormal,
+                                                       push.maxSurfelSamplesPerQuery,
+                                                       seed ^ (depth * 747796405u),
+                                                       push.maxSurfels,
+                                                       push.cellSize,
+                                                       push.cellDimension,
+                                                       ubo.cameraPos.xyz,
+                                                       surfelBuffer,
+                                                       cellInfoBuffer,
+                                                       cellToSurfelBuffer,
+                                                       cachedIncident);
+            if (cacheHit)
+            {
+                float diffuseNormalization = push.useOriginalStyleGiNormalization != 0u ? 1.0 : (1.0 / PI);
+                float3 diffuseBrdf = (1.0 - payload.metallic) * payload.baseColor * diffuseNormalization;
+                radiance += throughput * diffuseBrdf * cachedIncident;
+                counters.InterlockedAdd(SURFEL_PT_COUNTER_SURFEL_TERMINATION_HITS_OFFSET, 1u);
+                break;
+            }
+        }
+
+        if (depth + 1u >= maxDepth)
+        {
             break;
         }
 
@@ -453,8 +425,13 @@ void main() {
     ray.TMin = SURFEL_PT_RAY_BIAS;
     ray.TMax = 10000.0;
 
-    uint maxDepth = surfel.sleepState == SURFEL_PT_SLEEP_SLEEPING ? push.sleepingMaxDepth : push.activeMaxDepth;
+    uint maxDepth = max(surfel.sleepState == SURFEL_PT_SLEEP_SLEEPING ?
+                            push.sleepingMaxDepth : push.activeMaxDepth,
+                        1u);
     float firstHitT;
-    float3 clampedRadiance = traceSurfelPath(ray, max(maxDepth, 1u), surfelIndex, seed, firstHitT);
+    float3 clampedRadiance = traceSurfelPath(ray,
+                                             maxDepth,
+                                             seed,
+                                             firstHitT);
     storeRayRecord(rayIndex, surfelIndex, clampedRadiance, max(pdf, 1e-5), firstHitT, localRayDir);
 }

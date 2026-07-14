@@ -276,7 +276,8 @@ UISystem::SurfelPathTracerStats SurfelPathTracerResources::readStats(uint32_t fr
 	stats.removedSurfels = counters->removedSurfels;
 	stats.guidedRays = counters->guidedRays;
 	stats.cosineRays = counters->cosineRays;
-	stats.surfelTerminatedPaths = counters->surfelTerminatedPaths;
+	stats.surfelTerminationAttempts = counters->surfelTerminationAttempts;
+	stats.surfelTerminationHits = counters->surfelTerminationHits;
 	stats.pathMisses = counters->pathMisses;
 	return stats;
 }

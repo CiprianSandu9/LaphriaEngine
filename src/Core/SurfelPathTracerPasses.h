@@ -86,6 +86,7 @@ class SurfelPathTracerPasses
 	                              uint32_t activeMaxDepth,
 	                              uint32_t sleepingMaxDepth,
 	                              bool enableSurfelTermination,
+	                              bool useOriginalStyleGiNormalization,
 	                              uint32_t maxSurfelSamplesPerQuery,
 	                              float cellSize,
 	                              uint32_t cellDimension) const;
@@ -118,6 +119,7 @@ class SurfelPathTracerPasses
 	                        bool enableSurfelPlacement,
 	                        bool enableSurfelRemoval,
 	                        uint32_t maxSurfelSamplesPerQuery,
+	                        uint32_t perCellSurfelLimit,
 	                        vk::Extent2D extent) const;
 
 	void recordReflectionPass(const vk::raii::CommandBuffer &commandBuffer,
@@ -132,6 +134,7 @@ class SurfelPathTracerPasses
 	                          vk::Extent2D extent,
 	                          uint32_t frameIndex,
 	                          bool enableSurfelTermination,
+	                          bool useOriginalStyleGiNormalization,
 	                          uint32_t maxSurfelSamplesPerQuery) const;
 
 	void recordReferencePass(const vk::raii::CommandBuffer &commandBuffer,
@@ -164,6 +167,7 @@ class SurfelPathTracerPasses
 	                              bool enableDiffuseGi,
 	                              bool enableReflections,
 	                              bool useBilateralReflection,
+	                              bool useOriginalStyleGiNormalization,
 	                              float cellSize,
 	                              float surfelMaxRadiusScale,
 	                              uint32_t cellDimension,

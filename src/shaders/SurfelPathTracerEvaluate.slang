@@ -31,7 +31,7 @@ struct EvaluatePushConstants {
     uint enablePlacement;
     uint enableRemoval;
     uint maxSurfelSamplesPerQuery;
-    uint pad0;
+    uint perCellSurfelLimit;
     uint pad1;
 };
 
@@ -113,10 +113,10 @@ float estimateCoverage(float3 position, float3 normal, out uint closestSurfelInd
         }
     }
     if (stampClosest && closestSurfelIndex != SURFEL_PT_INVALID_INDEX) {
-        SurfelPathTracerSurfel surfel = surfelBuffer[closestSurfelIndex];
-        surfel.lastReferencedFrame = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
-        surfel.lastSeenFrame = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
-        surfelBuffer[closestSurfelIndex] = surfel;
+        uint previousReferenceFrame = 0u;
+        InterlockedMax(surfelBuffer[closestSurfelIndex].lastReferencedFrame,
+                       counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET),
+                       previousReferenceFrame);
     }
     return coverage;
 }
@@ -312,8 +312,16 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     if (push.mode == SURFEL_PT_EVALUATE_GENERATE) {
         float coverage = estimateCoverage(position, normal, closestSurfelIndex, false);
+        uint centerCellIndex = cameraRelativeCellIndexForPosition(position,
+                                                                  ubo.cameraPos.xyz,
+                                                                  push.cellSize,
+                                                                  push.cellDimension);
+        bool cellHasCapacity = centerCellIndex != SURFEL_PT_INVALID_INDEX &&
+                               cellInfoBuffer[centerCellIndex].surfelCount <
+                                   max(push.perCellSurfelLimit, 1u);
         bool wantsPlacement = push.lockSurfels == 0u &&
                               push.enablePlacement != 0u &&
+                              cellHasCapacity &&
                               coverage < push.placementThreshold;
         // Thousands of uncovered pixels used to compute seed radiance and then
         // spin on the same dead-list CAS, although only a small fraction could

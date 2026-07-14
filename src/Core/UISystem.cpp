@@ -1150,8 +1150,13 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         ImGui::Checkbox("Reflection Filter", &settings.enableReflectionFilter);
         ImGui::Checkbox("Bilateral Cleanup", &settings.enableBilateralCleanup);
         ImGui::Checkbox("TAA", &settings.enableTaa);
-        ImGui::Checkbox("Guided Sampling", &settings.enableGuidedSampling);
+        if (ImGui::Checkbox("Guided Sampling", &settings.enableGuidedSampling)) {
+            settings.resetSurfels = true;
+        }
         ImGui::Checkbox("Surfel Termination", &settings.enableSurfelTermination);
+        if (ImGui::Checkbox("Original-Style GI Normalization", &settings.useOriginalStyleGiNormalization)) {
+            settings.resetSurfels = true;
+        }
         ImGui::Checkbox("Radiance Sharing", &settings.enableRadianceSharing);
         ImGui::Checkbox("Surfel Placement", &settings.enableSurfelPlacement);
         ImGui::Checkbox("Surfel Removal", &settings.enableSurfelRemoval);
@@ -1219,12 +1224,14 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
             "Reference Difference",
             "GBuffer Albedo",
             "Diffuse GI",
-            "Sun Visibility"};
+            "Sun Visibility",
+            "Ambient Occlusion",
+            "Diffuse GI Before AO"};
         int debugView = static_cast<int>(settings.debugView);
         ImGui::Combo("Debug View", &debugView, debugViews, IM_ARRAYSIZE(debugViews));
         debugView = std::clamp(debugView,
                                static_cast<int>(SurfelPathTracerDebugView::FinalColor),
-                               static_cast<int>(SurfelPathTracerDebugView::SunVisibility));
+                               static_cast<int>(SurfelPathTracerDebugView::DiffuseGiBeforeAo));
         settings.debugView = static_cast<SurfelPathTracerDebugView>(debugView);
         ImGui::Text("Surfels: %u alive / %u dead / %u dirty",
                     surfelPathTracerStats.aliveSurfels,
@@ -1241,7 +1248,13 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         ImGui::Text("Removed Surfels: %u", surfelPathTracerStats.removedSurfels);
         ImGui::Text("Guided Rays: %u", surfelPathTracerStats.guidedRays);
         ImGui::Text("Cosine Rays: %u", surfelPathTracerStats.cosineRays);
-        ImGui::Text("Surfel-Terminated Paths: %u", surfelPathTracerStats.surfelTerminatedPaths);
+        const uint32_t unsupportedTerminations =
+            surfelPathTracerStats.surfelTerminationAttempts >= surfelPathTracerStats.surfelTerminationHits
+                ? surfelPathTracerStats.surfelTerminationAttempts - surfelPathTracerStats.surfelTerminationHits
+                : 0u;
+        ImGui::Text("Termination Attempts: %u", surfelPathTracerStats.surfelTerminationAttempts);
+        ImGui::Text("Termination Cache Hits: %u", surfelPathTracerStats.surfelTerminationHits);
+        ImGui::Text("Unsupported Terminations: %u", unsupportedTerminations);
         ImGui::Text("Path Misses: %u", surfelPathTracerStats.pathMisses);
         ImGui::SeparatorText("GPU timings");
         ImGui::Text("GBuffer: %.3f ms | Cache update: %.3f ms",

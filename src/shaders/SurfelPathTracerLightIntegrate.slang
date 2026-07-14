@@ -28,6 +28,7 @@ struct LightIntegratePushConstants {
     float surfelMaxRadiusScale;
     uint cellDimension;
     uint perCellSurfelLimit;
+    uint useOriginalStyleGiNormalization;
 };
 
 [[vk::push_constant]] LightIntegratePushConstants push;
@@ -47,6 +48,8 @@ static const uint SURFEL_DEBUG_REFERENCE_DIFFERENCE = 12u;
 static const uint SURFEL_DEBUG_GBUFFER_ALBEDO = 13u;
 static const uint SURFEL_DEBUG_DIFFUSE_GI = 14u;
 static const uint SURFEL_DEBUG_SUN_VISIBILITY = 15u;
+static const uint SURFEL_DEBUG_AMBIENT_OCCLUSION = 16u;
+static const uint SURFEL_DEBUG_DIFFUSE_GI_BEFORE_AO = 17u;
 static const float SURFEL_PT_DIFFUSE_GI_SCALE = 1.00;
 
 float3 primaryRayDirection(uint2 pixel) {
@@ -197,10 +200,12 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 emissive = max(gBufferEmissive[pixel].rgb, float3(0.0));
     float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0));
     float surfelCoverage = max(outputImage[pixel].a, 0.0);
-    float3 diffuseBsdf = albedo / PI;
-    float3 diffuseGi = push.enableDiffuseGi != 0u
-                       ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE * ao
-                       : float3(0.0);
+    float diffuseNormalization = push.useOriginalStyleGiNormalization != 0u ? 1.0 : (1.0 / PI);
+    float3 diffuseBsdf = albedo * diffuseNormalization;
+    float3 diffuseGiBeforeAo = push.enableDiffuseGi != 0u
+                               ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE
+                               : float3(0.0);
+    float3 diffuseGi = diffuseGiBeforeAo * ao;
     float sunVisibility = saturate(gBufferNormal[pixel].w);
     float3 worldPosition = reconstructWorldPosition(pixel, depth);
     float3 viewDir = normalize(ubo.cameraPos.xyz - worldPosition);
@@ -260,6 +265,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
         lightingImages[pixel] = float4(diffuseGi, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_SUN_VISIBILITY) {
         lightingImages[pixel] = float4(sunVisibility.xxx, 1.0);
+    } else if (push.debugView == SURFEL_DEBUG_AMBIENT_OCCLUSION) {
+        lightingImages[pixel] = float4(ao.xxx, 1.0);
+    } else if (push.debugView == SURFEL_DEBUG_DIFFUSE_GI_BEFORE_AO) {
+        lightingImages[pixel] = float4(diffuseGiBeforeAo, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_CELL_OCCUPANCY) {
         float3 occupancyColor = cellOccupancyDebugColor(worldPosition);
         lightingImages[pixel] = float4(occupancyColor, 1.0);

@@ -30,8 +30,9 @@ static const uint SURFEL_PT_COUNTER_SPAWNED_SURFELS_OFFSET = 36u;
 static const uint SURFEL_PT_COUNTER_REMOVED_SURFELS_OFFSET = 40u;
 static const uint SURFEL_PT_COUNTER_GUIDED_RAYS_OFFSET = 44u;
 static const uint SURFEL_PT_COUNTER_COSINE_RAYS_OFFSET = 48u;
-static const uint SURFEL_PT_COUNTER_SURFEL_TERMINATED_PATHS_OFFSET = 52u;
+static const uint SURFEL_PT_COUNTER_SURFEL_TERMINATION_ATTEMPTS_OFFSET = 52u;
 static const uint SURFEL_PT_COUNTER_PATH_MISSES_OFFSET = 56u;
+static const uint SURFEL_PT_COUNTER_SURFEL_TERMINATION_HITS_OFFSET = 60u;
 static const uint SURFEL_PT_INDIRECT_RAY_WIDTH_OFFSET = 64u;
 static const uint SURFEL_PT_INDIRECT_RAY_HEIGHT_OFFSET = 68u;
 static const uint SURFEL_PT_INDIRECT_RAY_DEPTH_OFFSET = 72u;
@@ -123,9 +124,9 @@ struct SurfelPathTracerCounters {
     uint removedSurfels;
     uint guidedRays;
     uint cosineRays;
-    uint surfelTerminatedPaths;
+    uint surfelTerminationAttempts;
     uint pathMisses;
-    uint pad1;
+    uint surfelTerminationHits;
     uint indirectRayWidth;
     uint indirectRayHeight;
     uint indirectRayDepth;
@@ -343,10 +344,12 @@ bool shouldRecycleSurfel(SurfelPathTracerSurfel surfel, uint frameIndex, float d
 
     uint ageSinceSeen = frameIndex >= surfel.lastSeenFrame ? frameIndex - surfel.lastSeenFrame : 0u;
     uint ageSinceRef = frameIndex >= surfel.lastReferencedFrame ? frameIndex - surfel.lastReferencedFrame : 0u;
-    bool stale = ageSinceSeen > 240u && ageSinceRef > 120u;
-    bool distant = distanceToCamera > 160.0;
     bool pressure = aliveRatio > 0.85;
-    return stale && (distant || pressure);
+    uint representationGraceFrames = pressure ? 120u : 240u;
+    bool unrepresented = ageSinceSeen > representationGraceFrames;
+    bool distant = distanceToCamera > 160.0;
+    bool distantAndUnused = distant && ageSinceSeen > 30u && ageSinceRef > 30u;
+    return unrepresented || distantAndUnused;
 }
 
 uint adaptiveRayCountForSurfel(SurfelPathTracerSurfel surfel,
@@ -386,6 +389,73 @@ float3 clampLuminance(float3 radiance, float maxLuminance) {
         return max(radiance, float3(0.0, 0.0, 0.0));
     }
     return max(radiance, float3(0.0, 0.0, 0.0)) * (safeMax / luma);
+}
+
+bool sampleSurfelIrradianceCell(float3 position,
+                               float3 normal,
+                               uint maxSamples,
+                               uint sampleSeed,
+                               uint maxSurfels,
+                               float cellSize,
+                               uint cellDimension,
+                               float3 cameraPosition,
+                               RWStructuredBuffer<SurfelPathTracerSurfel> surfels,
+                               RWStructuredBuffer<SurfelPathTracerCellInfo> cells,
+                               RWStructuredBuffer<uint> cellToSurfels,
+                               out float3 irradiance)
+{
+    irradiance = float3(0.0);
+    uint dim = max(cellDimension, 1u);
+    int3 cellCoord = cameraRelativeCellCoord(position, cameraPosition, cellSize);
+    if (!isCellCoordValid(cellCoord, dim))
+    {
+        return false;
+    }
+
+    uint cellIndex = flattenCameraRelativeCellCoord(cellCoord, dim);
+    SurfelPathTracerCellInfo cellInfo = cells[cellIndex];
+    uint slotCount = cellInfo.surfelCount;
+    if (slotCount == 0u)
+    {
+        return false;
+    }
+
+    float3 weightedRadiance = float3(0.0);
+    float weightSum = 0.0;
+    uint sampleCount = min(slotCount, max(maxSamples, 1u));
+    uint startSlot = pcgHash(sampleSeed) % slotCount;
+    for (uint sampleIndex = 0u; sampleIndex < sampleCount; ++sampleIndex)
+    {
+        uint slot = (startSlot + sampleIndex) % slotCount;
+        uint surfelIndex = cellToSurfels[cellInfo.surfelOffset + slot];
+        if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= maxSurfels)
+        {
+            continue;
+        }
+
+        SurfelPathTracerSurfel surfel = surfels[surfelIndex];
+        if (!isActiveSurfel(surfel))
+        {
+            continue;
+        }
+
+        float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
+        float normalWeight = saturate(dot(normal, surfelNormal));
+        float distanceWeight = saturate(1.0 - length(position - surfel.position) /
+                                             max(surfel.radius, 0.0001));
+        float weight = normalWeight * distanceWeight;
+        weightedRadiance += clampLuminance(surfel.radiance,
+                                           SURFEL_PT_MAX_RADIANCE_LUMINANCE) * weight;
+        weightSum += weight;
+    }
+
+    if (weightSum <= 0.0001)
+    {
+        return false;
+    }
+
+    irradiance = weightedRadiance / weightSum;
+    return true;
 }
 
 float ggxPdf(float3 L, float3 N, float3 V, float roughness)

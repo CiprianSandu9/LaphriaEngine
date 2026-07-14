@@ -46,10 +46,12 @@ public:
         ReferenceDifference = 12,
         GBufferAlbedo = 13,
         DiffuseGi = 14,
-        SunVisibility = 15
+        SunVisibility = 15,
+        AmbientOcclusion = 16,
+        DiffuseGiBeforeAo = 17
     };
     static constexpr SurfelPathTracerDebugView kMaxSurfelPathTracerDebugView =
-        SurfelPathTracerDebugView::SunVisibility;
+        SurfelPathTracerDebugView::DiffuseGiBeforeAo;
 
     struct PathTracerSettings
     {
@@ -117,11 +119,12 @@ public:
         float surfelTargetArea = 16.0f;
         float surfelMinRadius = 0.05f;
         float surfelMaxRadiusScale = 2.0f;
-        uint32_t maxSurfelSamplesPerQuery = 32;
+        uint32_t maxSurfelSamplesPerQuery = 64;
         uint32_t maxRadianceSharingSamples = 32;
         uint32_t atlasTileSize = 6;
-        bool enableGuidedSampling = true;
+        bool enableGuidedSampling = false;
         bool enableSurfelTermination = true;
+        bool useOriginalStyleGiNormalization = true;
         bool enableRadianceSharing = true;
         bool enableSurfelPlacement = true;
         bool enableSurfelRemoval = true;
@@ -143,7 +146,8 @@ public:
         uint32_t removedSurfels = 0;
         uint32_t guidedRays = 0;
         uint32_t cosineRays = 0;
-        uint32_t surfelTerminatedPaths = 0;
+        uint32_t surfelTerminationAttempts = 0;
+        uint32_t surfelTerminationHits = 0;
         uint32_t pathMisses = 0;
         float gBufferMs = 0.0f;
         float cacheUpdateMs = 0.0f;

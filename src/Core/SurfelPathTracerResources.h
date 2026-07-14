@@ -121,9 +121,9 @@ struct SurfelPathTracerCounters
 	uint32_t removedSurfels = 0;
 	uint32_t guidedRays = 0;
 	uint32_t cosineRays = 0;
-	uint32_t surfelTerminatedPaths = 0;
+	uint32_t surfelTerminationAttempts = 0;
 	uint32_t pathMisses = 0;
-	uint32_t pad1 = 0;
+	uint32_t surfelTerminationHits = 0;
 	uint32_t indirectRayWidth = 0;
 	uint32_t indirectRayHeight = 1;
 	uint32_t indirectRayDepth = 1;

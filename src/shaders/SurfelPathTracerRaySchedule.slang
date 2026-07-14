@@ -50,6 +50,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
         }
 
         uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
+        // This pass has uniquely claimed a surfel that survived compact-map
+        // selection. Track representation here instead of relying on one
+        // arbitrary resolve pixel to mark the surfel as seen.
+        surfel.lastSeenFrame = frameIndex;
         uint rayRequestCount = adaptiveRayCountForSurfel(surfel,
                                                          push.minRaysPerSurfel,
                                                          push.maxRaysPerSurfel,
