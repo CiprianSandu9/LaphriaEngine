@@ -163,7 +163,8 @@ class SurfelPathTracerResources
 	    const UISystem::SurfelPathTracerSettings &settings) const;
 	[[nodiscard]] bool needsPersistentReset() const { return needsPersistentReset_; }
 	void markPersistentResetConsumed() { needsPersistentReset_ = false; }
-	[[nodiscard]] UISystem::SurfelPathTracerStats readStats() const;
+	void recordStatsReadback(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameIndex) const;
+	[[nodiscard]] UISystem::SurfelPathTracerStats readStats(uint32_t frameIndex) const;
 
 	static SurfelPathTracerCellAddress cellAddressForPosition(const glm::vec3 &position,
 	                                                          float cellSize,
@@ -257,6 +258,9 @@ class SurfelPathTracerResources
 	bool needsPersistentReset_ = true;
 	uint32_t cellCount_ = 0;
 	UISystem::SurfelPathTracerSettings settings_{};
+	std::array<VmaBuffer, MAX_FRAMES_IN_FLIGHT> statsReadbackBuffers_;
+	std::array<void *, MAX_FRAMES_IN_FLIGHT> statsReadbackMapped_{};
+	mutable std::array<bool, MAX_FRAMES_IN_FLIGHT> statsReadbackValid_{};
 };
 } // namespace Laphria
 

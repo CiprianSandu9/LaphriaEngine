@@ -40,6 +40,7 @@ public:
 
 private:
     void createInstance();
+    void createDebugMessenger();
     void createSurface(GLFWwindow *window);
     void pickPhysicalDevice();
     void createLogicalDevice();

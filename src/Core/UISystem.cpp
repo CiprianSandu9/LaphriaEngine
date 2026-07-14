@@ -1015,160 +1015,36 @@ void UISystem::drawPathTracerMainControls() {
     ImGui::SliderFloat("History Reset Motion Threshold", &pathTracerSettings.historyResetMotionThreshold, 0.25f, 10.0f, "%.2f");
 }
 
-void UISystem::drawPathTracerDebugLab() {
-    if (!ImGui::CollapsingHeader("Path Tracer Diagnostics", ImGuiTreeNodeFlags_DefaultOpen)) {
+void UISystem::drawPathTracerAdvancedLightingControls() {
+    if (!ImGui::CollapsingHeader("Advanced Lighting")) {
         return;
     }
 
-    if (ImGui::CollapsingHeader("Core Diagnostics", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::TextUnformatted("Analysis Output");
-        ImGui::Checkbox("Enable Analysis Mode", &pathTracerAnalysisSettings.enableAnalysisMode);
-        const char *debugAovs[] = {
-            "Final Color",
-            "Reprojection Validity",
-            "History Alpha",
-            "Motion Magnitude",
-            "Temporal Variance",
-            "A-Trous Iteration",
-            "Raw Final Color",
-            "Direct Lighting",
-            "Indirect Lighting",
-            "Sky Contribution",
-            "Throughput",
-            "Bounce Count",
-            "Shadow Visibility",
-            "Environment NEE Contribution",
-            "First-Hit Bounce Contribution",
-            "Secondary Direct Sun Contribution",
-            "Baseline Continuation Contribution"};
-        int debugAovIdx = static_cast<int>(pathTracerAnalysisSettings.debugAov);
-        withDisabledControl(!pathTracerAnalysisSettings.enableAnalysisMode,
-                            "Debug AOV requires analysis mode",
-                            [&]() {
-                                if (ImGui::Combo("Debug AOV", &debugAovIdx, debugAovs, IM_ARRAYSIZE(debugAovs))) {
-                                    pathTracerAnalysisSettings.debugAov = static_cast<PathTracerDebugAov>(debugAovIdx);
-                                }
-                            });
+    ImGui::Checkbox("Environment NEE", &pathTracerSettings.enableEnvironmentNEE);
+    ImGui::Checkbox("Black Environment", &pathTracerSettings.blackEnvironment);
 
-        const bool canSelectAtrousIteration =
-            pathTracerAnalysisSettings.enableAnalysisMode &&
-            pathTracerAnalysisSettings.debugAov == PathTracerDebugAov::AtrousIteration &&
-            pathTracerSettings.enableDenoiser &&
-            pathTracerSettings.denoiserIterations > 1;
-        withDisabledControl(!canSelectAtrousIteration,
-                            "A-Trous iteration is only selectable when analysis mode, the A-Trous debug AOV, and multiple denoiser iterations are active",
-                            [&]() {
-                                ImGui::SliderInt("Debug A-Trous Iteration", &pathTracerAnalysisSettings.debugAtrousIteration, 0, 4);
-                            });
+    const char *envNeeBounceModes[] = {"First Only", "First Two", "All Bounces"};
+    withDisabledControl(!pathTracerSettings.enableEnvironmentNEE,
+                        "Environment NEE bounces only apply when Environment NEE is enabled",
+                        [&]() {
+                            ImGui::Combo("Env NEE Bounces", &pathTracerSettings.environmentNeeBounceMode,
+                                         envNeeBounceModes, IM_ARRAYSIZE(envNeeBounceModes));
+                        });
+    pathTracerSettings.environmentNeeBounceMode = std::clamp(pathTracerSettings.environmentNeeBounceMode, 0, 2);
 
-        ImGui::Separator();
-        ImGui::TextUnformatted("Environment Lighting");
-        ImGui::Checkbox("Environment NEE", &pathTracerSettings.enableEnvironmentNEE);
-        ImGui::Checkbox("Black Environment", &pathTracerSettings.blackEnvironment);
-
-        const char *envNeeBounceModes[] = {"First Only", "First Two", "All Bounces"};
-        withDisabledControl(!pathTracerSettings.enableEnvironmentNEE,
-                            "Environment NEE bounces only apply when Environment NEE is enabled",
-                            [&]() {
-                                ImGui::Combo("Env NEE Bounces", &pathTracerSettings.environmentNeeBounceMode,
-                                             envNeeBounceModes, IM_ARRAYSIZE(envNeeBounceModes));
-                            });
-        pathTracerSettings.environmentNeeBounceMode = std::clamp(pathTracerSettings.environmentNeeBounceMode, 0, 2);
-
-        const char *envNeeSamplingModes[] = {"Cosine Hemisphere", "Sky Biased"};
-        int envNeeSamplingMode = static_cast<int>(pathTracerSettings.environmentNeeSamplingMode);
-        withDisabledControl(!pathTracerSettings.enableEnvironmentNEE,
-                            "Environment NEE sampling only applies when Environment NEE is enabled",
-                            [&]() {
-                                if (ImGui::Combo("Env NEE Sampling", &envNeeSamplingMode, envNeeSamplingModes, IM_ARRAYSIZE(envNeeSamplingModes))) {
-                                    pathTracerSettings.environmentNeeSamplingMode = static_cast<EnvironmentNeeSamplingMode>(envNeeSamplingMode);
-                                }
-                            });
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("First-Hit Probe Experiment");
-        ImGui::Checkbox("Apply First-Hit Probes", &pathTracerSettings.applyFirstHitProbesToFinal);
-        ImGui::SliderInt("First-Hit Diffuse Samples", &pathTracerSettings.firstHitDiffuseSamples, 1, 8);
-
-        const char *firstHitProbeSamplingModes[] = {
-            "Cosine Hemisphere",
-            "Naive Sun Guide",
-            "Candidate Sun Bounce",
-            "Candidate Average Reference",
-            "Candidate RIS"};
-        int firstHitProbeSamplingMode = static_cast<int>(pathTracerSettings.firstHitProbeSamplingMode);
-        const bool hasFirstHitProbeSamples = pathTracerSettings.firstHitDiffuseSamples > 1;
-        withDisabledControl(!hasFirstHitProbeSamples,
-                            "First-hit probe sampling only applies when First-Hit Diffuse Samples is greater than 1",
-                            [&]() {
-                                if (ImGui::Combo("First-Hit Probe Sampling", &firstHitProbeSamplingMode,
-                                                 firstHitProbeSamplingModes, IM_ARRAYSIZE(firstHitProbeSamplingModes))) {
-                                    pathTracerSettings.firstHitProbeSamplingMode =
-                                        static_cast<FirstHitProbeSamplingMode>(firstHitProbeSamplingMode);
-                                }
-                            });
-
-        const bool usesCandidateProbeMode =
-            pathTracerSettings.firstHitProbeSamplingMode == FirstHitProbeSamplingMode::CandidateSunBounce ||
-            pathTracerSettings.firstHitProbeSamplingMode == FirstHitProbeSamplingMode::CandidateAverageReference ||
-            pathTracerSettings.firstHitProbeSamplingMode == FirstHitProbeSamplingMode::CandidateRis;
-        withDisabledControl(!hasFirstHitProbeSamples || !usesCandidateProbeMode,
-                            "Candidate count only applies to candidate probe sampling modes",
-                            [&]() {
-                                ImGui::SliderInt("First-Hit Candidate Count", &pathTracerSettings.firstHitCandidateCount, 2, 16);
-                            });
-    }
-
-}
-
-void UISystem::drawPathTracerBenchmarkControls() {
-    if (!ImGui::CollapsingHeader("Benchmark Automation")) {
-        return;
-    }
-
-    ImGui::Checkbox("Benchmark Active", &pathTracerAnalysisSettings.benchmarkActive);
-    ImGui::Checkbox("Run Baseline Sweep", &pathTracerAnalysisSettings.runBaselineSweep);
-    ImGui::Checkbox("Lock Benchmark Scene", &pathTracerAnalysisSettings.lockBenchmarkScene);
-    ImGui::Checkbox("Run Physical Sanity Checks", &pathTracerAnalysisSettings.runPhysicalSanityChecks);
-    ImGui::Checkbox("Freeze Camera Input During Benchmark", &pathTracerAnalysisSettings.freezeCameraInputDuringBenchmark);
-    ImGui::Checkbox("Adaptive Sampling", &pathTracerAnalysisSettings.adaptiveSampling);
-    ImGui::SliderInt("Warmup Frames", &pathTracerAnalysisSettings.warmupFrames, 30, 600);
-    ImGui::SliderInt("Sample Frames", &pathTracerAnalysisSettings.sampleFrames, 60, 1200);
-    ImGui::SliderInt("Min Sample Frames", &pathTracerAnalysisSettings.minSampleFrames, 60, 600);
-    ImGui::SliderInt("Convergence Window", &pathTracerAnalysisSettings.convergenceWindowFrames, 20, 240);
-    ImGui::SliderFloat("P95 Convergence", &pathTracerAnalysisSettings.p95ConvergenceThreshold, 0.005f, 0.10f, "%.3f");
-    ImGui::SliderFloat("Visual Fidelity Score", &pathTracerAnalysisSettings.benchmarkVisualFidelityScore, 0.0f, 1.0f, "%.2f");
-
-    const char *cameraPaths[] = {"Static", "SlowPan", "FastPan", "Teleport"};
-    int cameraPathIdx = static_cast<int>(pathTracerAnalysisSettings.cameraPath);
-    if (ImGui::Combo("Camera Path", &cameraPathIdx, cameraPaths, IM_ARRAYSIZE(cameraPaths))) {
-        pathTracerAnalysisSettings.cameraPath = static_cast<PathTracerBenchmarkCameraPath>(cameraPathIdx);
-    }
-
-    ImGui::Text("Physical Sanity: %s",
-                pathTracerAnalysisSettings.physicalSanityPassed ? "PASS" :
-                (pathTracerAnalysisSettings.physicalSanityActive ? "RUNNING" : "IDLE"));
-    ImGui::Text("Sanity Drift Metric: %.4f", pathTracerAnalysisSettings.physicalSanityDriftMetric);
-    if (!pathTracerAnalysisSettings.recommendationManual.empty()) {
-        ImGui::Separator();
-        ImGui::TextWrapped("Recommended Manual: %s", pathTracerAnalysisSettings.recommendationManual.c_str());
-        ImGui::TextWrapped("Recommended Auto Balanced: %s", pathTracerAnalysisSettings.recommendationAutoBalanced.c_str());
-        ImGui::TextWrapped("Recommended Auto Aggressive: %s", pathTracerAnalysisSettings.recommendationAutoAggressive.c_str());
-        if (!pathTracerAnalysisSettings.backlogSummary.empty()) {
-            ImGui::TextWrapped("Backlog: %s", pathTracerAnalysisSettings.backlogSummary.c_str());
-        }
-    }
-    if (!pathTracerAnalysisSettings.benchmarkCsvOutputPath.empty()) {
-        ImGui::Separator();
-        ImGui::TextWrapped("Benchmark CSV: %s", pathTracerAnalysisSettings.benchmarkCsvOutputPath.c_str());
-    }
-    if (!pathTracerAnalysisSettings.backlogCsvOutputPath.empty()) {
-        ImGui::TextWrapped("Backlog CSV: %s", pathTracerAnalysisSettings.backlogCsvOutputPath.c_str());
-    }
+    const char *envNeeSamplingModes[] = {"Cosine Hemisphere", "Sky Biased"};
+    int envNeeSamplingMode = static_cast<int>(pathTracerSettings.environmentNeeSamplingMode);
+    withDisabledControl(!pathTracerSettings.enableEnvironmentNEE,
+                        "Environment NEE sampling only applies when Environment NEE is enabled",
+                        [&]() {
+                            if (ImGui::Combo("Env NEE Sampling", &envNeeSamplingMode, envNeeSamplingModes, IM_ARRAYSIZE(envNeeSamplingModes))) {
+                                pathTracerSettings.environmentNeeSamplingMode = static_cast<EnvironmentNeeSamplingMode>(envNeeSamplingMode);
+                            }
+                        });
 }
 
 void UISystem::drawPathTracerStats() {
-    if (!ImGui::CollapsingHeader("Frame Stats", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!ImGui::CollapsingHeader("Performance Stats", ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
     }
 
@@ -1184,13 +1060,6 @@ void UISystem::drawPathTracerStats() {
     ImGui::Text("RayTrace P95: %.3f ms | Denoiser P95: %.3f ms",
                 pathTracerPerfStats.rayTraceP95Ms,
                 pathTracerPerfStats.denoiserP95Ms);
-    ImGui::Text("Analysis Samples: %u", pathTracerPerfStats.analysisSampleCount);
-    ImGui::Text("History Accept/Reject: %.2f%% / %.2f%%",
-                pathTracerPerfStats.historyAcceptanceRatio * 100.0f,
-                pathTracerPerfStats.historyRejectionRatio * 100.0f);
-    ImGui::Text("Sky Hit Ratio: %.2f%% | Firefly Clamp Ratio: %.2f%%",
-                pathTracerPerfStats.skyHitRatio * 100.0f,
-                pathTracerPerfStats.fireflyClampRatio * 100.0f);
     ImGui::Text("Camera Motion Factor: %.3f", pathTracerPerfStats.cameraMotionFactor);
 }
 
@@ -1223,24 +1092,13 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         pathTracerSettings.motionAlphaMin = std::clamp(pathTracerSettings.motionAlphaMin, 0.05f, 0.40f);
         pathTracerSettings.motionAlphaMax = std::clamp(pathTracerSettings.motionAlphaMax, 0.20f, 1.00f);
         pathTracerSettings.historyResetMotionThreshold = std::clamp(pathTracerSettings.historyResetMotionThreshold, 0.25f, 10.0f);
-        pathTracerSettings.firstHitDiffuseSamples = std::clamp(pathTracerSettings.firstHitDiffuseSamples, 1, 8);
-        pathTracerSettings.firstHitCandidateCount = std::clamp(pathTracerSettings.firstHitCandidateCount, 2, 16);
-        pathTracerAnalysisSettings.warmupFrames = std::clamp(pathTracerAnalysisSettings.warmupFrames, 30, 600);
-        pathTracerAnalysisSettings.sampleFrames = std::clamp(pathTracerAnalysisSettings.sampleFrames, 60, 1200);
-        pathTracerAnalysisSettings.minSampleFrames = std::clamp(pathTracerAnalysisSettings.minSampleFrames, 60, pathTracerAnalysisSettings.sampleFrames);
-        pathTracerAnalysisSettings.convergenceWindowFrames = std::clamp(pathTracerAnalysisSettings.convergenceWindowFrames, 20, 240);
-        pathTracerAnalysisSettings.p95ConvergenceThreshold = std::clamp(pathTracerAnalysisSettings.p95ConvergenceThreshold, 0.005f, 0.10f);
-        pathTracerAnalysisSettings.debugAtrousIteration = std::clamp(pathTracerAnalysisSettings.debugAtrousIteration, 0, 4);
-        pathTracerAnalysisSettings.benchmarkVisualFidelityScore = std::clamp(pathTracerAnalysisSettings.benchmarkVisualFidelityScore, 0.0f, 1.0f);
         if (pathTracerSettings.motionAlphaMax < pathTracerSettings.motionAlphaMin) {
             pathTracerSettings.motionAlphaMax = pathTracerSettings.motionAlphaMin;
         }
 
         drawPathTracerMainControls();
         ImGui::Separator();
-        drawPathTracerDebugLab();
-        ImGui::Separator();
-        drawPathTracerBenchmarkControls();
+        drawPathTracerAdvancedLightingControls();
         ImGui::Separator();
         drawPathTracerStats();
     }

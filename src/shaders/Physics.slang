@@ -3,6 +3,8 @@
 // Define the structured buffer
 [[vk::binding(0, 0)]]
 RWStructuredBuffer<PhysicsObject> objects;
+[[vk::binding(1, 0)]]
+RWStructuredBuffer<PhysicsObject> collisionOutputObjects;
 
 struct Constants {
     float deltaTime;
@@ -25,8 +27,11 @@ void physicsMain(uint3 dispatchThreadID : SV_DispatchThreadID) {
 
     PhysicsObject obj = objects[idx];
     
-    // Skip inactive
-    if (obj.active == 0) return;
+    // Keep the collision output deterministic even for inactive entries.
+    if (obj.active == 0) {
+        if (push.stage == 1) collisionOutputObjects[idx] = obj;
+        return;
+    }
     
     // ------------------------------------------------------------------------
     // Stage 0: Integration & Bounds
@@ -207,6 +212,11 @@ void physicsMain(uint3 dispatchThreadID : SV_DispatchThreadID) {
         }
     }
 
-    // Write back
-    objects[idx] = obj;
+    // Collision threads read an immutable integrated snapshot and write to a
+    // separate buffer, avoiding inter-thread read/write races within stage 1.
+    if (push.stage == 0) {
+        objects[idx] = obj;
+    } else {
+        collisionOutputObjects[idx] = obj;
+    }
 }

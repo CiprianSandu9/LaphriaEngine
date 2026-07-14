@@ -9,6 +9,51 @@
 
 using namespace Laphria;
 
+namespace
+{
+VKAPI_ATTR vk::Bool32 VKAPI_CALL vulkanDebugCallback(
+    vk::DebugUtilsMessageSeverityFlagBitsEXT,
+    vk::DebugUtilsMessageTypeFlagsEXT,
+    const vk::DebugUtilsMessengerCallbackDataEXT *callbackData,
+    void *)
+{
+	if (callbackData && callbackData->pMessage)
+	{
+		LOGE("Vulkan validation: %s", callbackData->pMessage);
+	}
+	return vk::False;
+}
+
+bool supportsRequiredFeatures(const vk::raii::PhysicalDevice &device)
+{
+	const auto features = device.getFeatures2<
+	    vk::PhysicalDeviceFeatures2,
+	    vk::PhysicalDeviceVulkan13Features,
+	    vk::PhysicalDeviceBufferDeviceAddressFeatures,
+	    vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
+	    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
+	    vk::PhysicalDeviceDescriptorIndexingFeatures>();
+
+	const auto &core = features.get<vk::PhysicalDeviceFeatures2>().features;
+	const auto &v13 = features.get<vk::PhysicalDeviceVulkan13Features>();
+	const auto &bda = features.get<vk::PhysicalDeviceBufferDeviceAddressFeatures>();
+	const auto &accelerationStructure = features.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>();
+	const auto &rayTracing = features.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
+	const auto &indexing = features.get<vk::PhysicalDeviceDescriptorIndexingFeatures>();
+
+	return core.samplerAnisotropy && core.depthClamp &&
+	       v13.synchronization2 && v13.dynamicRendering &&
+	       bda.bufferDeviceAddress && accelerationStructure.accelerationStructure &&
+	       rayTracing.rayTracingPipeline && indexing.runtimeDescriptorArray &&
+	       indexing.shaderSampledImageArrayNonUniformIndexing &&
+	       indexing.shaderStorageBufferArrayNonUniformIndexing &&
+	       indexing.descriptorBindingSampledImageUpdateAfterBind &&
+	       indexing.descriptorBindingStorageBufferUpdateAfterBind &&
+	       indexing.descriptorBindingPartiallyBound &&
+	       indexing.descriptorBindingVariableDescriptorCount;
+}
+}
+
 VulkanDevice::~VulkanDevice()
 {
 	try
@@ -25,6 +70,7 @@ VulkanDevice::~VulkanDevice()
 void VulkanDevice::init(GLFWwindow *window)
 {
 	createInstance();
+	createDebugMessenger();
 	createSurface(window);
 	pickPhysicalDevice();
 	createLogicalDevice();
@@ -60,6 +106,23 @@ void VulkanDevice::createInstance()
 	LOGI("Vulkan instance created");
 }
 
+void VulkanDevice::createDebugMessenger()
+{
+	if (!enableValidationLayers)
+	{
+		return;
+	}
+
+	vk::DebugUtilsMessengerCreateInfoEXT createInfo{
+	    .messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+	                       vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+	    .messageType = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
+	                   vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
+	                   vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,
+	    .pfnUserCallback = vulkanDebugCallback};
+	debugMessenger = vk::raii::DebugUtilsMessengerEXT(instance, createInfo);
+}
+
 void VulkanDevice::createSurface(GLFWwindow *window)
 {
 	// Use the C API here because GLFW does not expose a vk::raii-compatible surface creator.
@@ -93,10 +156,17 @@ void VulkanDevice::pickPhysicalDevice()
 		// The engine relies on Vulkan 1.4 core features (synchronization2, dynamic rendering).
 		bool supportsVulkan1_4 = props.apiVersion >= VK_API_VERSION_1_4;
 
-		auto queueFamilies    = device.getQueueFamilyProperties();
-		bool supportsGraphics = std::ranges::any_of(queueFamilies, [](const auto &qfp) {
-			return !!(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
-		});
+		auto queueFamilies = device.getQueueFamilyProperties();
+		bool supportsGraphicsAndPresent = false;
+		for (uint32_t queueFamilyIndex = 0; queueFamilyIndex < queueFamilies.size(); ++queueFamilyIndex)
+		{
+			if ((queueFamilies[queueFamilyIndex].queueFlags & vk::QueueFlagBits::eGraphics) &&
+			    device.getSurfaceSupportKHR(queueFamilyIndex, *surface))
+			{
+				supportsGraphicsAndPresent = true;
+				break;
+			}
+		}
 
 		auto availableExtensions   = device.enumerateDeviceExtensionProperties();
 		bool supportsAllExtensions = std::ranges::all_of(requiredDeviceExtension, [&](auto const &req) {
@@ -105,7 +175,8 @@ void VulkanDevice::pickPhysicalDevice()
 			});
 		});
 
-		if (!supportsVulkan1_4 || !supportsGraphics || !supportsAllExtensions)
+		if (!supportsVulkan1_4 || !supportsGraphicsAndPresent ||
+		    !supportsAllExtensions || !supportsRequiredFeatures(device))
 		{
 			continue;
 		}
@@ -167,6 +238,11 @@ void VulkanDevice::pickPhysicalDevice()
 
 void VulkanDevice::createLogicalDevice()
 {
+	if (!supportsRequiredFeatures(physicalDevice))
+	{
+		throw std::runtime_error("selected GPU no longer reports all required Vulkan features");
+	}
+
 	std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
 
 	// Find the first queue family that supports both graphics and present on our surface.

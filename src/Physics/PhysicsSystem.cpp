@@ -26,6 +26,21 @@ Laphria::Physics::AABBProxy buildProxyForNode(const SceneNode::Ptr &node, size_t
     proxy.max = position + extent;
     return proxy;
 }
+
+}
+
+PhysicsSystem::~PhysicsSystem()
+{
+    if (physicsSSBOMapped && *physicsSSBOMemory)
+    {
+        physicsSSBOMemory.unmapMemory();
+    }
+    if (physicsCollisionOutputSSBOMapped && *physicsCollisionOutputSSBOMemory)
+    {
+        physicsCollisionOutputSSBOMemory.unmapMemory();
+    }
+    physicsSSBOMapped = nullptr;
+    physicsCollisionOutputSSBOMapped = nullptr;
 }
 
 PhysicsSystem::PhysicsSystem() {
@@ -299,8 +314,14 @@ void PhysicsSystem::createSSBO(const vk::raii::Device &device, const vk::raii::P
     // Destroy old if exists and too small(check handle via *)
     if (*physicsSSBO && currentSSBOSize >= size) return;
 
+    if (physicsSSBOMapped && *physicsSSBOMemory) physicsSSBOMemory.unmapMemory();
+    if (physicsCollisionOutputSSBOMapped && *physicsCollisionOutputSSBOMemory) physicsCollisionOutputSSBOMemory.unmapMemory();
+    physicsSSBOMapped = nullptr;
+    physicsCollisionOutputSSBOMapped = nullptr;
     physicsSSBO = nullptr;
     physicsSSBOMemory = nullptr;
+    physicsCollisionOutputSSBO = nullptr;
+    physicsCollisionOutputSSBOMemory = nullptr;
 
     VulkanUtils::createBuffer(device, physDevice, size,
                               vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst,
@@ -308,6 +329,11 @@ void PhysicsSystem::createSSBO(const vk::raii::Device &device, const vk::raii::P
                               physicsSSBO, physicsSSBOMemory);
 
     physicsSSBOMapped = physicsSSBOMemory.mapMemory(0, size);
+    VulkanUtils::createBuffer(device, physDevice, size,
+                              vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst,
+                              vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                              physicsCollisionOutputSSBO, physicsCollisionOutputSSBOMemory);
+    physicsCollisionOutputSSBOMapped = physicsCollisionOutputSSBOMemory.mapMemory(0, size);
     currentSSBOSize = size;
 }
 
@@ -360,7 +386,7 @@ void PhysicsSystem::updateGPU(std::vector<SceneNode::Ptr> &nodes, float deltaTim
                               const vk::raii::PipelineLayout &layout,
                               const vk::raii::Pipeline &pipeline,
                               const vk::raii::DescriptorSet &descriptorSet) {
-    if (!physicsSSBOMapped) return; // Must be initialized externally or via better design
+    if (!physicsSSBOMapped || !physicsCollisionOutputSSBOMapped) return;
 
     updateSSBO(nodes); // Serialize SceneNode state → host-coherent SSBO
 
@@ -432,9 +458,9 @@ void PhysicsSystem::updateGPU(std::vector<SceneNode::Ptr> &nodes, float deltaTim
 // and updates SceneNode positions/velocities to match.
 // The SSBO memory is host-coherent, so no explicit cache invalidation is needed.
 void PhysicsSystem::syncFromGPU(std::vector<SceneNode::Ptr> &nodes) const {
-    if (!physicsSSBOMapped || nodes.empty()) return;
+    if (!physicsCollisionOutputSSBOMapped || nodes.empty()) return;
 
-    PhysicsObject *gpuObjs = static_cast<PhysicsObject *>(physicsSSBOMapped);
+    PhysicsObject *gpuObjs = static_cast<PhysicsObject *>(physicsCollisionOutputSSBOMapped);
 
     for (size_t i = 0; i < nodes.size() && i < hostPhysicsObjects.size(); i++) {
         PhysicsObject &obj = gpuObjs[i];

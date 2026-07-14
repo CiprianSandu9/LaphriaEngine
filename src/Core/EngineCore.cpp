@@ -14,8 +14,6 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
@@ -34,7 +32,6 @@
 #include "../SceneManagement/Scene.h"
 #include "EngineAuxiliary.h"
 #include "EngineConfig.h"
-#include "PathTracerAnalysis.h"
 #include "ResourceManager.h"
 
 using namespace Laphria;
@@ -48,22 +45,12 @@ constexpr uint32_t    kPtMaterialDirectSunShift              = 28u;
 constexpr uint32_t    kPtMaterialDirectSunMask               = 0x3u;
 constexpr uint32_t    kPtFlagsEnvironmentNeeBit              = 1u << 0u;
 constexpr uint32_t    kPtFlagsBlackEnvironmentBit            = 1u << 1u;
-constexpr uint32_t    kPtFlagsApplyFirstHitProbesBit         = 1u << 2u;
 constexpr uint32_t    kPtFlagsEnvironmentSamplingShift       = 3u;
 constexpr uint32_t    kPtFlagsEnvironmentSamplingMask        = 0x3u;
-constexpr uint32_t    kPtFlagsFirstHitDiffuseSamplesShift    = 5u;
-constexpr uint32_t    kPtFlagsFirstHitDiffuseSamplesMask     = 0xFu;
-constexpr uint32_t    kPtFlagsFirstHitCandidateCountShift    = 9u;
-constexpr uint32_t    kPtFlagsFirstHitCandidateCountMask     = 0xFu;
-constexpr uint32_t    kPtFlagsFirstHitProbeSamplingShift     = 13u;
-constexpr uint32_t    kPtFlagsFirstHitProbeSamplingMask      = 0x7u;
 constexpr uint32_t    kPtFlagsEnvironmentBounceShift         = 21u;
 constexpr uint32_t    kPtFlagsEnvironmentBounceMask          = 0x3u;
 constexpr int         PATH_TRACER_BLACK_ENVIRONMENT_BIT      = static_cast<int>(kPtFlagsBlackEnvironmentBit);
-constexpr int         PATH_TRACER_APPLY_FIRST_HIT_PROBES_BIT = static_cast<int>(kPtFlagsApplyFirstHitProbesBit);
 constexpr double      kWindowTitleUpdateIntervalSeconds      = 0.5;
-constexpr const char *kPtBenchmarkCsvFileName                = "path_tracer_benchmark_results.csv";
-constexpr const char *kPtBacklogCsvFileName                  = "path_tracer_backlog.csv";
 
 uint32_t packPathTracerBits(uint32_t value, uint32_t shift, uint32_t mask)
 {
@@ -95,26 +82,49 @@ uint32_t packPathTracerMaterialSettings(const UISystem::PathTracerSettings &sett
 
 uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
 {
-	const uint32_t candidateCountMinusOne =
-	    static_cast<uint32_t>(std::clamp(settings.firstHitCandidateCount, 2, 16) - 1);
 	return (settings.enableEnvironmentNEE ? kPtFlagsEnvironmentNeeBit : 0u) |
 	       (settings.blackEnvironment ? kPtFlagsBlackEnvironmentBit : 0u) |
-	       (settings.applyFirstHitProbesToFinal ? kPtFlagsApplyFirstHitProbesBit : 0u) |
 	       packPathTracerBits(static_cast<uint32_t>(settings.environmentNeeSamplingMode),
 	                          kPtFlagsEnvironmentSamplingShift,
 	                          kPtFlagsEnvironmentSamplingMask) |
-	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.firstHitDiffuseSamples, 1, 8)),
-	                          kPtFlagsFirstHitDiffuseSamplesShift,
-	                          kPtFlagsFirstHitDiffuseSamplesMask) |
-	       packPathTracerBits(candidateCountMinusOne,
-	                          kPtFlagsFirstHitCandidateCountShift,
-	                          kPtFlagsFirstHitCandidateCountMask) |
-	       packPathTracerBits(static_cast<uint32_t>(settings.firstHitProbeSamplingMode),
-	                          kPtFlagsFirstHitProbeSamplingShift,
-	                          kPtFlagsFirstHitProbeSamplingMask) |
 	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.environmentNeeBounceMode, 0, 2)),
 	                          kPtFlagsEnvironmentBounceShift,
 	                          kPtFlagsEnvironmentBounceMask);
+}
+
+struct PercentileTriplet
+{
+	float p50 = 0.0f;
+	float p95 = 0.0f;
+	float p99 = 0.0f;
+};
+
+float nearestRankPercentile(const std::vector<float> &sortedValues, float percentile)
+{
+	if (sortedValues.empty())
+	{
+		return 0.0f;
+	}
+
+	const float  pct  = std::clamp(percentile, 0.0f, 100.0f);
+	const size_t rank = static_cast<size_t>(std::ceil((pct / 100.0f) * static_cast<float>(sortedValues.size())));
+	const size_t idx  = (rank == 0) ? 0 : std::min(rank - 1, sortedValues.size() - 1);
+	return sortedValues[idx];
+}
+
+PercentileTriplet computePercentiles(const std::vector<float> &samples)
+{
+	if (samples.empty())
+	{
+		return {};
+	}
+
+	std::vector<float> sortedValues = samples;
+	std::sort(sortedValues.begin(), sortedValues.end());
+	return PercentileTriplet{
+	    .p50 = nearestRankPercentile(sortedValues, 50.0f),
+	    .p95 = nearestRankPercentile(sortedValues, 95.0f),
+	    .p99 = nearestRankPercentile(sortedValues, 99.0f)};
 }
 
 bool isFiniteMat4(const glm::mat4 &matrix)
@@ -156,40 +166,6 @@ bool tryFinalizeSurfelSourceTransform(Laphria::SurfelPathTracerSourceTransform &
 	sourceTransform.worldToObject = worldToObject;
 	sourceTransform.flags = Laphria::SURFEL_PT_SOURCE_FLAG_VALID;
 	return true;
-}
-
-std::filesystem::path resolveProjectRootPath()
-{
-	namespace fs = std::filesystem;
-	std::error_code ec;
-	fs::path        current = fs::current_path(ec);
-	if (ec)
-	{
-		return fs::path(".");
-	}
-
-	for (int i = 0; i < 8; ++i)
-	{
-		if (fs::exists(current / "CMakeLists.txt", ec) && !ec)
-		{
-			return current;
-		}
-		if (!current.has_parent_path())
-		{
-			break;
-		}
-		current = current.parent_path();
-	}
-	return fs::current_path();
-}
-
-std::filesystem::path resolveAnalysisOutputPath(const char *fileName)
-{
-	namespace fs = std::filesystem;
-	std::error_code ec;
-	const fs::path  outputDir = resolveProjectRootPath() / "build";
-	fs::create_directories(outputDir, ec);
-	return outputDir / fileName;
 }
 
 void debugBreakIfDebuggerAttached()
@@ -537,9 +513,6 @@ void EngineCore::mainLoop()
 		updatePerformanceWindowTitle(deltaTime);
 
 		glfwPollEvents();
-		loadPathTracerBenchmarkSceneIfNeeded();
-		updatePathTracerBenchmark(deltaTime);
-		updatePathTracerPhysicalSanityChecks(deltaTime);
 		camera.update(deltaTime);
 
 		std::optional<EngineServices> services;
@@ -749,7 +722,7 @@ void EngineCore::recreateSwapChain()
 
 void EngineCore::createPhysicsDescriptorSets()
 {
-	vk::DescriptorPoolSize       poolSize{vk::DescriptorType::eStorageBuffer, 1};
+	vk::DescriptorPoolSize       poolSize{vk::DescriptorType::eStorageBuffer, 2};
 	vk::DescriptorPoolCreateInfo poolInfo{
 	    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
 	    .maxSets       = 1,
@@ -769,20 +742,19 @@ void EngineCore::createPhysicsDescriptorSets()
 	physicsSystem->createSSBO(vulkan.logicalDevice, vulkan.physicalDevice, maxObjects * sizeof(PhysicsObject));
 
 	// Bind SSBO to Set
-	vk::DescriptorBufferInfo bufferInfo{
-	    .buffer = *physicsSystem->getSSBOBuffer(),
-	    .offset = 0,
-	    .range  = maxObjects * sizeof(PhysicsObject)};
-
-	vk::WriteDescriptorSet writeDescriptorSet{
-	    .dstSet          = *physicsDescriptorSet,
-	    .dstBinding      = 0,
-	    .dstArrayElement = 0,
-	    .descriptorCount = 1,
-	    .descriptorType  = vk::DescriptorType::eStorageBuffer,
-	    .pBufferInfo     = &bufferInfo};
-
-	vulkan.logicalDevice.updateDescriptorSets(writeDescriptorSet, nullptr);
+	std::array<vk::DescriptorBufferInfo, 2> bufferInfos = {
+	    vk::DescriptorBufferInfo{.buffer = *physicsSystem->getSSBOBuffer(), .offset = 0,
+	                             .range = maxObjects * sizeof(PhysicsObject)},
+	    vk::DescriptorBufferInfo{.buffer = *physicsSystem->getCollisionOutputSSBOBuffer(), .offset = 0,
+	                             .range = maxObjects * sizeof(PhysicsObject)}};
+	std::array<vk::WriteDescriptorSet, 2> writes = {
+	    vk::WriteDescriptorSet{.dstSet = *physicsDescriptorSet, .dstBinding = 0,
+	                           .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer,
+	                           .pBufferInfo = &bufferInfos[0]},
+	    vk::WriteDescriptorSet{.dstSet = *physicsDescriptorSet, .dstBinding = 1,
+	                           .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer,
+	                           .pBufferInfo = &bufferInfos[1]}};
+	vulkan.logicalDevice.updateDescriptorSets(writes, nullptr);
 }
 
 void EngineCore::createComputeDescriptorSets()
@@ -876,20 +848,12 @@ void EngineCore::createRayTracingDescriptorSets()
 		vk::DescriptorImageInfo mvInfo{.imageView = *frames.rtMotionVectorsViews[i], .imageLayout = vk::ImageLayout::eGeneral};
 		vk::WriteDescriptorSet  mvWrite{
 		     .dstSet = *rtDescriptorSets[i], .dstBinding = 4, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &mvInfo};
-		vk::DescriptorBufferInfo analysisCounterInfo{
-		    .buffer = *frames.ptAnalysisCounterBuffers[i],
-		    .offset = 0,
-		    .range  = sizeof(Laphria::PathTracerAnalysisCounters)};
-		vk::WriteDescriptorSet analysisCounterWrite{
-		    .dstSet = *rtDescriptorSets[i], .dstBinding = 9, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &analysisCounterInfo};
-
 		std::vector<vk::WriteDescriptorSet> descriptorWrites;
 		descriptorWrites.push_back(tlasWrite);
 		descriptorWrites.push_back(rtOutputWrite);
 		descriptorWrites.push_back(normalsWrite);
 		descriptorWrites.push_back(depthWrite);
 		descriptorWrites.push_back(mvWrite);
-		descriptorWrites.push_back(analysisCounterWrite);
 
 		// Now we extract ALL global vertices, indices, materials, and textures
 		// across all Scene Nodes that have been uploaded into VRAM by ResourceManager
@@ -1320,7 +1284,7 @@ void EngineCore::createSurfelPathTracerRtDescriptorSets()
 
 void EngineCore::createDenoiserDescriptorSets()
 {
-	// One set per frame in flight. Bindings include storage images + one storage buffer.
+	// One set per frame in flight. All bindings are storage images.
 	// Free old sets before replacing the pool; each RAII DescriptorSet stores its parent pool handle.
 	denoiserDescriptorSets.clear();
 	if (*denoiserDescriptorPool)
@@ -1329,8 +1293,7 @@ void EngineCore::createDenoiserDescriptorSets()
 	}
 
 	std::vector<vk::DescriptorPoolSize> poolSizes = {
-	    {vk::DescriptorType::eStorageImage, 14 * MAX_FRAMES_IN_FLIGHT},
-	    {vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT}};
+	    {vk::DescriptorType::eStorageImage, 13 * MAX_FRAMES_IN_FLIGHT}};
 	vk::DescriptorPoolCreateInfo poolInfo{
 	    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
 	    .maxSets       = MAX_FRAMES_IN_FLIGHT,
@@ -1351,7 +1314,7 @@ void EngineCore::createDenoiserDescriptorSets()
 		const size_t atrousBase = i * 2;
 
 		// Build image infos in binding order.
-		vk::DescriptorImageInfo infos[14] = {
+		vk::DescriptorImageInfo infos[13] = {
 		    {.imageView = *frames.rayTracingOutputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral},          // 0: noisy colour
 		    {.imageView = *frames.rtGBufferNormalsViews[i], .imageLayout = vk::ImageLayout::eGeneral},               // 1: current normals
 		    {.imageView = *frames.rtGBufferDepthViews[i], .imageLayout = vk::ImageLayout::eGeneral},                 // 2: current depth
@@ -1365,17 +1328,11 @@ void EngineCore::createDenoiserDescriptorSets()
 		    {.imageView = *frames.rayTracingOutputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral},          // 10: final denoised output (reuses slot 0 image)
 		    {.imageView = *frames.rtGBufferNormalsViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral},        // 11: previous-frame normals
 		    {.imageView = *frames.rtGBufferDepthViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral},          // 12: previous-frame depth
-		    {.imageView = *frames.ptReprojectionDebugViews[i], .imageLayout = vk::ImageLayout::eGeneral},            // 13: reprojection debug channels
 		};
 
-		vk::DescriptorBufferInfo analysisCounterInfo{
-		    .buffer = *frames.ptAnalysisCounterBuffers[i],
-		    .offset = 0,
-		    .range  = sizeof(Laphria::PathTracerAnalysisCounters)};
-
 		std::vector<vk::WriteDescriptorSet> writes;
-		writes.reserve(15);
-		for (uint32_t b = 0; b < 14; ++b)
+		writes.reserve(13);
+		for (uint32_t b = 0; b < 13; ++b)
 		{
 			writes.push_back(vk::WriteDescriptorSet{
 			    .dstSet          = *denoiserDescriptorSets[i],
@@ -1385,110 +1342,8 @@ void EngineCore::createDenoiserDescriptorSets()
 			    .descriptorType  = vk::DescriptorType::eStorageImage,
 			    .pImageInfo      = &infos[b]});
 		}
-		writes.push_back(vk::WriteDescriptorSet{
-		    .dstSet          = *denoiserDescriptorSets[i],
-		    .dstBinding      = 14,
-		    .dstArrayElement = 0,
-		    .descriptorCount = 1,
-		    .descriptorType  = vk::DescriptorType::eStorageBuffer,
-		    .pBufferInfo     = &analysisCounterInfo});
 		vulkan.logicalDevice.updateDescriptorSets(writes, {});
 	}
-}
-
-void EngineCore::recordComputeCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
-{
-	// 1. Execution Barrier — General Layout for Compute Write
-	// eGeneral→eGeneral: no content discard; waits for the previous frame's TRANSFER_SRC→eGeneral
-	// restore (or the one-time creation pre-transition) before the compute shader writes.
-	transition_image_layout(
-	    *frames.storageImages[frames.frameIndex],
-	    vk::ImageLayout::eGeneral,
-	    vk::ImageLayout::eGeneral,
-	    {},
-	    vk::AccessFlagBits2::eShaderWrite,
-	    vk::PipelineStageFlagBits2::eTransfer,        // Wait for the previous frame's restore
-	    vk::PipelineStageFlagBits2::eComputeShader,
-	    vk::ImageAspectFlagBits::eColor);
-
-	// 2. Compute Dispatch
-	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.computePipeline);
-
-	// Bind Set 0 (storage image) — the simplified layout only exposes this one set.
-	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelines.computePipelineLayout, 0,
-	                                 *computeDescriptorSets[frames.frameIndex], nullptr);
-
-	Laphria::ScenePushConstants push{};
-	push.skyData = glm::vec4(0.01f, 0.03f, 0.1f, 0.99f);
-
-	commandBuffer.pushConstants<Laphria::ScenePushConstants>(*pipelines.computePipelineLayout,
-	                                                         vk::ShaderStageFlagBits::eCompute,
-	                                                         0, push);
-
-	// Dispatch
-	// Workgroup size is 16x16.
-	uint32_t groupCountX = (swapchain.extent.width + 15) / 16;
-	uint32_t groupCountY = (swapchain.extent.height + 15) / 16;
-	commandBuffer.dispatch(groupCountX, groupCountY, 1);
-
-	// 3. Blit Storage Image -> SwapChain Image
-
-	// Transition Storage Image: General -> TransferSrc
-	transition_image_layout(
-	    *frames.storageImages[frames.frameIndex],
-	    vk::ImageLayout::eGeneral,
-	    vk::ImageLayout::eTransferSrcOptimal,
-	    vk::AccessFlagBits2::eShaderWrite,
-	    vk::AccessFlagBits2::eTransferRead,
-	    vk::PipelineStageFlagBits2::eComputeShader,
-	    vk::PipelineStageFlagBits2::eTransfer,
-	    vk::ImageAspectFlagBits::eColor);
-
-	// Transition SwapChain Image: Undefined -> TransferDst
-	transition_image_layout(
-	    swapchain.images[imageIndex],
-	    vk::ImageLayout::eUndefined,
-	    vk::ImageLayout::eTransferDstOptimal,
-	    {},
-	    vk::AccessFlagBits2::eTransferWrite,
-	    vk::PipelineStageFlagBits2::eTopOfPipe,
-	    vk::PipelineStageFlagBits2::eTransfer,
-	    vk::ImageAspectFlagBits::eColor);
-
-	// Blit
-	vk::ImageBlit blitRegion{
-	    .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-	    .srcOffsets     = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}},
-	    .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-	    .dstOffsets     = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}}};
-
-	commandBuffer.blitImage(*frames.storageImages[frames.frameIndex], vk::ImageLayout::eTransferSrcOptimal,
-	                        swapchain.images[imageIndex], vk::ImageLayout::eTransferDstOptimal,
-	                        blitRegion, vk::Filter::eLinear);
-
-	// 3b. Restore storage image to eGeneral so it always matches the layout declared in
-	// computeDescriptorSets. This prevents VUID-vkCmdDraw-None-09600 when the rasterizer's
-	// draw commands follow in the same command buffer.
-	transition_image_layout(
-	    *frames.storageImages[frames.frameIndex],
-	    vk::ImageLayout::eTransferSrcOptimal,
-	    vk::ImageLayout::eGeneral,
-	    vk::AccessFlagBits2::eTransferRead,
-	    {},
-	    vk::PipelineStageFlagBits2::eTransfer,
-	    vk::PipelineStageFlagBits2::eBottomOfPipe,
-	    vk::ImageAspectFlagBits::eColor);
-
-	// 4. Transition SwapChain to Color Attachment for Rendering
-	transition_image_layout(
-	    swapchain.images[imageIndex],
-	    vk::ImageLayout::eTransferDstOptimal,
-	    vk::ImageLayout::eColorAttachmentOptimal,
-	    vk::AccessFlagBits2::eTransferWrite,
-	    vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
-	    vk::PipelineStageFlagBits2::eTransfer,
-	    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-	    vk::ImageAspectFlagBits::eColor);
 }
 
 void EngineCore::recordSkinningPass(const vk::raii::CommandBuffer &commandBuffer) const
@@ -1726,25 +1581,6 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	const uint32_t rtHeight             = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.height) * effectiveScale));
 	const uint32_t gx                   = (rtWidth + 15) / 16;
 	const uint32_t gy                   = (rtHeight + 15) / 16;
-	const bool     analysisEnabled      = ui.pathTracerAnalysisSettings.enableAnalysisMode;
-	const int      debugAov             = analysisEnabled ? static_cast<int>(ui.pathTracerAnalysisSettings.debugAov) : 0;
-	const int      debugAtrousIteration = analysisEnabled ? std::clamp(ui.pathTracerAnalysisSettings.debugAtrousIteration, 0, 4) : 0;
-	if (fi < frames.ptAnalysisCounterMapped.size() && frames.ptAnalysisCounterMapped[fi])
-	{
-		std::memset(frames.ptAnalysisCounterMapped[fi], 0, sizeof(Laphria::PathTracerAnalysisCounters));
-	}
-
-	// PT analysis buffers are host-cleared and also persist shader writes across
-	// submissions. Make those writes visible before the next raygen reads or updates them.
-	vk::MemoryBarrier2 pathTracerStorageBufferBarrier{
-	    .srcStageMask  = vk::PipelineStageFlagBits2::eHost | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-	    .srcAccessMask = vk::AccessFlagBits2::eHostWrite | vk::AccessFlagBits2::eShaderStorageWrite,
-	    .dstStageMask  = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-	    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite};
-	vk::DependencyInfo pathTracerStorageBufferDependency{
-	    .memoryBarrierCount = 1,
-	    .pMemoryBarriers    = &pathTracerStorageBufferBarrier};
-	commandBuffer.pipelineBarrier2(pathTracerStorageBufferDependency);
 
 	// 1. Transition all PT images to general layout for writing.
 	auto transitionToGeneral = [&](vk::Image img) {
@@ -1759,7 +1595,6 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	transitionToGeneral(*frames.rtMotionVectors[fi]);
 	transitionToGeneral(*frames.atrousTemp[atrousA]);
 	transitionToGeneral(*frames.atrousTemp[atrousB]);
-	transitionToGeneral(*frames.ptReprojectionDebug[fi]);
 
 	// 2. Ray tracing dispatch.
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.rayTracingPipeline);
@@ -1772,7 +1607,6 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	rtPush.cascadeIndex                      = -1;
 	const uint32_t packedPathTracerMaterialIndex = packPathTracerMaterialSettings(ui.pathTracerSettings);
 	rtPush.materialIndex = static_cast<int>(packedPathTracerMaterialIndex);
-	rtPush.padding2      = debugAov;
 	const uint32_t pathTracerFlags = packPathTracerFlags(ui.pathTracerSettings);
 	rtPush.padding3 = pathTracerFlags;
 	commandBuffer.pushConstants<ScenePushConstants>(*pipelines.rayTracingPipelineLayout,
@@ -1791,30 +1625,20 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eRayTracingShaderKHR, *ptTimestampQueryPool, queryBase + kPtTS_RayTraceEnd);
 	}
 
-	// 3. Barrier: RT writes -> compute reads.
-	auto barrierRTtoCompute = [&](vk::Image img) {
-		transition_image_layout(img, vk::ImageLayout::eGeneral, vk::ImageLayout::eGeneral,
-		                        vk::AccessFlagBits2::eShaderWrite, vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
-		                        vk::PipelineStageFlagBits2::eRayTracingShaderKHR, vk::PipelineStageFlagBits2::eComputeShader,
-		                        vk::ImageAspectFlagBits::eColor);
-	};
-	barrierRTtoCompute(*frames.rayTracingOutputImages[fi]);
-	barrierRTtoCompute(*frames.rtGBufferNormals[fi]);
-	barrierRTtoCompute(*frames.rtGBufferDepth[fi]);
-	barrierRTtoCompute(*frames.rtMotionVectors[fi]);
-
-	vk::BufferMemoryBarrier2 ptAnalysisRtToComputeBarrier{
-	    .srcStageMask  = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-	    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+	// 3. Make both this dispatch and earlier same-queue PT submissions visible to
+	// reprojection. The compute source scope is required for previous-slot history;
+	// the ray-tracing source scope covers current and previous G-buffer writes.
+	vk::MemoryBarrier2 ptToDenoiserBarrier{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eRayTracingShaderKHR |
+	                     vk::PipelineStageFlagBits2::eComputeShader,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
 	    .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-	    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-	    .buffer        = *frames.ptAnalysisCounterBuffers[fi],
-	    .offset        = 0,
-	    .size          = sizeof(Laphria::PathTracerAnalysisCounters)};
-	vk::DependencyInfo ptAnalysisRtToComputeDependency{
-	    .bufferMemoryBarrierCount = 1,
-	    .pBufferMemoryBarriers    = &ptAnalysisRtToComputeBarrier};
-	commandBuffer.pipelineBarrier2(ptAnalysisRtToComputeDependency);
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderRead |
+	                     vk::AccessFlagBits2::eShaderWrite};
+	vk::DependencyInfo ptToDenoiserDependency{
+	    .memoryBarrierCount = 1,
+	    .pMemoryBarriers    = &ptToDenoiserBarrier};
+	commandBuffer.pipelineBarrier2(ptToDenoiserDependency);
 
 	// 4. Reprojection pass.
 	if (ui.pathTracerSettings.enableReprojection)
@@ -1853,8 +1677,9 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 		    .phiNormal            = 128.0f,
 		    .exposureScale        = ui.exposure,
 		    .useRawInput          = 0,
-		    .debugAov             = debugAov,
-		    .debugAtrousIteration = debugAtrousIteration};
+		    .renderWidth           = rtWidth,
+		    .renderHeight          = rtHeight,
+		    .resetHistory          = ptForceHistoryReset ? 1 : 0};
 		commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
 		                                                  vk::ShaderStageFlagBits::eCompute, 0, reproPush);
 		if (*ptTimestampQueryPool)
@@ -1876,7 +1701,6 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	};
 	barrierCompute(*frames.atrousTemp[atrousA]);
 	barrierCompute(*frames.historyMoments[fi]);
-	barrierCompute(*frames.ptReprojectionDebug[fi]);
 
 	// 5. A-Trous denoiser.
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.atrousPipeline);
@@ -1888,12 +1712,6 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 	    std::clamp(ptSmoothedMotion, 0.0f, 1.0f) > 0.35f)
 	{
 		atrousIterations = std::min(5, atrousIterations + 1);
-	}
-	if (analysisEnabled &&
-	    ui.pathTracerAnalysisSettings.debugAov == UISystem::PathTracerDebugAov::AtrousIteration &&
-	    atrousIterations > 0)
-	{
-		atrousIterations = std::clamp(debugAtrousIteration + 1, 1, atrousIterations);
 	}
 	const int useRawInput = ui.pathTracerSettings.enableReprojection ? 0 : 1;
 
@@ -1912,8 +1730,9 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 		    .phiNormal            = 128.0f,
 		    .exposureScale        = ui.exposure,
 		    .useRawInput          = useRawInput,
-		    .debugAov             = debugAov,
-		    .debugAtrousIteration = debugAtrousIteration};
+		    .renderWidth           = rtWidth,
+		    .renderHeight          = rtHeight,
+		    .resetHistory          = ptForceHistoryReset ? 1 : 0};
 		commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
 		                                                  vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
 		commandBuffer.dispatch(gx, gy, 1);
@@ -1931,8 +1750,9 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 			    .phiNormal            = 128.0f,
 			    .exposureScale        = ui.exposure,
 			    .useRawInput          = useRawInput,
-			    .debugAov             = debugAov,
-			    .debugAtrousIteration = debugAtrousIteration};
+			    .renderWidth           = rtWidth,
+			    .renderHeight          = rtHeight,
+			    .resetHistory          = ptForceHistoryReset ? 1 : 0};
 			commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
 			                                                  vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
 			commandBuffer.dispatch(gx, gy, 1);
@@ -2440,6 +2260,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	{
 		surfelPathTracerTemporalHistoryValid.fill(false);
 	}
+	surfelPathTracerResources.recordStatsReadback(commandBuffer, fi);
 
 	transitionSurfelOutputForBlit();
 	transitionSwapchainForBlit();
@@ -2449,17 +2270,18 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 
 void EngineCore::createDescriptorPool()
 {
-	// Generous pool sizes to accommodate an arbitrary number of loaded models.
+	// Shared engine sets only. Each model owns a right-sized material pool, so
+	// model count and texture count no longer consume this fixed global budget.
 	// eSampledImage / eSampler are separate because the shadow map binding uses them
 	// as distinct descriptor types (binding 1 and 2 in the global layout).
 	constexpr uint32_t                    poolScale = Laphria::EngineConfig::kDescriptorPoolScale;
 	std::array<vk::DescriptorPoolSize, 7> poolSizes = {
 	    vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, poolScale},
-	    // 1000 per loaded model (material textures) + 2×1000 for the two RT descriptor sets.
-	    vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, 5 * poolScale},
+	    // One bindless texture array per RT frame set.
+	    vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * poolScale},
 	    vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, poolScale},
 	    vk::DescriptorPoolSize{vk::DescriptorType::eSampler, poolScale},
-	    // 1000 for materials + vertex/index arrays + PT analysis counter buffers.
+	    // Vertex/index arrays, skinning sets, and PT analysis counter buffers.
 	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 16 * poolScale},
 	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, poolScale},
 	    vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT}};
@@ -2624,630 +2446,10 @@ void EngineCore::updatePathTracerTimingPercentiles()
 	ui.pathTracerPerfStats.totalFrameP99Ms     = totalPct.p99;
 	ui.pathTracerPerfStats.rayTraceP95Ms       = rayPct.p95;
 	ui.pathTracerPerfStats.denoiserP95Ms       = denoisePct.p95;
-	ui.pathTracerPerfStats.analysisSampleCount = static_cast<uint32_t>(ptRollingTotalMs.size());
-}
-
-void EngineCore::collectPathTracerAnalysisCounters(uint32_t frameSlot)
-{
-	if (frameSlot >= frames.ptAnalysisCounterMapped.size() || !frames.ptAnalysisCounterMapped[frameSlot])
-	{
-		return;
-	}
-
-	const auto *counters                         = reinterpret_cast<const Laphria::PathTracerAnalysisCounters *>(frames.ptAnalysisCounterMapped[frameSlot]);
-	ui.pathTracerPerfStats.historyAcceptedCount  = counters->historyAcceptedCount;
-	ui.pathTracerPerfStats.historyRejectedCount  = counters->historyRejectedCount;
-	ui.pathTracerPerfStats.skyHitCount           = counters->skyHitCount;
-	ui.pathTracerPerfStats.fireflyClampCount     = counters->fireflyClampCount;
-	ui.pathTracerPerfStats.pixelSampleCount      = counters->pixelCount;
-
-	const float historyTotal                      = static_cast<float>(counters->historyAcceptedCount + counters->historyRejectedCount);
-	ui.pathTracerPerfStats.historyAcceptanceRatio = (historyTotal > 0.0f) ? static_cast<float>(counters->historyAcceptedCount) / historyTotal : 0.0f;
-	ui.pathTracerPerfStats.historyRejectionRatio  = (historyTotal > 0.0f) ? static_cast<float>(counters->historyRejectedCount) / historyTotal : 0.0f;
-
-	const float pixelTotal                   = static_cast<float>(std::max(counters->pixelCount, 1u));
-	ui.pathTracerPerfStats.skyHitRatio       = static_cast<float>(counters->skyHitCount) / pixelTotal;
-	ui.pathTracerPerfStats.fireflyClampRatio = static_cast<float>(counters->fireflyClampCount) / pixelTotal;
-
-	auto &analysis = ui.pathTracerAnalysisSettings;
-	if (!(analysis.enableAnalysisMode && analysis.benchmarkActive && analysis.runBaselineSweep))
-	{
-		return;
-	}
-
-	if (ptSweepConfigs.empty())
-	{
-		ptSweepConfigs         = buildPathTracerBaselineSweepMatrix();
-		ptSweepConfigIndex     = 0;
-		ptSweepWarmupRemaining = analysis.warmupFrames;
-		ptSweepSampleRemaining = analysis.sampleFrames;
-		ptSweepScores.clear();
-		ptBacklogItems.clear();
-		ptSampleTotalMs.clear();
-		ptSampleRayTraceMs.clear();
-		ptSampleDenoiserMs.clear();
-		analysis.recommendationManual.clear();
-		analysis.recommendationAutoBalanced.clear();
-		analysis.recommendationAutoAggressive.clear();
-		analysis.backlogSummary.clear();
-		const auto benchmarkCsvPath                          = resolveAnalysisOutputPath(kPtBenchmarkCsvFileName);
-		ui.pathTracerAnalysisSettings.benchmarkCsvOutputPath = benchmarkCsvPath.string();
-		std::ofstream out(benchmarkCsvPath, std::ios::trunc);
-		if (out.is_open())
-		{
-			out << "config_index,resolution_scale,denoiser_iterations,reprojection,motion_aware,reduce_secondary,"
-			       "total_p50_ms,total_p95_ms,total_p99_ms,ray_p95_ms,denoiser_p95_ms,"
-			       "history_accept_ratio,history_reject_ratio,sky_hit_ratio,firefly_clamp_ratio,"
-			       "budget_pass,composite_score\n";
-		}
-		else
-		{
-			LOGE("Failed to open benchmark CSV for writing: %s", benchmarkCsvPath.string().c_str());
-		}
-	}
-
-	if (ptSweepConfigIndex >= ptSweepConfigs.size())
-	{
-		analysis.benchmarkActive  = false;
-		analysis.runBaselineSweep = false;
-		return;
-	}
-
-	if (ptSweepWarmupRemaining > 0)
-	{
-		--ptSweepWarmupRemaining;
-		return;
-	}
-
-	if (ptSweepSampleRemaining > 0)
-	{
-		ptSampleTotalMs.push_back(ui.pathTracerPerfStats.totalFrameMs);
-		ptSampleRayTraceMs.push_back(ui.pathTracerPerfStats.rayTraceMs);
-		ptSampleDenoiserMs.push_back(ui.pathTracerPerfStats.denoiserMs);
-		--ptSweepSampleRemaining;
-
-		if (analysis.adaptiveSampling &&
-		    static_cast<int>(ptSampleTotalMs.size()) >= analysis.minSampleFrames)
-		{
-			const int window = std::min(analysis.convergenceWindowFrames,
-			                            static_cast<int>(ptSampleTotalMs.size()) / 2);
-			if (window >= 20)
-			{
-				const auto beginPrev = ptSampleTotalMs.end() - (window * 2);
-				const auto endPrev   = ptSampleTotalMs.end() - window;
-				const auto beginCurr = endPrev;
-				const auto endCurr   = ptSampleTotalMs.end();
-
-				std::vector<float> prevWindow(beginPrev, endPrev);
-				std::vector<float> currWindow(beginCurr, endCurr);
-				const auto         prevPct     = computePercentiles(prevWindow);
-				const auto         currPct     = computePercentiles(currWindow);
-				const float        denom       = std::max(prevPct.p95, 0.001f);
-				const float        relP95Delta = std::abs(currPct.p95 - prevPct.p95) / denom;
-				if (relP95Delta <= analysis.p95ConvergenceThreshold)
-				{
-					ptSweepSampleRemaining = 0;
-				}
-			}
-		}
-	}
-
-	if (ptSweepSampleRemaining == 0 && !ptSampleTotalMs.empty())
-	{
-		const auto           totalPct   = computePercentiles(ptSampleTotalMs);
-		const auto           rayPct     = computePercentiles(ptSampleRayTraceMs);
-		const auto           denoisePct = computePercentiles(ptSampleDenoiserMs);
-		PathTracerScoreInput scoreInput{};
-		scoreInput.totalFrameMsP95       = totalPct.p95;
-		scoreInput.targetBudgetMs        = 16.67f;
-		scoreInput.historyRejectionRatio = ui.pathTracerPerfStats.historyRejectionRatio;
-		scoreInput.skyHitRatio           = ui.pathTracerPerfStats.skyHitRatio;
-		scoreInput.fireflyClampRatio     = ui.pathTracerPerfStats.fireflyClampRatio;
-		scoreInput.visualFidelityScore   = analysis.benchmarkVisualFidelityScore;
-		const auto runScore              = scorePathTracerRun(scoreInput);
-		ptSweepScores.push_back(runScore);
-		const auto &cfg = ptSweepConfigs[ptSweepConfigIndex];
-
-		const auto benchmarkCsvPath                          = resolveAnalysisOutputPath(kPtBenchmarkCsvFileName);
-		ui.pathTracerAnalysisSettings.benchmarkCsvOutputPath = benchmarkCsvPath.string();
-		std::ofstream out(benchmarkCsvPath, std::ios::app);
-		if (out.is_open())
-		{
-			out << ptSweepConfigIndex << ','
-			    << cfg.resolutionScale << ','
-			    << cfg.denoiserIterations << ','
-			    << (cfg.enableReprojection ? 1 : 0) << ','
-			    << (cfg.enableMotionAwareAccumulation ? 1 : 0) << ','
-			    << (cfg.reduceSecondaryEffects ? 1 : 0) << ','
-			    << totalPct.p50 << ','
-			    << totalPct.p95 << ','
-			    << totalPct.p99 << ','
-			    << rayPct.p95 << ','
-			    << denoisePct.p95 << ','
-			    << ui.pathTracerPerfStats.historyAcceptanceRatio << ','
-			    << ui.pathTracerPerfStats.historyRejectionRatio << ','
-			    << ui.pathTracerPerfStats.skyHitRatio << ','
-			    << ui.pathTracerPerfStats.fireflyClampRatio << ','
-			    << (runScore.budgetPass ? 1 : 0) << ','
-			    << runScore.compositeScore << '\n';
-		}
-		else
-		{
-			LOGE("Failed to append benchmark CSV: %s", benchmarkCsvPath.string().c_str());
-		}
-
-		++ptSweepConfigIndex;
-		ptSweepWarmupRemaining = analysis.warmupFrames;
-		ptSweepSampleRemaining = analysis.sampleFrames;
-		ptSampleTotalMs.clear();
-		ptSampleRayTraceMs.clear();
-		ptSampleDenoiserMs.clear();
-
-		if (ptSweepConfigIndex >= ptSweepConfigs.size())
-		{
-			analysis.benchmarkActive  = false;
-			analysis.runBaselineSweep = false;
-			if (!ptSweepScores.empty() && ptSweepScores.size() == ptSweepConfigs.size())
-			{
-				size_t bestIndex       = 0;
-				bool   foundBudgetPass = false;
-				for (size_t i = 0; i < ptSweepScores.size(); ++i)
-				{
-					const auto &candidate = ptSweepScores[i];
-					const auto &best      = ptSweepScores[bestIndex];
-					if (!foundBudgetPass && candidate.budgetPass)
-					{
-						bestIndex       = i;
-						foundBudgetPass = true;
-						continue;
-					}
-					if (foundBudgetPass)
-					{
-						if (candidate.budgetPass && candidate.compositeScore > best.compositeScore)
-						{
-							bestIndex = i;
-						}
-					}
-					else if (candidate.compositeScore > best.compositeScore)
-					{
-						bestIndex = i;
-					}
-				}
-
-				const auto &bestCfg = ptSweepConfigs[bestIndex];
-				char        manualPreset[256];
-				std::snprintf(manualPreset, sizeof(manualPreset),
-				              "scale=%.2f, denoise=%d, reproj=%s, motionAware=%s",
-				              bestCfg.resolutionScale,
-				              bestCfg.denoiserIterations,
-				              bestCfg.enableReprojection ? "on" : "off",
-				              bestCfg.enableMotionAwareAccumulation ? "on" : "off");
-				analysis.recommendationManual = manualPreset;
-
-				const float balancedScale   = std::max(0.50f, bestCfg.resolutionScale - 0.05f);
-				const int   balancedDenoise = std::max(1, bestCfg.denoiserIterations - 1);
-				char        balancedPreset[256];
-				std::snprintf(balancedPreset, sizeof(balancedPreset),
-				              "scale=%.2f, denoise=%d, reproj=on, motionAware=on",
-				              balancedScale, balancedDenoise);
-				analysis.recommendationAutoBalanced = balancedPreset;
-
-				const float aggressiveScale   = std::max(0.50f, bestCfg.resolutionScale - 0.10f);
-				const int   aggressiveDenoise = std::max(1, bestCfg.denoiserIterations - 2);
-				char        aggressivePreset[256];
-				std::snprintf(aggressivePreset, sizeof(aggressivePreset),
-				              "scale=%.2f, denoise=%d, reproj=on, motionAware=on, reduceSecondary=on",
-				              aggressiveScale, aggressiveDenoise);
-				analysis.recommendationAutoAggressive = aggressivePreset;
-
-				ptBacklogItems = buildDefaultFidelityBacklog(
-				    ui.pathTracerPerfStats.rayTraceP95Ms,
-				    ui.pathTracerPerfStats.reprojectionMs,
-				    ui.pathTracerPerfStats.denoiserP95Ms,
-				    ui.pathTracerPerfStats.totalFrameP95Ms,
-				    16.67f);
-				writePathTracerBacklogCsv();
-				if (!ptBacklogItems.empty())
-				{
-					analysis.backlogSummary = ptBacklogItems[0].name;
-					if (ptBacklogItems.size() > 1)
-					{
-						analysis.backlogSummary += "; ";
-						analysis.backlogSummary += ptBacklogItems[1].name;
-					}
-				}
-			}
-		}
-	}
-}
-
-void EngineCore::resetPathTracerAnalysisCounters(uint32_t frameSlot)
-{
-	if (frameSlot >= frames.ptAnalysisCounterMapped.size() || !frames.ptAnalysisCounterMapped[frameSlot])
-	{
-		return;
-	}
-	std::memset(frames.ptAnalysisCounterMapped[frameSlot], 0, sizeof(Laphria::PathTracerAnalysisCounters));
-}
-
-void EngineCore::applyPathTracerExperimentRow(const PathTracerExperimentRow &row)
-{
-	auto &settings                         = ui.pathTracerSettings;
-	auto &analysis                         = ui.pathTracerAnalysisSettings;
-	settings.enableEnvironmentNEE          = true;
-	settings.environmentNeeBounceMode      = row.environmentNeeBounceMode;
-	settings.blackEnvironment              = row.blackEnvironment;
-	settings.applyFirstHitProbesToFinal    = true;
-	settings.environmentNeeSamplingMode    = UISystem::EnvironmentNeeSamplingMode::SkyBiased;
-	settings.firstHitProbeSamplingMode     = row.probeMode;
-	settings.firstHitDiffuseSamples        = row.firstHitDiffuseSamples;
-	settings.firstHitCandidateCount        = row.firstHitCandidateCount;
-	settings.pathTracerMaxBounces          = row.pathTracerMaxBounces;
-	settings.directSunBounceMode           = row.directSunBounceMode;
-	ptBenchmarkBasePosition                = row.cameraPosition;
-	ptBenchmarkBasePitch                   = row.cameraPitch;
-	ptBenchmarkBaseYaw                     = row.cameraYaw;
-	camera.position                        = row.cameraPosition;
-	camera.pitch                           = row.cameraPitch;
-	camera.yaw                             = row.cameraYaw;
-	camera.processInput(0.0f, 0.0f, 0.0f);
-	ptPrevCameraPos               = camera.position;
-	ptPrevPitch                   = camera.pitch;
-	ptPrevYaw                     = camera.yaw;
-	ui.lightDirection             = glm::normalize(row.lightDirection);
-	ptForceHistoryReset           = true;
-	analysis.debugAov             = row.debugAov;
-	analysis.debugAtrousIteration = 0;
-	analysis.enableAnalysisMode   = true;
-}
-void EngineCore::logPathTracerExperimentRow(const PathTracerExperimentRow         &row,
-                                            const PathTracerExperimentAccumulator &accum) const
-{
-	const double invSamples = (accum.sampleCount > 0) ? (1.0 / static_cast<double>(accum.sampleCount)) : 0.0;
-	LOGI("PT Experiment Row Summary: name=\"%s\", samples=%u, mode=%d, "
-	     "maxBounces=%d, directSunMode=%d, environmentNeeMode=%d, "
-	     "rayTraceMs=%.3f, totalMs=%.3f",
-	     row.name.c_str(),
-	     accum.sampleCount,
-	     static_cast<int>(row.probeMode),
-	     row.pathTracerMaxBounces,
-	     row.directSunBounceMode,
-	     row.environmentNeeBounceMode,
-	     accum.rayTraceMs * invSamples,
-	     accum.totalFrameMs * invSamples);
-}
-void EngineCore::updatePathTracerExperimentSweep()
-{
-	if (!ptExperimentSweepActive)
-	{
-		return;
-	}
-
-	if (ptExperimentRowIndex >= ptExperimentRows.size())
-	{
-		ptExperimentSweepActive = false;
-		return;
-	}
-
-	if (ptExperimentWarmupRemaining > 0)
-	{
-		--ptExperimentWarmupRemaining;
-		return;
-	}
-
-	const auto &stats = ui.pathTracerPerfStats;
-	ptExperimentAccum.rayTraceMs += stats.rayTraceMs;
-	ptExperimentAccum.totalFrameMs += stats.totalFrameMs;
-	++ptExperimentAccum.sampleCount;
-
-	if (ptExperimentSampleRemaining > 0)
-	{
-		--ptExperimentSampleRemaining;
-	}
-	if (ptExperimentSampleRemaining > 0)
-	{
-		return;
-	}
-
-	logPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex], ptExperimentAccum);
-	++ptExperimentRowIndex;
-	if (ptExperimentRowIndex >= ptExperimentRows.size())
-	{
-		ptExperimentSweepActive = false;
-		LOGI("%s", ptExperimentCompletionLog.c_str());
-		return;
-	}
-
-	ptExperimentWarmupRemaining = std::max(1, ptExperimentWarmupFrames);
-	ptExperimentSampleRemaining = std::max(1, ptExperimentSampleFrames);
-	ptExperimentAccum           = {};
-	applyPathTracerExperimentRow(ptExperimentRows[ptExperimentRowIndex]);
-}
-void EngineCore::ensurePathTracerSanityScene()
-{
-	if (ptSanitySceneCreated || !scene || !resourceManager)
-	{
-		return;
-	}
-
-	Laphria::MaterialData whiteDiffuse{};
-	whiteDiffuse.baseColorFactor = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
-	whiteDiffuse.metallicFactor  = 0.0f;
-	whiteDiffuse.roughnessFactor = 0.75f;
-	whiteDiffuse.emissiveFactor  = glm::vec3(0.0f);
-
-	Laphria::MaterialData roughMetal{};
-	roughMetal.baseColorFactor = glm::vec4(0.90f, 0.90f, 0.92f, 1.0f);
-	roughMetal.metallicFactor  = 1.0f;
-	roughMetal.roughnessFactor = 0.80f;
-	roughMetal.emissiveFactor  = glm::vec3(0.0f);
-
-	Laphria::MaterialData emissivePatch{};
-	emissivePatch.baseColorFactor = glm::vec4(0.25f, 0.25f, 0.25f, 1.0f);
-	emissivePatch.metallicFactor  = 0.0f;
-	emissivePatch.roughnessFactor = 0.60f;
-	emissivePatch.emissiveFactor  = glm::vec3(6.0f, 5.2f, 4.8f);
-
-	ptSanityWhiteDiffuseNode = resourceManager->createCubeModel(1.0f, *pipelines.descriptorSetLayoutMaterial, whiteDiffuse);
-	ptSanityRoughMetalNode   = resourceManager->createCubeModel(1.0f, *pipelines.descriptorSetLayoutMaterial, roughMetal);
-	ptSanityEmissiveNode     = resourceManager->createCubeModel(0.7f, *pipelines.descriptorSetLayoutMaterial, emissivePatch);
-
-	if (ptSanityWhiteDiffuseNode)
-	{
-		ptSanityWhiteDiffuseNode->name = "PT_Sanity_WhiteDiffuse";
-		ptSanityWhiteDiffuseNode->setPosition(ptBenchmarkBasePosition + glm::vec3(-1.4f, -0.2f, -2.5f));
-		scene->addNode(ptSanityWhiteDiffuseNode, scene->getRoot());
-	}
-	if (ptSanityRoughMetalNode)
-	{
-		ptSanityRoughMetalNode->name = "PT_Sanity_RoughMetal";
-		ptSanityRoughMetalNode->setPosition(ptBenchmarkBasePosition + glm::vec3(0.0f, -0.2f, -2.5f));
-		scene->addNode(ptSanityRoughMetalNode, scene->getRoot());
-	}
-	if (ptSanityEmissiveNode)
-	{
-		ptSanityEmissiveNode->name = "PT_Sanity_Emissive";
-		ptSanityEmissiveNode->setPosition(ptBenchmarkBasePosition + glm::vec3(1.4f, -0.2f, -2.5f));
-		scene->addNode(ptSanityEmissiveNode, scene->getRoot());
-	}
-
-	ptSanitySceneCreated = true;
-}
-
-void EngineCore::updatePathTracerPhysicalSanityChecks(float /*deltaTimeSeconds*/)
-{
-	auto &analysis = ui.pathTracerAnalysisSettings;
-	if (!(analysis.enableAnalysisMode && analysis.runPhysicalSanityChecks))
-	{
-		analysis.physicalSanityActive = false;
-		return;
-	}
-
-	if (!analysis.physicalSanityActive && ptSanityPhase >= 2)
-	{
-		ptSanityPhase                      = 0;
-		ptSanityFramesRemaining            = 0;
-		ptSanityBaselineCaptured           = false;
-		ptSanityDriftMetric                = 0.0f;
-		analysis.physicalSanityDriftMetric = 0.0f;
-		analysis.physicalSanityPassed      = false;
-	}
-
-	ensurePathTracerSanityScene();
-	analysis.physicalSanityActive = true;
-
-	// Use two controlled exposure phases and compare temporal stability counters.
-	if (!ptSanityBaselineCaptured && ptSanityPhase == 0)
-	{
-		ui.exposure = ptSanityBaselineExposure;
-		if (ptSanityFramesRemaining <= 0)
-		{
-			ptSanityFramesRemaining = 90;
-		}
-		--ptSanityFramesRemaining;
-		if (ptSanityFramesRemaining <= 0)
-		{
-			ptSanityBaselineRejectRatio  = ui.pathTracerPerfStats.historyRejectionRatio;
-			ptSanityBaselineFireflyRatio = ui.pathTracerPerfStats.fireflyClampRatio;
-			ptSanityBaselineSkyRatio     = ui.pathTracerPerfStats.skyHitRatio;
-			ptSanityBaselineCaptured     = true;
-			ptSanityPhase                = 1;
-			ptSanityFramesRemaining      = 90;
-		}
-		return;
-	}
-
-	if (ptSanityPhase == 1)
-	{
-		ui.exposure = 2.0f;
-		--ptSanityFramesRemaining;
-		if (ptSanityFramesRemaining <= 0)
-		{
-			const float rejectDrift            = std::abs(ui.pathTracerPerfStats.historyRejectionRatio - ptSanityBaselineRejectRatio);
-			const float fireflyDrift           = std::abs(ui.pathTracerPerfStats.fireflyClampRatio - ptSanityBaselineFireflyRatio);
-			const float skyDrift               = std::abs(ui.pathTracerPerfStats.skyHitRatio - ptSanityBaselineSkyRatio);
-			ptSanityDriftMetric                = rejectDrift + fireflyDrift + 0.5f * skyDrift;
-			analysis.physicalSanityDriftMetric = ptSanityDriftMetric;
-			analysis.physicalSanityPassed      = (ptSanityDriftMetric < 0.20f);
-			analysis.physicalSanityActive      = false;
-			analysis.runPhysicalSanityChecks   = false;
-			ptSanityPhase                      = 2;
-			ui.exposure                        = 1.0f;
-		}
-	}
-}
-
-void EngineCore::writePathTracerBacklogCsv()
-{
-	const auto backlogCsvPath                          = resolveAnalysisOutputPath(kPtBacklogCsvFileName);
-	ui.pathTracerAnalysisSettings.backlogCsvOutputPath = backlogCsvPath.string();
-	std::ofstream out(backlogCsvPath, std::ios::trunc);
-	if (!out.is_open())
-	{
-		LOGE("Failed to open backlog CSV for writing: %s", backlogCsvPath.string().c_str());
-		return;
-	}
-
-	out << "priority,name,expected_impact,estimated_ms,measured_ms,budget_pass\n";
-	for (const auto &item : ptBacklogItems)
-	{
-		const char *priority = "Medium";
-		if (item.priority == Laphria::PathTracerBacklogPriority::High)
-		{
-			priority = "High";
-		}
-		else if (item.priority == Laphria::PathTracerBacklogPriority::Low)
-		{
-			priority = "Low";
-		}
-		out << priority << ','
-		    << '"' << item.name << '"' << ','
-		    << '"' << item.expectedArtifactImpact << '"' << ','
-		    << item.estimatedMsCost << ','
-		    << item.measuredMsCost << ','
-		    << (item.budgetPass ? 1 : 0) << '\n';
-	}
-}
-
-void EngineCore::loadPathTracerBenchmarkSceneIfNeeded()
-{
-	auto &analysis = ui.pathTracerAnalysisSettings;
-	if (!(analysis.enableAnalysisMode && analysis.lockBenchmarkScene && scene && resourceManager))
-	{
-		return;
-	}
-	if (ptBenchmarkSceneLoaded)
-	{
-		return;
-	}
-	namespace fs                             = std::filesystem;
-	const fs::path                directPath = fs::path("Assets") / "sponza_runtime.glb";
-	const std::array<fs::path, 4> candidates = {
-	    directPath,
-	    fs::path("..") / directPath,
-	    fs::path("..") / fs::path("..") / directPath,
-	    fs::path("..") / fs::path("..") / fs::path("..") / directPath};
-
-	std::string resolvedPath = directPath.generic_string();
-	for (const auto &candidate : candidates)
-	{
-		std::error_code ec;
-		if (fs::exists(candidate, ec) && !ec)
-		{
-			resolvedPath = candidate.generic_string();
-			break;
-		}
-	}
-
-	scene->loadModel(resolvedPath, *resourceManager, *pipelines.descriptorSetLayoutMaterial, scene->getRoot());
-	auto &pathTracerSettings                 = ui.pathTracerSettings;
-	pathTracerSettings.directSunBounceMode   = 1;
-	ptBenchmarkSceneLoaded = true;
-}
-
-void EngineCore::updatePathTracerBenchmark(float deltaTimeSeconds)
-{
-	auto &analysis = ui.pathTracerAnalysisSettings;
-	if (!(analysis.enableAnalysisMode && analysis.benchmarkActive))
-	{
-		return;
-	}
-
-	if (analysis.runBaselineSweep)
-	{
-		if (ptSweepConfigs.empty())
-		{
-			ptSweepConfigs         = buildPathTracerBaselineSweepMatrix();
-			ptSweepConfigIndex     = 0;
-			ptSweepWarmupRemaining = analysis.warmupFrames;
-			ptSweepSampleRemaining = analysis.sampleFrames;
-			ptSweepScores.clear();
-			ptBacklogItems.clear();
-			ptSampleTotalMs.clear();
-			ptSampleRayTraceMs.clear();
-			ptSampleDenoiserMs.clear();
-			analysis.recommendationManual.clear();
-			analysis.recommendationAutoBalanced.clear();
-			analysis.recommendationAutoAggressive.clear();
-			analysis.backlogSummary.clear();
-			const auto benchmarkCsvPath                          = resolveAnalysisOutputPath(kPtBenchmarkCsvFileName);
-			ui.pathTracerAnalysisSettings.benchmarkCsvOutputPath = benchmarkCsvPath.string();
-			std::ofstream out(benchmarkCsvPath, std::ios::trunc);
-			if (out.is_open())
-			{
-				out << "config_index,resolution_scale,denoiser_iterations,reprojection,motion_aware,reduce_secondary,"
-				       "total_p50_ms,total_p95_ms,total_p99_ms,ray_p95_ms,denoiser_p95_ms,"
-				       "history_accept_ratio,history_reject_ratio,sky_hit_ratio,firefly_clamp_ratio,"
-				       "budget_pass,composite_score\n";
-			}
-			else
-			{
-				LOGE("Failed to open benchmark CSV for writing: %s", benchmarkCsvPath.string().c_str());
-			}
-		}
-		if (ptSweepConfigIndex < ptSweepConfigs.size())
-		{
-			const auto &cfg                                     = ptSweepConfigs[ptSweepConfigIndex];
-			ui.pathTracerSettings.resolutionScale               = cfg.resolutionScale;
-			ui.pathTracerSettings.denoiserIterations            = cfg.denoiserIterations;
-			ui.pathTracerSettings.enableReprojection            = cfg.enableReprojection;
-			ui.pathTracerSettings.enableMotionAwareAccumulation = cfg.enableMotionAwareAccumulation;
-			ui.pathTracerSettings.reduceSecondaryEffects        = cfg.reduceSecondaryEffects;
-		}
-	}
-
-	if (analysis.freezeCameraInputDuringBenchmark)
-	{
-		camera.processInput(0.0f, 0.0f, 0.0f);
-	}
-
-	ptBenchmarkClockSeconds += std::max(0.0f, deltaTimeSeconds);
-	ptBenchmarkTeleportClockSeconds += std::max(0.0f, deltaTimeSeconds);
-
-	switch (analysis.cameraPath)
-	{
-		case UISystem::PathTracerBenchmarkCameraPath::Static:
-			camera.position = ptBenchmarkBasePosition;
-			camera.pitch    = ptBenchmarkBasePitch;
-			camera.yaw      = ptBenchmarkBaseYaw;
-			break;
-		case UISystem::PathTracerBenchmarkCameraPath::SlowPan:
-			camera.position = ptBenchmarkBasePosition;
-			camera.pitch    = ptBenchmarkBasePitch;
-			camera.yaw      = ptBenchmarkBaseYaw + glm::radians(8.0f) * ptBenchmarkClockSeconds;
-			break;
-		case UISystem::PathTracerBenchmarkCameraPath::FastPan:
-			camera.position = ptBenchmarkBasePosition;
-			camera.pitch    = ptBenchmarkBasePitch;
-			camera.yaw      = ptBenchmarkBaseYaw + glm::radians(36.0f) * ptBenchmarkClockSeconds;
-			break;
-		case UISystem::PathTracerBenchmarkCameraPath::Teleport:
-			if (ptBenchmarkTeleportClockSeconds >= 1.5f)
-			{
-				ptBenchmarkTeleportClockSeconds = 0.0f;
-			}
-			if (ptBenchmarkTeleportClockSeconds < 0.75f)
-			{
-				camera.position = ptBenchmarkBasePosition;
-				camera.pitch    = ptBenchmarkBasePitch;
-				camera.yaw      = ptBenchmarkBaseYaw;
-			}
-			else
-			{
-				camera.position = ptBenchmarkBasePosition + glm::vec3(3.5f, 0.4f, -2.5f);
-				camera.pitch    = ptBenchmarkBasePitch + glm::radians(6.0f);
-				camera.yaw      = ptBenchmarkBaseYaw + glm::radians(45.0f);
-			}
-			break;
-	}
 }
 
 void EngineCore::updateAdaptivePathTracerSettings()
 {
-	if (ui.pathTracerAnalysisSettings.enableAnalysisMode && ui.pathTracerAnalysisSettings.benchmarkActive)
-	{
-		return;
-	}
 	if (ui.pathTracerSettings.qualityMode == UISystem::PathTracerQualityMode::Manual)
 	{
 		return;
@@ -3985,12 +3187,9 @@ void EngineCore::drawFrame()
 		    staticSettingsChanged ||
 		    surfelPathTracerResources.needsPersistentResourceRecreate(ui.surfelPathTracerSettings);
 
-		waitForSurfelPathTracerIdle(needsResourceRecreate
-		                                ? "surfel path tracer persistent resource fence"
-		                                : "surfel path tracer stats fence");
-
 		if (needsResourceRecreate)
 		{
+			waitForSurfelPathTracerIdle("surfel path tracer persistent resource fence");
 			surfelPathTracerResources.resetPersistentResources(vulkan, ui.surfelPathTracerSettings);
 			if (atlasSettingsChanged)
 			{
@@ -4006,7 +3205,7 @@ void EngineCore::drawFrame()
 			ptForceHistoryReset = true;
 		}
 
-		ui.surfelPathTracerStats = surfelPathTracerResources.readStats();
+		ui.surfelPathTracerStats = surfelPathTracerResources.readStats(frames.frameIndex);
 	};
 	if (ui.renderMode == RenderMode::SurfelPathTracer)
 	{
@@ -4035,8 +3234,6 @@ void EngineCore::drawFrame()
 	if (submittedRenderModes[frames.frameIndex] == RenderMode::PathTracer)
 	{
 		collectPathTracerTimings(frames.frameIndex);
-		collectPathTracerAnalysisCounters(frames.frameIndex);
-		updatePathTracerExperimentSweep();
 		updateAdaptivePathTracerSettings();
 	}
 
@@ -4063,6 +3260,23 @@ void EngineCore::drawFrame()
 		{
 			throw std::runtime_error("failed to wait for in-flight swapchain image fence");
 		}
+	}
+
+	if (ui.renderMode == RenderMode::PathTracer)
+	{
+		const float clampedScale = std::clamp(ui.pathTracerSettings.resolutionScale, 0.5f, 1.0f);
+		const float secondaryScale = ui.pathTracerSettings.reduceSecondaryEffects ? 0.90f : 1.0f;
+		const float effectiveScale = std::clamp(clampedScale * secondaryScale, 0.5f, 1.0f);
+		const vk::Extent2D nextRenderExtent{
+		    std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.width) * effectiveScale)),
+		    std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.height) * effectiveScale))};
+		if (ptActiveRenderExtent.width != 0 &&
+		    (ptActiveRenderExtent.width != nextRenderExtent.width ||
+		     ptActiveRenderExtent.height != nextRenderExtent.height))
+		{
+			ptForceHistoryReset = true;
+		}
+		ptActiveRenderExtent = nextRenderExtent;
 	}
 
 	frames.updateUniformBuffer(frames.frameIndex, camera, swapchain.extent, ui.lightDirection, ui.exposure, ui.textureColorSpaceModel);
@@ -4114,7 +3328,8 @@ void EngineCore::drawFrame()
 
 	// The swapchain image is accessed at eColorAttachmentOutput (main/ImGui pass) and at
 	// eTransfer (blit in compute and RT paths). Both stages must wait for vkAcquireNextImage.
-	vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eAllCommands);
+	vk::PipelineStageFlags waitDestinationStageMask = vk::PipelineStageFlagBits::eTransfer |
+	                                                       vk::PipelineStageFlagBits::eColorAttachmentOutput;
 	const vk::SubmitInfo   submitInfo{
 	      .waitSemaphoreCount   = 1,
 	      .pWaitSemaphores      = &*frames.presentCompleteSemaphores[frames.frameIndex],

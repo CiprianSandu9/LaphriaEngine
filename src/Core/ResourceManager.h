@@ -16,7 +16,7 @@
 // Struct to hold GPU resources for a loaded model
 struct ModelResource
 {
-	~ModelResource() = default;
+	~ModelResource();
 
 	enum class AnimationInterpolationMode
 	{
@@ -104,6 +104,7 @@ struct ModelResource
 	std::vector<vk::raii::Sampler>              textureSamplers;
 
 	// Resource Binding
+	vk::raii::DescriptorPool materialDescriptorPool{nullptr};
 	vk::raii::DescriptorSet descriptorSet{nullptr};        // Set 1: Materials + Textures
 	vk::raii::DescriptorSet skinningDescriptorSet{nullptr};
 

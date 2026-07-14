@@ -16,35 +16,6 @@
 // Owns ImGui lifecycle, all editor draw calls, and UI-driven simulation state.
 class UISystem {
 public:
-    enum class PathTracerBenchmarkCameraPath
-    {
-        Static = 0,
-        SlowPan = 1,
-        FastPan = 2,
-        Teleport = 3
-    };
-
-    enum class PathTracerDebugAov
-    {
-        FinalColor = 0,
-        ReprojectionValidity = 1,
-        HistoryAlpha = 2,
-        MotionMagnitude = 3,
-        TemporalVariance = 4,
-        AtrousIteration = 5,
-        PathRawFinalColor = 6,
-        PathDirectLighting = 7,
-        PathIndirectLighting = 8,
-        PathSkyContribution = 9,
-        PathThroughput = 10,
-        PathBounceCount = 11,
-        PathShadowVisibility = 12,
-        PathEnvironmentNeeContribution = 13,
-        PathFirstHitBounceContribution = 14,
-        PathSecondaryDirectSunContribution = 15,
-        PathBaselineContinuationContribution = 16
-    };
-
     enum class PathTracerQualityMode
     {
         Manual = 0,
@@ -56,15 +27,6 @@ public:
     {
         CosineHemisphere = 0,
         SkyBiased = 1
-    };
-
-    enum class FirstHitProbeSamplingMode
-    {
-        CosineHemisphere = 0,
-        SunBounceGuided = 1,
-        CandidateSunBounce = 2,
-        CandidateAverageReference = 3,
-        CandidateRis = 4
     };
 
     enum class SurfelPathTracerDebugView
@@ -99,11 +61,7 @@ public:
         // 0 = first bounce only, 1 = first 2 bounces, 2 = all bounces.
         int                   environmentNeeBounceMode = 0;
         bool                  blackEnvironment = false;
-        bool                  applyFirstHitProbesToFinal = false;
         EnvironmentNeeSamplingMode environmentNeeSamplingMode = EnvironmentNeeSamplingMode::SkyBiased;
-        FirstHitProbeSamplingMode firstHitProbeSamplingMode = FirstHitProbeSamplingMode::CosineHemisphere;
-        int                   firstHitDiffuseSamples = 1;
-        int                   firstHitCandidateCount = 4;
         int                   pathTracerMaxBounces = 8;
         // 0 = all bounces, 1 = first bounce only, 2 = first 2 bounces.
         int                   directSunBounceMode = 0;
@@ -128,16 +86,6 @@ public:
         float totalFrameP99Ms = 0.0f;
         float rayTraceP95Ms = 0.0f;
         float denoiserP95Ms = 0.0f;
-        uint32_t analysisSampleCount = 0;
-        float historyAcceptanceRatio = 0.0f;
-        float historyRejectionRatio = 0.0f;
-        float skyHitRatio = 0.0f;
-        float fireflyClampRatio = 0.0f;
-        uint32_t historyAcceptedCount = 0;
-        uint32_t historyRejectedCount = 0;
-        uint32_t skyHitCount = 0;
-        uint32_t fireflyClampCount = 0;
-        uint32_t pixelSampleCount = 0;
         float cameraMotionFactor = 0.0f;
     };
 
@@ -199,35 +147,6 @@ public:
         float totalFrameMs = 0.0f;
     };
 
-    struct PathTracerAnalysisSettings
-    {
-        bool                         enableAnalysisMode = false;
-        bool                         lockBenchmarkScene = false;
-        bool                         benchmarkActive = false;
-        bool                         runBaselineSweep = false;
-        bool                         freezeCameraInputDuringBenchmark = true;
-        PathTracerBenchmarkCameraPath cameraPath = PathTracerBenchmarkCameraPath::SlowPan;
-        bool                         adaptiveSampling = true;
-        int                          minSampleFrames = 120;
-        int                          convergenceWindowFrames = 60;
-        float                        p95ConvergenceThreshold = 0.02f;
-        PathTracerDebugAov           debugAov = PathTracerDebugAov::FinalColor;
-        int                          debugAtrousIteration = 0;
-        int                          warmupFrames = 30;
-        int                          sampleFrames = 120;
-        float                        benchmarkVisualFidelityScore = 0.80f;
-        bool                         runPhysicalSanityChecks = false;
-        bool                         physicalSanityActive = false;
-        bool                         physicalSanityPassed = false;
-        float                        physicalSanityDriftMetric = 0.0f;
-        std::string                  recommendationManual;
-        std::string                  recommendationAutoBalanced;
-        std::string                  recommendationAutoAggressive;
-        std::string                  backlogSummary;
-        std::string                  benchmarkCsvOutputPath;
-        std::string                  backlogCsvOutputPath;
-    };
-
     // Call after the swapchain has been created (needs colorFormat / depthFormat).
     void init(VulkanDevice &dev, GLFWwindow *window,
               vk::Format colorFormat, vk::Format depthFormat);
@@ -248,7 +167,6 @@ public:
     glm::vec3 lightDirection = glm::vec3(-0.30f, -1.0f, -0.20f);
     float exposure = 1.0f;
     PathTracerSettings pathTracerSettings;
-    PathTracerAnalysisSettings pathTracerAnalysisSettings;
     PathTracerPerfStats pathTracerPerfStats;
     SurfelPathTracerSettings surfelPathTracerSettings;
     SurfelPathTracerStats surfelPathTracerStats;
@@ -303,8 +221,7 @@ private:
 
     void drawAssetBrowser(Scene &scene, ResourceManager &rm, vk::DescriptorSetLayout matLayout);
     void drawPathTracerMainControls();
-    void drawPathTracerDebugLab();
-    void drawPathTracerBenchmarkControls();
+    void drawPathTracerAdvancedLightingControls();
     void drawPathTracerStats();
 
     void refreshAssetCache();

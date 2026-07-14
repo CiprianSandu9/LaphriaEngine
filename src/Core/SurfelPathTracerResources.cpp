@@ -201,15 +201,68 @@ void SurfelPathTracerResources::destroy()
 	initialized_ = false;
 }
 
-UISystem::SurfelPathTracerStats SurfelPathTracerResources::readStats() const
+void SurfelPathTracerResources::recordStatsReadback(
+    const vk::raii::CommandBuffer &commandBuffer,
+    uint32_t frameIndex) const
+{
+	if (frameIndex >= MAX_FRAMES_IN_FLIGHT || !statsReadbackBuffers_[frameIndex].valid())
+	{
+		return;
+	}
+
+	vk::BufferMemoryBarrier2 countersToTransfer{
+	    .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader |
+	                    vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+	    .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+	    .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+	    .buffer = *countersBuffer,
+	    .offset = 0,
+	    .size = sizeof(SurfelPathTracerCounters)};
+	vk::DependencyInfo countersToTransferDependency{
+	    .bufferMemoryBarrierCount = 1,
+	    .pBufferMemoryBarriers = &countersToTransfer};
+	commandBuffer.pipelineBarrier2(countersToTransferDependency);
+
+	vk::BufferCopy copyRegion{.size = sizeof(SurfelPathTracerCounters)};
+	commandBuffer.copyBuffer(*countersBuffer, *statsReadbackBuffers_[frameIndex], copyRegion);
+
+	std::array<vk::BufferMemoryBarrier2, 2> copyCompletionBarriers = {
+	    vk::BufferMemoryBarrier2{
+	    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+	    .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+	    .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+	    .buffer = *statsReadbackBuffers_[frameIndex],
+	    .offset = 0,
+	    .size = sizeof(SurfelPathTracerCounters)},
+	    vk::BufferMemoryBarrier2{
+	    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+	    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader |
+	                    vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderRead |
+	                     vk::AccessFlagBits2::eShaderWrite,
+	    .buffer = *countersBuffer,
+	    .offset = 0,
+	    .size = sizeof(SurfelPathTracerCounters)}};
+	vk::DependencyInfo transferToHostDependency{
+	    .bufferMemoryBarrierCount = static_cast<uint32_t>(copyCompletionBarriers.size()),
+	    .pBufferMemoryBarriers = copyCompletionBarriers.data()};
+	commandBuffer.pipelineBarrier2(transferToHostDependency);
+	statsReadbackValid_[frameIndex] = true;
+}
+
+UISystem::SurfelPathTracerStats SurfelPathTracerResources::readStats(uint32_t frameIndex) const
 {
 	UISystem::SurfelPathTracerStats stats{};
-	if (!mappedCounters)
+	if (frameIndex >= MAX_FRAMES_IN_FLIGHT || !statsReadbackValid_[frameIndex] ||
+	    !statsReadbackMapped_[frameIndex])
 	{
 		return stats;
 	}
 
-	const auto *counters = static_cast<const SurfelPathTracerCounters *>(mappedCounters);
+	const auto *counters = static_cast<const SurfelPathTracerCounters *>(statsReadbackMapped_[frameIndex]);
 	const uint32_t deadSurfels = std::min(counters->deadSurfels, settings_.maxSurfels);
 	stats.deadSurfels = deadSurfels;
 	stats.aliveSurfels = settings_.maxSurfels - deadSurfels;
@@ -274,13 +327,24 @@ void SurfelPathTracerResources::createPersistentBuffers(
 
 	createBuffer(sizeof(SurfelPathTracerCounters), countersBuffer,
 	             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-	             vk::BufferUsageFlagBits::eStorageBuffer,
+	             vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc,
 	             "SurfelPathTracer.CountersBuffer");
 	mappedCounters = countersBuffer.memory.mapMemory(0, sizeof(SurfelPathTracerCounters));
 	std::memset(mappedCounters, 0, sizeof(SurfelPathTracerCounters));
 	auto *initialCounters = static_cast<SurfelPathTracerCounters *>(mappedCounters);
 	initialCounters->aliveSurfels = 0;
 	initialCounters->deadSurfels = maxSurfels;
+	for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+	{
+		createBuffer(sizeof(SurfelPathTracerCounters), statsReadbackBuffers_[frameIndex],
+		             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+		             vk::BufferUsageFlagBits::eTransferDst,
+		             "SurfelPathTracer.StatsReadbackBuffer");
+		statsReadbackMapped_[frameIndex] = statsReadbackBuffers_[frameIndex].memory.mapMemory(
+		    0, sizeof(SurfelPathTracerCounters));
+		std::memset(statsReadbackMapped_[frameIndex], 0, sizeof(SurfelPathTracerCounters));
+		statsReadbackValid_[frameIndex] = false;
+	}
 
 	createBuffer(byteSize(maxSurfels, sizeof(SurfelPathTracerSurfel)), surfelBuffer,
 	             vk::MemoryPropertyFlagBits::eDeviceLocal,
@@ -404,6 +468,16 @@ void SurfelPathTracerResources::destroyPersistentBuffers()
 		countersBuffer.memory.unmapMemory();
 	}
 	mappedCounters = nullptr;
+	for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+	{
+		if (statsReadbackMapped_[frameIndex])
+		{
+			statsReadbackBuffers_[frameIndex].memory.unmapMemory();
+		}
+		statsReadbackMapped_[frameIndex] = nullptr;
+		statsReadbackValid_[frameIndex] = false;
+		statsReadbackBuffers_[frameIndex].reset();
+	}
 	destroyBuffers({&countersBuffer, &surfelBuffer, &aliveBuffer, &deadBuffer, &dirtyBuffer,
 	                &recycleBuffer, &rayBuffer, &cellInfoBuffer, &cellCounterBuffer,
 	                &cellToSurfelBuffer, &surfelSourceBuffer, &sourceInstanceBuffer,

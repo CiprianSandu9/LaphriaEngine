@@ -18,6 +18,15 @@ using Laphria::MaterialData;
 using Laphria::PBRMaterial;
 using Laphria::Vertex;
 
+ModelResource::~ModelResource()
+{
+	if (skinningJointMatricesMapped && *skinningJointMatrixBuffer.memory)
+	{
+		skinningJointMatrixBuffer.memory.unmapMemory();
+	}
+	skinningJointMatricesMapped = nullptr;
+}
+
 namespace
 {
 static_assert(sizeof(Vertex) == 60, "Skinning shader expects Vertex stride of 60 bytes.");

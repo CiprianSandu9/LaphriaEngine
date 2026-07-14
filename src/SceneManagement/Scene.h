@@ -65,6 +65,7 @@ private:
     std::unique_ptr<Laphria::Octree> octree;
     bool freezeCulling = false;
     mutable Laphria::AABB frozenCullBounds{{0,0,0},{0,0,0}};
+    mutable std::vector<glm::vec3> spatialIndexPositions;
 
     // Cached Model IDs for physics primitives
     int sphereModelId = -1;

@@ -15,10 +15,7 @@ struct VSOutput {
 [shader("vertex")]
 VSOutput shadowVert(
     [[vk::location(0)]] float3 inPosition,
-    [[vk::location(1)]] float3 inNormal,
-    [[vk::location(2)]] float4 inTangent,
-    [[vk::location(3)]] float2 inTexCoord,
-    [[vk::location(4)]] float3 inColor)
+    [[vk::location(3)]] float2 inTexCoord)
 {
     VSOutput output;
     float4 worldPos = mul(push.modelMatrix, float4(inPosition, 1.0));

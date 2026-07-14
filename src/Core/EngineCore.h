@@ -13,7 +13,6 @@
 #include "FrameContext.h"
 #include "InputSystem.h"
 #include "PipelineCollection.h"
-#include "PathTracerAnalysis.h"
 #include "ResourceManager.h"
 #include "SurfelPathTracerPasses.h"
 #include "SurfelPathTracerResources.h"
@@ -118,69 +117,10 @@ class EngineCore
 	bool      ptCameraMoved{false};
 	float     ptSmoothedMotion{0.0f};
 	bool      ptForceHistoryReset{true};
-	bool      ptBenchmarkSceneLoaded{false};
-	glm::vec3 ptBenchmarkBasePosition{0.0f, 1.2f, 0.0f};
-	float     ptBenchmarkBasePitch{glm::radians(-8.0f)};
-	float     ptBenchmarkBaseYaw{glm::radians(180.0f)};
-	float     ptBenchmarkClockSeconds{0.0f};
-	float     ptBenchmarkTeleportClockSeconds{0.0f};
-	size_t    ptSweepConfigIndex{0};
-	int       ptSweepWarmupRemaining{0};
-	int       ptSweepSampleRemaining{0};
-	std::vector<Laphria::PathTracerSweepConfig> ptSweepConfigs;
+	vk::Extent2D ptActiveRenderExtent{};
 	std::vector<float>                 ptRollingTotalMs;
 	std::vector<float>                 ptRollingRayTraceMs;
 	std::vector<float>                 ptRollingDenoiserMs;
-	std::vector<float>                 ptSampleTotalMs;
-	std::vector<float>                 ptSampleRayTraceMs;
-	std::vector<float>                 ptSampleDenoiserMs;
-	std::vector<Laphria::PathTracerRunScore>    ptSweepScores;
-	std::vector<Laphria::PathTracerBacklogItem> ptBacklogItems;
-	struct PathTracerExperimentRow
-	{
-		std::string name;
-		std::string scenarioName{"Default"};
-		glm::vec3 cameraPosition{0.0f, 1.2f, 0.0f};
-		float cameraPitch = glm::radians(-8.0f);
-		float cameraYaw = glm::radians(180.0f);
-		glm::vec3 lightDirection = glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f));
-		UISystem::FirstHitProbeSamplingMode probeMode = UISystem::FirstHitProbeSamplingMode::CosineHemisphere;
-		int environmentNeeBounceMode = 0;
-		int pathTracerMaxBounces = 8;
-		// 0 = all bounces, 1 = first bounce only, 2 = first 2 bounces.
-		int directSunBounceMode = 0;
-		bool blackEnvironment = true;
-		int firstHitDiffuseSamples = 8;
-		int firstHitCandidateCount = 4;
-		UISystem::PathTracerDebugAov debugAov = UISystem::PathTracerDebugAov::PathRawFinalColor;
-	};
-	struct PathTracerExperimentAccumulator
-	{
-		uint32_t sampleCount = 0;
-		double rayTraceMs = 0.0;
-		double totalFrameMs = 0.0;
-	};
-	bool ptExperimentSweepActive{false};
-	size_t ptExperimentRowIndex{0};
-	int ptExperimentWarmupRemaining{0};
-	int ptExperimentSampleRemaining{0};
-	int ptExperimentWarmupFrames{0};
-	int ptExperimentSampleFrames{0};
-	std::vector<PathTracerExperimentRow> ptExperimentRows;
-	PathTracerExperimentAccumulator ptExperimentAccum;
-	std::string ptExperimentCompletionLog{"PT Experiment Sweep: complete"};
-	bool      ptSanitySceneCreated{false};
-	bool      ptSanityBaselineCaptured{false};
-	float     ptSanityBaselineExposure{1.0f};
-	float     ptSanityBaselineRejectRatio{0.0f};
-	float     ptSanityBaselineFireflyRatio{0.0f};
-	float     ptSanityBaselineSkyRatio{0.0f};
-	float     ptSanityDriftMetric{0.0f};
-	int       ptSanityPhase{0};
-	int       ptSanityFramesRemaining{0};
-	SceneNode::Ptr ptSanityWhiteDiffuseNode;
-	SceneNode::Ptr ptSanityRoughMetalNode;
-	SceneNode::Ptr ptSanityEmissiveNode;
 	RenderMode lastSubmittedRenderMode{RenderMode::Rasterizer};
 	bool       renderModeInitialized{false};
 	std::chrono::high_resolution_clock::time_point lastFrameTime{};
@@ -223,7 +163,6 @@ class EngineCore
 	void resetSurfelPathTracerTemporalHistory() const;
 	void updateSurfelPathTracerHistoryDescriptors(uint32_t frameIndex) const;
 
-	void recordComputeCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordSkinningPass(const vk::raii::CommandBuffer &commandBuffer) const;
 	void recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
 	void recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const;
@@ -236,17 +175,6 @@ class EngineCore
 	void createTimestampQueryPool();
 	void collectPathTracerTimings(uint32_t frameSlot);
 	void updatePathTracerTimingPercentiles();
-	void resetPathTracerAnalysisCounters(uint32_t frameSlot);
-	void collectPathTracerAnalysisCounters(uint32_t frameSlot);
-	void updatePathTracerExperimentSweep();
-	void applyPathTracerExperimentRow(const PathTracerExperimentRow &row);
-	void logPathTracerExperimentRow(const PathTracerExperimentRow &row,
-	                                const PathTracerExperimentAccumulator &accum) const;
-	void ensurePathTracerSanityScene();
-	void updatePathTracerPhysicalSanityChecks(float deltaTimeSeconds);
-	void writePathTracerBacklogCsv();
-	void updatePathTracerBenchmark(float deltaTimeSeconds);
-	void loadPathTracerBenchmarkSceneIfNeeded();
 	void updateAdaptivePathTracerSettings();
 
 	[[nodiscard]] uint32_t getPathTracerQueryBase(uint32_t frameSlot) const;

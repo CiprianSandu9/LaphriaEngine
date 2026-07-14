@@ -142,17 +142,9 @@ struct DenoisePushConstants
 	float   phiNormal;   // normal edge-stopping exponent (typical: 128.0)
 	float   exposureScale; // global exposure multiplier applied on final denoise pass
 	int32_t useRawInput;
-	int32_t debugAov;
-	int32_t debugAtrousIteration;
-};
-
-struct PathTracerAnalysisCounters
-{
-	uint32_t pixelCount = 0;
-	uint32_t historyAcceptedCount = 0;
-	uint32_t historyRejectedCount = 0;
-	uint32_t fireflyClampCount = 0;
-	uint32_t skyHitCount = 0;
+	uint32_t renderWidth;
+	uint32_t renderHeight;
+	int32_t  resetHistory;
 };
 
 struct SkinningPushConstants

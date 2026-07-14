@@ -154,6 +154,13 @@ void Scene::addNode(const SceneNode::Ptr &node, const SceneNode::Ptr &parent)
 			}
 		}
 	}
+
+	spatialIndexPositions.clear();
+	spatialIndexPositions.reserve(allNodes.size());
+	for (const auto &node : allNodes)
+	{
+		spatialIndexPositions.push_back(node ? node->getWorldPosition() : glm::vec3(0.0f));
+	}
 }
 
 void Scene::deleteNode(const SceneNode::Ptr &node)
@@ -211,6 +218,13 @@ void Scene::rebuildOctree() const
 		{
 			stack.push_back(child);
 		}
+	}
+
+	spatialIndexPositions.clear();
+	spatialIndexPositions.reserve(allNodes.size());
+	for (const auto &node : allNodes)
+	{
+		spatialIndexPositions.push_back(node ? node->getWorldPosition() : glm::vec3(0.0f));
 	}
 }
 
@@ -544,7 +558,23 @@ void Scene::updateWorldTransforms() const {
 
 void Scene::syncSpatialIndex() const {
 	updateWorldTransforms();
-	rebuildOctree();
+	bool spatialIndexDirty = spatialIndexPositions.size() != allNodes.size();
+	if (!spatialIndexDirty)
+	{
+		for (size_t i = 0; i < allNodes.size(); ++i)
+		{
+			const glm::vec3 position = allNodes[i] ? allNodes[i]->getWorldPosition() : glm::vec3(0.0f);
+			if (glm::any(glm::notEqual(position, spatialIndexPositions[i])))
+			{
+				spatialIndexDirty = true;
+				break;
+			}
+		}
+	}
+	if (spatialIndexDirty)
+	{
+		rebuildOctree();
+	}
 }
 
 void Scene::setFreezeCulling(bool freeze)
