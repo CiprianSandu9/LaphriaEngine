@@ -264,10 +264,8 @@ void SurfelPathTracerPasses::recordPreparePass(const vk::raii::CommandBuffer &co
 	uint64_t workItemCount = cellCounterCount;
 	if (resetPersistent)
 	{
-		const uint64_t cellEntryCount = static_cast<uint64_t>(push.cellCount) * push.perCellSurfelLimit;
 		const uint64_t resetEntryCount = static_cast<uint64_t>(push.maxSurfels) * 4ull;
 		workItemCount = std::max({static_cast<uint64_t>(push.maxSurfels),
-		                          cellEntryCount,
 		                          cellCounterCount,
 		                          resetEntryCount});
 	}

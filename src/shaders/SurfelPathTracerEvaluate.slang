@@ -64,11 +64,13 @@ float estimateCoverage(float3 position, float3 normal, out uint closestSurfelInd
     float bestWeight = 0.0;
     uint maxSamples = max(push.maxSurfelSamplesPerQuery, 1u);
     uint samplesVisited = 0u;
+    uint entriesInspected = 0u;
+    uint maxEntriesInspected = maxSamples * 8u;
     for (int shell = 0; shell <= 1; ++shell) {
         for (int z = -shell; z <= shell; ++z) {
             for (int y = -shell; y <= shell; ++y) {
                 for (int x = -shell; x <= shell; ++x) {
-                    if (samplesVisited >= maxSamples) {
+                    if (samplesVisited >= maxSamples || entriesInspected >= maxEntriesInspected) {
                         break;
                     }
                     if (max(abs(x), max(abs(y), abs(z))) != shell) {
@@ -82,12 +84,13 @@ float estimateCoverage(float3 position, float3 normal, out uint closestSurfelInd
 
                     uint cellIndex = flattenCameraRelativeCellCoord(cellCoord, dim);
                     SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
+                    // Never stop part-way through a cell: slots in a complete
+                    // under-capacity cell are assigned by atomics and therefore
+                    // have no stable order. Treat maxSamples as a between-cell
+                    // soft budget so the retained set, not insertion order,
+                    // determines coverage.
                     for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
-                        if (samplesVisited >= maxSamples) {
-                            break;
-                        }
-
-                        uint surfelIndex = cellToSurfelBuffer[cellInfo.surfelOffset + slot];
+                        uint surfelIndex = unpackCellSurfelIndex(cellToSurfelBuffer[cellInfo.surfelOffset + slot]);
                         if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= push.maxSurfels) {
                             continue;
                         }
@@ -97,11 +100,19 @@ float estimateCoverage(float3 position, float3 normal, out uint closestSurfelInd
                             continue;
                         }
 
-                        samplesVisited += 1u;
+                        entriesInspected += 1u;
                         float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
                         float normalWeight = saturate(dot(normal, surfelNormal));
                         float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(surfel.radius, 0.0001));
                         float weight = normalWeight * distanceWeight;
+                        // A spatial cell can contain several disconnected
+                        // walls or arches. Candidates with no geometric support
+                        // must not consume the query budget and prevent the
+                        // neighboring cells from being searched.
+                        if (weight <= 0.0001) {
+                            continue;
+                        }
+                        samplesVisited += 1u;
                         coverage += weight;
                         if (weight > bestWeight) {
                             bestWeight = weight;
@@ -226,11 +237,13 @@ float3 sampleWeightedSurfelRadiance(float3 position, float3 normal) {
     float weightSum = 0.0;
     uint maxSamples = max(push.maxSurfelSamplesPerQuery, 1u);
     uint samplesVisited = 0u;
+    uint entriesInspected = 0u;
+    uint maxEntriesInspected = maxSamples * 8u;
     for (int shell = 0; shell <= 1; ++shell) {
         for (int z = -shell; z <= shell; ++z) {
             for (int y = -shell; y <= shell; ++y) {
                 for (int x = -shell; x <= shell; ++x) {
-                    if (samplesVisited >= maxSamples) {
+                    if (samplesVisited >= maxSamples || entriesInspected >= maxEntriesInspected) {
                         break;
                     }
                     if (max(abs(x), max(abs(y), abs(z))) != shell) {
@@ -244,12 +257,11 @@ float3 sampleWeightedSurfelRadiance(float3 position, float3 normal) {
 
                     uint cellIndex = flattenCameraRelativeCellCoord(cellCoord, dim);
                     SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
+                    // As in coverage, finish the current cell before applying
+                    // the query budget. This removes partial-cell dependence on
+                    // the parallel insertion order.
                     for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
-                        if (samplesVisited >= maxSamples) {
-                            break;
-                        }
-
-                        uint surfelIndex = cellToSurfelBuffer[cellInfo.surfelOffset + slot];
+                        uint surfelIndex = unpackCellSurfelIndex(cellToSurfelBuffer[cellInfo.surfelOffset + slot]);
                         if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= push.maxSurfels) {
                             continue;
                         }
@@ -259,7 +271,7 @@ float3 sampleWeightedSurfelRadiance(float3 position, float3 normal) {
                             continue;
                         }
 
-                        samplesVisited += 1u;
+                        entriesInspected += 1u;
                         float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
                         float normalWeight = saturate(dot(normal, surfelNormal));
                         // Resolve must use the same physical support radius as
@@ -269,6 +281,10 @@ float3 sampleWeightedSurfelRadiance(float3 position, float3 normal) {
                         float influenceRadius = max(surfel.radius, push.cellSize * 0.75);
                         float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(influenceRadius, 0.0001));
                         float weight = normalWeight * distanceWeight * distanceWeight;
+                        if (weight <= 0.0001) {
+                            continue;
+                        }
+                        samplesVisited += 1u;
                         weightedRadiance += clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE) * weight;
                         weightSum += weight;
                     }
@@ -319,17 +335,14 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     if (push.mode == SURFEL_PT_EVALUATE_GENERATE) {
         float coverage = estimateCoverage(position, normal, closestSurfelIndex, false);
-        uint centerCellIndex = cameraRelativeCellIndexForPosition(position,
-                                                                  ubo.cameraPos.xyz,
-                                                                  push.cellSize,
-                                                                  push.cellDimension);
-        bool cellHasCapacity = centerCellIndex != SURFEL_PT_INVALID_INDEX &&
-                               cellInfoBuffer[centerCellIndex].surfelCount <
-                                   max(push.perCellSurfelLimit, 1u);
         bool wantsPlacement = push.lockSurfels == 0u &&
                               push.enablePlacement != 0u &&
-                              cellHasCapacity &&
                               coverage < push.placementThreshold;
+        // perCellSurfelLimit bounds the compact lookup representation, not the
+        // persistent surfel population. A full cell can contain unrelated
+        // surfaces; blocking placement here permanently leaves a newly visible
+        // surface without GI. Deterministic overflow selection and global
+        // pressure recycling provide the actual capacity controls.
         // Thousands of uncovered pixels used to compute seed radiance and then
         // spin on the same dead-list CAS, although only a small fraction could
         // win. Keep one deterministic candidate per subgroup. This preserves

@@ -17,6 +17,12 @@
 
 namespace Laphria
 {
+static_assert(UISystem::SurfelPathTracerSettings::atlasCapacity(
+                  UISystem::SurfelPathTracerSettings::kMaxAtlasDimension,
+                  UISystem::SurfelPathTracerSettings::kMaxAtlasDimension) <
+              (1u << 19u),
+              "Packed surfel cell entries reserve 19 bits for the surfel index");
+
 struct SurfelPathTracerSurfel
 {
 	glm::vec3 position{0.0f};
@@ -182,7 +188,7 @@ class SurfelPathTracerResources
 		const uint32_t dim = std::clamp(cellDimension, kMinCellDimension, kMaxCellDimension);
 		const double halfDim = static_cast<double>(dim) * 0.5;
 		const double maxCoord = static_cast<double>(dim - 1u);
-		const glm::dvec3 centeredCell = glm::floor(glm::dvec3(position) / static_cast<double>(safeCellSize)) +
+		const glm::dvec3 centeredCell = glm::round(glm::dvec3(position) / static_cast<double>(safeCellSize)) +
 		                                glm::dvec3(halfDim);
 		const glm::dvec3 clampedCell = glm::clamp(centeredCell, glm::dvec3(0.0), glm::dvec3(maxCoord));
 		const glm::ivec3 coord{
@@ -199,7 +205,14 @@ class SurfelPathTracerResources
 	                                                                        float cellSize,
 	                                                                        uint32_t cellDimension)
 	{
-		return cellAddressForPosition(position - cameraPosition, cellSize, cellDimension);
+		const float safeCellSize = std::max(cellSize, 0.0001f);
+		const glm::dvec3 worldCell = glm::round(glm::dvec3(position) /
+		                                        static_cast<double>(safeCellSize));
+		const glm::dvec3 cameraCell = glm::round(glm::dvec3(cameraPosition) /
+		                                         static_cast<double>(safeCellSize));
+		return cellAddressForPosition(glm::vec3(worldCell - cameraCell),
+		                              1.0f,
+		                              cellDimension);
 	}
 
 	VmaBuffer countersBuffer;

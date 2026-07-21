@@ -5,6 +5,11 @@
 
 static const uint SURFEL_PT_MAX_LIFE = 255u;
 static const uint SURFEL_PT_INVALID_INDEX = 0xFFFFFFFFu;
+// The atlas-backed capacity is below 2^19 (524,288). Compact cell entries use
+// the remaining 13 bits for a deterministic per-world-cell retention priority.
+static const uint SURFEL_PT_CELL_ENTRY_INDEX_BITS = 19u;
+static const uint SURFEL_PT_CELL_ENTRY_INDEX_MASK = (1u << SURFEL_PT_CELL_ENTRY_INDEX_BITS) - 1u;
+static const uint SURFEL_PT_CELL_ENTRY_PRIORITY_MASK = (1u << (32u - SURFEL_PT_CELL_ENTRY_INDEX_BITS)) - 1u;
 static const uint SURFEL_PT_ATLAS_TILE_SIZE = 6u;
 static const uint SURFEL_PT_SLEEP_AWAKE = 0u;
 static const uint SURFEL_PT_SLEEP_SLEEPING = 1u;
@@ -293,9 +298,39 @@ bool isActiveSurfel(SurfelPathTracerSurfel surfel)
            isFinite3(surfel.position);
 }
 
+int3 worldCellCoord(float3 position, float cellSize)
+{
+    return int3(round(position / max(cellSize, 0.0001)));
+}
+
+uint hashWorldCellCoord(int3 cellCoord)
+{
+    uint hash = pcgHash(asuint(cellCoord.x) ^ 0x9E3779B9u);
+    hash = pcgHash(hash ^ asuint(cellCoord.y) ^ 0x85EBCA6Bu);
+    return pcgHash(hash ^ asuint(cellCoord.z) ^ 0xC2B2AE35u);
+}
+
+uint packCellSurfelEntry(uint surfelIndex, int3 absoluteCellCoord)
+{
+    uint priority = pcgHash(surfelIndex ^ hashWorldCellCoord(absoluteCellCoord)) &
+                    SURFEL_PT_CELL_ENTRY_PRIORITY_MASK;
+    return (priority << SURFEL_PT_CELL_ENTRY_INDEX_BITS) |
+           (surfelIndex & SURFEL_PT_CELL_ENTRY_INDEX_MASK);
+}
+
+uint unpackCellSurfelIndex(uint entry)
+{
+    return entry == SURFEL_PT_INVALID_INDEX
+           ? SURFEL_PT_INVALID_INDEX
+           : (entry & SURFEL_PT_CELL_ENTRY_INDEX_MASK);
+}
+
 int3 cameraRelativeCellCoord(float3 position, float3 cameraPosition, float cellSize)
 {
-    return int3(round((position - cameraPosition) / max(cellSize, 0.0001)));
+    // Keep the bounded lookup window camera-relative, but anchor its cells in
+    // world space. Sub-cell camera motion must not translate every lookup cell
+    // and reshuffle otherwise stationary surfels.
+    return worldCellCoord(position, cellSize) - worldCellCoord(cameraPosition, cellSize);
 }
 
 bool isCellCoordValid(int3 coord, uint cellDimension)
@@ -334,7 +369,8 @@ bool isSurfelIntersectCell(SurfelPathTracerSurfel surfel, int3 cellCoord, float3
     }
 
     float safeCellSize = max(cellSize, 0.0001);
-    float3 cellCenter = float3(cellCoord) * safeCellSize + cameraPosition;
+    int3 cameraCell = worldCellCoord(cameraPosition, safeCellSize);
+    float3 cellCenter = float3(cellCoord + cameraCell) * safeCellSize;
     float3 halfExtent = float3(safeCellSize * 0.5);
     float3 closest = clamp(surfel.position, cellCenter - halfExtent, cellCenter + halfExtent);
     return length(closest - surfel.position) <= surfel.radius;
@@ -352,9 +388,23 @@ bool shouldRecycleSurfel(SurfelPathTracerSurfel surfel, uint frameIndex, float d
     bool pressure = aliveRatio > 0.85;
     uint representationGraceFrames = pressure ? 120u : 240u;
     bool unrepresented = ageSinceSeen > representationGraceFrames;
+    // Ray scheduling marks every surfel represented by the camera-centered
+    // spatial window as seen. In compact scenes that includes surfels behind
+    // the camera and behind walls, so representation alone cannot be allowed
+    // to keep the cache alive indefinitely. Once capacity is under pressure,
+    // reclaim entries that have not actually been selected by a visible
+    // resolve pixel for several seconds. Newly placed and recently revisited
+    // surfels retain a generous grace period to avoid camera-motion churn.
+    // Retire only a small deterministic fraction per frame. Thousands of GPU
+    // invocations can observe the same near-full counter concurrently; without
+    // throttling they could all evict at once and turn capacity recovery into a
+    // visible cache flush.
+    bool evictionTurn = (pcgHash(surfel.materialKey ^ surfel.packedNormal ^
+                                 asuint(surfel.position.x) ^ frameIndex) & 63u) == 0u;
+    bool unreferencedUnderPressure = pressure && ageSinceRef > 480u && evictionTurn;
     bool distant = distanceToCamera > 160.0;
     bool distantAndUnused = distant && ageSinceSeen > 30u && ageSinceRef > 30u;
-    return unrepresented || distantAndUnused;
+    return unrepresented || unreferencedUnderPressure || distantAndUnused;
 }
 
 uint adaptiveRayCountForSurfel(SurfelPathTracerSurfel surfel,
@@ -428,12 +478,15 @@ bool sampleSurfelIrradianceCell(float3 position,
 
     float3 weightedRadiance = float3(0.0);
     float weightSum = 0.0;
-    uint sampleCount = min(slotCount, max(maxSamples, 1u));
-    uint startSlot = pcgHash(sampleSeed) % slotCount;
+    // The compact cell list is complete up to its configured per-cell limit.
+    // Consume the complete retained set so atomically assigned slot order cannot
+    // change the result from frame to frame. maxSamples remains part of the API
+    // for compatibility and is used by multi-cell callers as a soft budget.
+    uint sampleCount = slotCount;
     for (uint sampleIndex = 0u; sampleIndex < sampleCount; ++sampleIndex)
     {
-        uint slot = (startSlot + sampleIndex) % slotCount;
-        uint surfelIndex = cellToSurfels[cellInfo.surfelOffset + slot];
+        uint slot = sampleIndex;
+        uint surfelIndex = unpackCellSurfelIndex(cellToSurfels[cellInfo.surfelOffset + slot]);
         if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= maxSurfels)
         {
             continue;

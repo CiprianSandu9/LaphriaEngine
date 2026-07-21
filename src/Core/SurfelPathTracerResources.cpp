@@ -411,7 +411,8 @@ void SurfelPathTracerResources::createPersistentBuffers(
 	             "SurfelPathTracer.CellCounterBuffer");
 	createBuffer(byteSize(cellToSurfelCount, sizeof(uint32_t)), cellToSurfelBuffer,
 	             vk::MemoryPropertyFlagBits::eDeviceLocal,
-	             vk::BufferUsageFlagBits::eStorageBuffer,
+	             vk::BufferUsageFlagBits::eStorageBuffer |
+	                 vk::BufferUsageFlagBits::eTransferDst,
 	             "SurfelPathTracer.CellToSurfelBuffer");
 	needsPersistentReset_ = true;
 }

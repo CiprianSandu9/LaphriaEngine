@@ -120,7 +120,7 @@ bool loadSelectedContributingSurfel(float3 worldPosition,
                     uint cellIndex = flattenCameraRelativeCellCoord(cellCoord, dim);
                     SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
                     for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
-                        uint surfelIndex = cellToSurfelBuffer[cellInfo.surfelOffset + slot];
+                        uint surfelIndex = unpackCellSurfelIndex(cellToSurfelBuffer[cellInfo.surfelOffset + slot]);
                         if (surfelIndex == SURFEL_PT_INVALID_INDEX) {
                             continue;
                         }

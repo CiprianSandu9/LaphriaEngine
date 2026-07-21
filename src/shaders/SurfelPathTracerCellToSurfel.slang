@@ -16,16 +16,29 @@ struct CellToSurfelPushConstants {
 
 [[vk::push_constant]] CellToSurfelPushConstants push;
 
-uint reservoirSlotForCellSurfel(uint surfelIndex, uint cellIndex, uint cellSlot, uint cellCapacity)
+void insertDeterministicOverflowSurfel(uint cellEntry,
+                                       SurfelPathTracerCellInfo cellInfo)
 {
-    if (cellCapacity == 0u)
+    uint candidate = cellEntry;
+    for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot)
     {
-        return SURFEL_PT_INVALID_INDEX;
+        uint previous = SURFEL_PT_INVALID_INDEX;
+        InterlockedMin(cellToSurfelBuffer[cellInfo.surfelOffset + slot],
+                       candidate,
+                       previous);
+
+        if (previous == SURFEL_PT_INVALID_INDEX)
+        {
+            return;
+        }
+        if (previous > candidate)
+        {
+            // Continue inserting the entry displaced by the smaller stable key.
+            candidate = previous;
+        }
     }
 
-    uint streamLength = cellSlot + 1u;
-    uint candidate = pcgHash(surfelIndex ^ (cellIndex * 1664525u) ^ cellSlot) % streamLength;
-    return candidate < cellCapacity ? candidate : SURFEL_PT_INVALID_INDEX;
+    counters.InterlockedAdd(SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET, 1u);
 }
 
 [shader("compute")]
@@ -60,25 +73,24 @@ void main(uint3 tid : SV_DispatchThreadID) {
             continue;
         }
 
-        uint cursorOffset = (1u + push.cellDimension * push.cellDimension * push.cellDimension + cellIndex) * 4u;
-        uint cellSlot = 0u;
-        cellCounterBuffer.InterlockedAdd(cursorOffset, 1u, cellSlot);
-
-        if (cellSlot < cellInfo.surfelCount) {
+        int3 absoluteCellCoord = cellCoord + worldCellCoord(ubo.cameraPos.xyz, push.cellSize);
+        uint cellEntry = packCellSurfelEntry(surfelIndex, absoluteCellCoord);
+        uint rawCount = cellCounterBuffer.Load((1u + cellIndex) * 4u);
+        if (rawCount <= cellInfo.surfelCount)
+        {
+            uint cursorOffset = (1u + push.cellDimension * push.cellDimension * push.cellDimension + cellIndex) * 4u;
+            uint cellSlot = 0u;
+            cellCounterBuffer.InterlockedAdd(cursorOffset, 1u, cellSlot);
             uint previousSurfel = SURFEL_PT_INVALID_INDEX;
             InterlockedExchange(cellToSurfelBuffer[cellInfo.surfelOffset + cellSlot],
-                                surfelIndex,
+                                cellEntry,
                                 previousSurfel);
-        } else {
-            uint replaceSlot = reservoirSlotForCellSurfel(surfelIndex, cellIndex, cellSlot, cellInfo.surfelCount);
-            if (replaceSlot == SURFEL_PT_INVALID_INDEX) {
-                counters.InterlockedAdd(SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET, 1u);
-            } else {
-                uint previousSurfel = SURFEL_PT_INVALID_INDEX;
-                InterlockedExchange(cellToSurfelBuffer[cellInfo.surfelOffset + replaceSlot],
-                                    surfelIndex,
-                                    previousSurfel);
-            }
+        }
+        else
+        {
+            // Overflowed cells retain the same stable hashed sample for any GPU
+            // invocation order without biasing retention toward old/low IDs.
+            insertDeterministicOverflowSurfel(cellEntry, cellInfo);
         }
     }
 }

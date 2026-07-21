@@ -86,6 +86,29 @@ bool pushDeadSurfel(uint surfelIndex, uint maxSurfels)
     return true;
 }
 
+bool isRepresentedByCurrentWindow(SurfelPathTracerSurfel surfel, int3 centerCoord)
+{
+    // The center cell covers the common case. Only surfels whose centers sit
+    // just outside the bounded window need the exact overlap test.
+    if (isCellCoordValid(centerCoord, push.cellDimension))
+    {
+        return true;
+    }
+
+    for (int z = -1; z <= 1; ++z)
+    for (int y = -1; y <= 1; ++y)
+    for (int x = -1; x <= 1; ++x)
+    {
+        int3 cellCoord = centerCoord + int3(x, y, z);
+        if (isCellCoordValid(cellCoord, push.cellDimension) &&
+            isSurfelIntersectCell(surfel, cellCoord, ubo.cameraPos.xyz, push.cellSize))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
@@ -132,10 +155,25 @@ void main(uint3 tid : SV_DispatchThreadID) {
         refreshAnchoredSurfel(surfelIndex, surfel);
 
         uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
+        int3 centerCoord = cameraRelativeCellCoord(surfel.position, ubo.cameraPos.xyz, push.cellSize);
+        uint ageSinceSeen = frameIndex >= surfel.lastSeenFrame
+                                ? frameIndex - surfel.lastSeenFrame
+                                : 0u;
+        bool reenteredCurrentWindow = ageSinceSeen > 1u &&
+                                      isRepresentedByCurrentWindow(surfel, centerCoord);
+        if (reenteredCurrentWindow)
+        {
+            // Update runs before this frame's resolve. Give a surfel that has
+            // just returned to the camera window one frame to be referenced by
+            // visible pixels before applying stale-reference eviction.
+            surfel.lastSeenFrame = frameIndex;
+        }
+
         uint deadCount = counters.Load(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET);
         float aliveRatio = 1.0 - saturate(float(deadCount) / float(max(push.maxSurfels, 1u)));
         float distanceToCamera = length(surfel.position - ubo.cameraPos.xyz);
-        if (shouldRecycleSurfel(surfel, frameIndex, distanceToCamera, aliveRatio))
+        if (!reenteredCurrentWindow &&
+            shouldRecycleSurfel(surfel, frameIndex, distanceToCamera, aliveRatio))
         {
             if (pushDeadSurfel(surfelIndex, push.maxSurfels))
             {

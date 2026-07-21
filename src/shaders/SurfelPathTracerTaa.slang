@@ -80,6 +80,72 @@ bool taaHistoryKeyMatches(float storedKey, float currentKey) {
     return abs(storedKey - currentKey) <= (1.5 / 1023.0);
 }
 
+void accumulateTaaHistoryTap(int2 pixel,
+                             float weight,
+                             float currentKey,
+                             inout float3 historySum,
+                             inout float validWeight) {
+    if (weight <= 0.0 ||
+        any(pixel < int2(0)) ||
+        pixel.x >= int(push.width) ||
+        pixel.y >= int(push.height)) {
+        return;
+    }
+
+    float4 sampleValue = previousTaaHistory[uint2(pixel)];
+    if (!taaHistoryKeyMatches(sampleValue.a, currentKey)) {
+        return;
+    }
+
+    historySum += sampleValue.rgb * weight;
+    validWeight += weight;
+}
+
+bool sampleReprojectedTaaHistory(float2 previousUv,
+                                 float currentKey,
+                                 out float3 history) {
+    // Convert normalized UVs to texel-center space before selecting the four
+    // bilinear taps. Truncating previousUv * dimensions to one texel makes the
+    // history jump at pixel boundaries during sub-pixel camera motion, which
+    // presents as a subtle wave or shimmer over otherwise stable geometry.
+    float2 texelPosition = previousUv * float2(push.width, push.height) - 0.5;
+    int2 basePixel = int2(floor(texelPosition));
+    float2 fraction = frac(texelPosition);
+
+    float3 historySum = float3(0.0);
+    float validWeight = 0.0;
+    accumulateTaaHistoryTap(basePixel,
+                            (1.0 - fraction.x) * (1.0 - fraction.y),
+                            currentKey,
+                            historySum,
+                            validWeight);
+    accumulateTaaHistoryTap(basePixel + int2(1, 0),
+                            fraction.x * (1.0 - fraction.y),
+                            currentKey,
+                            historySum,
+                            validWeight);
+    accumulateTaaHistoryTap(basePixel + int2(0, 1),
+                            (1.0 - fraction.x) * fraction.y,
+                            currentKey,
+                            historySum,
+                            validWeight);
+    accumulateTaaHistoryTap(basePixel + int2(1, 1),
+                            fraction.x * fraction.y,
+                            currentKey,
+                            historySum,
+                            validWeight);
+
+    if (validWeight <= 1.0e-4) {
+        history = float3(0.0);
+        return false;
+    }
+
+    // Renormalizing valid taps prevents a rejected foreground/background tap
+    // from darkening the reconstructed history near disocclusions.
+    history = historySum / validWeight;
+    return true;
+}
+
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
@@ -110,14 +176,12 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (useHistory) {
         float2 previousUv;
         if (reprojectWithPrevViewProj(pixel, depth, motionMaterial.xy, previousUv)) {
-            uint2 previousPixel = min(uint2(previousUv * float2(push.width, push.height)),
-                                      uint2(push.width - 1u, push.height - 1u));
             float3 lo;
             float3 hi;
             neighborhoodBounds(pixel, lo, hi);
-            float4 storedHistory = previousTaaHistory[previousPixel];
-            if (taaHistoryKeyMatches(storedHistory.a, currentKey)) {
-                history = clamp(storedHistory.rgb, lo, hi);
+            float3 reconstructedHistory;
+            if (sampleReprojectedTaaHistory(previousUv, currentKey, reconstructedHistory)) {
+                history = clamp(reconstructedHistory, lo, hi);
             } else {
                 useHistory = false;
             }

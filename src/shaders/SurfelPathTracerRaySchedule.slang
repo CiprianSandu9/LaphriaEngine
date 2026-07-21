@@ -29,7 +29,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
     for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
-        uint surfelIndex = cellToSurfelBuffer[cellInfo.surfelOffset + slot];
+        uint surfelIndex = unpackCellSurfelIndex(cellToSurfelBuffer[cellInfo.surfelOffset + slot]);
         if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= push.maxSurfels) {
             continue;
         }
@@ -53,6 +53,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
         // This pass has uniquely claimed a surfel that survived compact-map
         // selection. Track representation here instead of relying on one
         // arbitrary resolve pixel to mark the surfel as seen.
+        uint previousSeenFrame = 0u;
+        InterlockedMax(surfelBuffer[surfelIndex].lastSeenFrame,
+                       frameIndex,
+                       previousSeenFrame);
         surfel.lastSeenFrame = frameIndex;
         uint rayRequestCount = adaptiveRayCountForSurfel(surfel,
                                                          push.minRaysPerSurfel,

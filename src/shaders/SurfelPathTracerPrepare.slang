@@ -27,7 +27,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     uint maxSurfels = max(push.maxSurfels, 1u);
     uint cellCount = push.cellCount;
     uint perCellSurfelLimit = max(push.perCellSurfelLimit, 1u);
-    uint cellToSurfelCount = cellCount * perCellSurfelLimit;
     uint cellCounterCount = 1u + cellCount * 2u;
 
     if (index == 0u) {
@@ -66,10 +65,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
         cellInfo.surfelOffset = 0u;
         cellInfo.surfelCount = 0u;
         cellInfoBuffer[index] = cellInfo;
-    }
-
-    if (push.resetPersistent != 0u && index < cellToSurfelCount) {
-        cellToSurfelBuffer[index] = SURFEL_PT_INVALID_INDEX;
     }
 
     if (push.resetPersistent == 0u) {

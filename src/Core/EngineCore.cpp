@@ -2060,6 +2060,43 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	// frame. Only lifecycle, sampling, and radiance integration are frozen.
 	const bool updateCacheContents = !surfelSettings.lockSurfels || resetPersistent;
 	writeSurfelTimestamp(kSurfelTS_PrepareStart);
+	// Deterministic overflow retention requires empty compact-map slots every
+	// frame. The map is persistent and shared by frame slots, so order the clear
+	// after all earlier shader consumers and before this frame's compute rebuild.
+	const vk::BufferMemoryBarrier2 cellMapBeforeClear{
+	    .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+	                     vk::AccessFlagBits2::eShaderStorageWrite,
+	    .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+	    .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .buffer = *surfelPathTracerResources.cellToSurfelBuffer,
+	    .offset = 0,
+	    .size = VK_WHOLE_SIZE};
+	const vk::DependencyInfo cellMapBeforeClearDependency{
+	    .bufferMemoryBarrierCount = 1,
+	    .pBufferMemoryBarriers = &cellMapBeforeClear};
+	commandBuffer.pipelineBarrier2(cellMapBeforeClearDependency);
+	commandBuffer.fillBuffer(*surfelPathTracerResources.cellToSurfelBuffer,
+	                         0,
+	                         VK_WHOLE_SIZE,
+	                         UINT32_MAX);
+	const vk::BufferMemoryBarrier2 cellMapAfterClear{
+	    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+	    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+	                     vk::AccessFlagBits2::eShaderStorageWrite,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .buffer = *surfelPathTracerResources.cellToSurfelBuffer,
+	    .offset = 0,
+	    .size = VK_WHOLE_SIZE};
+	const vk::DependencyInfo cellMapAfterClearDependency{
+	    .bufferMemoryBarrierCount = 1,
+	    .pBufferMemoryBarriers = &cellMapAfterClear};
+	commandBuffer.pipelineBarrier2(cellMapAfterClearDependency);
 	surfelPathTracerPasses.recordPreparePass(commandBuffer,
 	                                         pipelines.surfelPathTracerPipelines,
 	                                         *surfelPathTracerStorageDescriptorSets[fi],
@@ -2070,34 +2107,6 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	mutableSurfelPathTracerResources.markPersistentResetConsumed();
 	mutableUi.surfelPathTracerSettings.resetSurfels = false;
 	writeSurfelTimestamp(kSurfelTS_PrepareEnd);
-
-	writeSurfelTimestamp(kSurfelTS_GenerateStart);
-	if (updateCacheContents &&
-	    (surfelSettings.enableSurfelPlacement || surfelSettings.enableSurfelRemoval))
-	{
-		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
-		surfelPathTracerPasses.recordEvaluatePass(commandBuffer,
-		                                          pipelines.surfelPathTracerPipelines,
-		                                          *surfelPathTracerStorageDescriptorSets[fi],
-		                                          *descriptorSets[fi],
-		                                          Laphria::SurfelPathTracerEvaluateMode::Generate,
-		                                          surfelSettings.cellSize,
-		                                          surfelPathTracerResources.cellDimensionCapacity(),
-		                                          surfelPathTracerResources.maxSurfelsCapacity(),
-		                                          surfelSettings.placementThreshold,
-		                                          surfelSettings.removalThreshold,
-		                                          surfelSettings.surfelTargetArea,
-		                                          surfelSettings.surfelMinRadius,
-		                                          surfelSettings.surfelMaxRadiusScale,
-		                                          fi,
-		                                          surfelSettings.lockSurfels,
-		                                          surfelSettings.enableSurfelPlacement,
-		                                          surfelSettings.enableSurfelRemoval,
-		                                          surfelSettings.maxSurfelSamplesPerQuery,
-		                                          surfelPathTracerResources.perCellSurfelLimitCapacity(),
-		                                          swapchain.extent);
-	}
-	writeSurfelTimestamp(kSurfelTS_GenerateEnd);
 
 	writeSurfelTimestamp(kSurfelTS_UpdateStart);
 	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
@@ -2136,6 +2145,37 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                              surfelPathTracerResources.cellDimensionCapacity(),
 	                                              surfelPathTracerResources.perCellSurfelLimitCapacity());
 	writeSurfelTimestamp(kSurfelTS_CellMapEnd);
+
+	// Placement and removal must query the map built for this frame's snapped
+	// camera cell. Newly allocated surfels intentionally become visible through
+	// the compact map on the following frame; this avoids a second full rebuild.
+	writeSurfelTimestamp(kSurfelTS_GenerateStart);
+	if (updateCacheContents &&
+	    (surfelSettings.enableSurfelPlacement || surfelSettings.enableSurfelRemoval))
+	{
+		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		surfelPathTracerPasses.recordEvaluatePass(commandBuffer,
+		                                          pipelines.surfelPathTracerPipelines,
+		                                          *surfelPathTracerStorageDescriptorSets[fi],
+		                                          *descriptorSets[fi],
+		                                          Laphria::SurfelPathTracerEvaluateMode::Generate,
+		                                          surfelSettings.cellSize,
+		                                          surfelPathTracerResources.cellDimensionCapacity(),
+		                                          surfelPathTracerResources.maxSurfelsCapacity(),
+		                                          surfelSettings.placementThreshold,
+		                                          surfelSettings.removalThreshold,
+		                                          surfelSettings.surfelTargetArea,
+		                                          surfelSettings.surfelMinRadius,
+		                                          surfelSettings.surfelMaxRadiusScale,
+		                                          fi,
+		                                          surfelSettings.lockSurfels,
+		                                          surfelSettings.enableSurfelPlacement,
+		                                          surfelSettings.enableSurfelRemoval,
+		                                          surfelSettings.maxSurfelSamplesPerQuery,
+		                                          surfelPathTracerResources.perCellSurfelLimitCapacity(),
+		                                          swapchain.extent);
+	}
+	writeSurfelTimestamp(kSurfelTS_GenerateEnd);
 
 	writeSurfelTimestamp(kSurfelTS_RayScheduleStart);
 	if (updateCacheContents)
