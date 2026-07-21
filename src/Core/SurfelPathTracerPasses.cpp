@@ -87,6 +87,9 @@ struct SurfelIntegratePushConstants
 	uint32_t maxRadianceSharingSamples = 1;
 	uint32_t cellDimension = 1;
 	float cellSize = 1.0f;
+	uint32_t enableGuidedSampling = 0;
+	uint32_t pad0 = 0;
+	uint32_t pad1 = 0;
 };
 
 struct SurfelEvaluatePushConstants
@@ -458,7 +461,8 @@ void SurfelPathTracerPasses::recordIntegratePass(const vk::raii::CommandBuffer &
                                                  bool enableRadianceSharing,
                                                  uint32_t maxRadianceSharingSamples,
                                                  uint32_t cellDimension,
-                                                 float cellSize) const
+                                                 float cellSize,
+                                                 bool enableGuidedSampling) const
 {
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.integratePipeline);
 	const std::array descriptorSets = {imageSet, globalSet};
@@ -473,7 +477,8 @@ void SurfelPathTracerPasses::recordIntegratePass(const vk::raii::CommandBuffer &
 	    .enableRadianceSharing = enableRadianceSharing ? 1u : 0u,
 	    .maxRadianceSharingSamples = std::clamp(maxRadianceSharingSamples, 1u, 128u),
 	    .cellDimension = std::max(cellDimension, 1u),
-	    .cellSize = std::max(cellSize, 0.0001f)};
+	    .cellSize = std::max(cellSize, 0.0001f),
+	    .enableGuidedSampling = enableGuidedSampling ? 1u : 0u};
 	commandBuffer.pushConstants<SurfelIntegratePushConstants>(*pipelines.computePipelineLayout,
 	                                                          vk::ShaderStageFlagBits::eCompute,
 	                                                          0,

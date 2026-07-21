@@ -1238,6 +1238,15 @@ void ResourceManager::finalizeProceduralModel(ModelResource *modelRes, const std
     // Add Mesh entry
     LoadedMesh mesh;
     mesh.name = meshName;
+    if (!vertices.empty()) {
+        mesh.boundsMin = vertices.front().pos;
+        mesh.boundsMax = vertices.front().pos;
+        mesh.hasBounds = true;
+        for (const Vertex &vertex : vertices) {
+            mesh.boundsMin = glm::min(mesh.boundsMin, vertex.pos);
+            mesh.boundsMax = glm::max(mesh.boundsMax, vertex.pos);
+        }
+    }
     MeshPrimitive prim;
     prim.firstIndex = 0;
     prim.indexCount = indices.size();

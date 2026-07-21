@@ -42,10 +42,21 @@ UISystem::SurfelPathTracerSettings persistentCapacitySettings(
     const UISystem::SurfelPathTracerSettings &settings)
 {
 	UISystem::SurfelPathTracerSettings capacity = settings;
-	capacity.maxSurfels = std::max(capacity.maxSurfels, 1u);
-	capacity.maxRaysPerFrame = std::max(capacity.maxRaysPerFrame, 1u);
+	capacity.irradianceAtlasWidth = std::clamp(capacity.irradianceAtlasWidth, 512u,
+	                                         UISystem::SurfelPathTracerSettings::kMaxAtlasDimension);
+	capacity.irradianceAtlasHeight = std::clamp(capacity.irradianceAtlasHeight, 512u,
+	                                          UISystem::SurfelPathTracerSettings::kMaxAtlasDimension);
+	const uint32_t atlasCapacity = UISystem::SurfelPathTracerSettings::atlasCapacity(
+	    capacity.irradianceAtlasWidth, capacity.irradianceAtlasHeight);
+	capacity.maxSurfels = std::clamp(capacity.maxSurfels,
+	                                UISystem::SurfelPathTracerSettings::kMinMaxSurfels,
+	                                atlasCapacity);
+	capacity.maxRaysPerFrame = std::clamp(capacity.maxRaysPerFrame, 1024u,
+	                                    UISystem::SurfelPathTracerSettings::kMaxRayCapacity);
 	capacity.cellDimension = std::clamp(capacity.cellDimension, 8u, 128u);
-	capacity.perCellSurfelLimit = std::clamp(capacity.perCellSurfelLimit, 1u, 256u);
+	const uint32_t maxPerCellLimit = UISystem::SurfelPathTracerSettings::maxPerCellLimitForDimension(
+	    capacity.cellDimension);
+	capacity.perCellSurfelLimit = std::clamp(capacity.perCellSurfelLimit, 1u, maxPerCellLimit);
 	return capacity;
 }
 
@@ -152,7 +163,6 @@ void SurfelPathTracerResources::cleanupSwapchainResources()
 		clearViewsThenDestroyImages(taaHistoryViews[bank], taaHistoryImages[bank]);
 	}
 	clearViewsThenDestroyImages(irradianceAtlasViews, irradianceAtlasImages);
-	clearViewsThenDestroyImages(surfelDepthAtlasViews, surfelDepthAtlasImages);
 }
 
 void SurfelPathTracerResources::recreateSwapchainResources(const VulkanDevice &dev,
@@ -454,7 +464,7 @@ void SurfelPathTracerResources::createExtentImages(const VulkanDevice &dev,
 
 	const uint32_t atlasWidth = std::clamp(settings_.irradianceAtlasWidth, 512u, 4096u);
 	const uint32_t atlasHeight = std::clamp(settings_.irradianceAtlasHeight, 512u, 4096u);
-	const uint32_t atlasTileSize = std::max(settings_.atlasTileSize, 1u);
+	constexpr uint32_t atlasTileSize = UISystem::SurfelPathTracerSettings::kAtlasTileSize;
 	const uint64_t tileCount = static_cast<uint64_t>(settings_.maxSurfels);
 	const uint64_t tilesPerRow = std::max<uint64_t>(atlasWidth / atlasTileSize, 1u);
 	const uint64_t requiredRows = (tileCount + tilesPerRow - 1u) / tilesPerRow;
@@ -466,8 +476,6 @@ void SurfelPathTracerResources::createExtentImages(const VulkanDevice &dev,
 
 	createStorageImageSet(dev, atlasWidth, atlasHeight, vk::Format::eR16G16B16A16Sfloat,
 	                      irradianceAtlasImages, irradianceAtlasViews);
-	createStorageImageSet(dev, atlasWidth, atlasHeight, vk::Format::eR32Sfloat,
-	                      surfelDepthAtlasImages, surfelDepthAtlasViews);
 }
 
 void SurfelPathTracerResources::destroyPersistentBuffers()

@@ -36,6 +36,7 @@ struct LightIntegratePushConstants {
 static const uint SURFEL_DEBUG_FINAL_COLOR = 0u;
 static const uint SURFEL_DEBUG_GBUFFER_NORMAL = 1u;
 static const uint SURFEL_DEBUG_GBUFFER_DEPTH = 2u;
+static const uint SURFEL_DEBUG_SURFEL_ID = 3u;
 static const uint SURFEL_DEBUG_SURFEL_RADIUS = 4u;
 static const uint SURFEL_DEBUG_SURFEL_RADIANCE = 5u;
 static const uint SURFEL_DEBUG_SURFEL_VARIANCE = 6u;
@@ -91,8 +92,10 @@ float3 cellOccupancyDebugColor(float3 worldPosition) {
 
 bool loadSelectedContributingSurfel(float3 worldPosition,
                                     float3 normal,
-                                    out SurfelPathTracerSurfel selectedSurfel) {
+                                    out SurfelPathTracerSurfel selectedSurfel,
+                                    out uint selectedSurfelIndex) {
     selectedSurfel = (SurfelPathTracerSurfel)0;
+    selectedSurfelIndex = SURFEL_PT_INVALID_INDEX;
     uint dim = max(push.cellDimension, 1u);
     int3 centerCoord = cameraRelativeCellCoord(worldPosition, ubo.cameraPos.xyz, push.cellSize);
     if (!isCellCoordValid(centerCoord, dim)) {
@@ -134,6 +137,7 @@ bool loadSelectedContributingSurfel(float3 worldPosition,
                         if (weight > bestWeight) {
                             bestWeight = weight;
                             selectedSurfel = surfel;
+                            selectedSurfelIndex = surfelIndex;
                             foundSurfel = true;
                         }
                     }
@@ -143,6 +147,17 @@ bool loadSelectedContributingSurfel(float3 worldPosition,
     }
 
     return foundSurfel;
+}
+
+float3 surfelIdColor(uint surfelIndex) {
+    if (surfelIndex == SURFEL_PT_INVALID_INDEX) {
+        return float3(0.0);
+    }
+    uint hash = pcgHash(surfelIndex + 1u);
+    float3 color = float3(float(hash & 255u),
+                          float((hash >> 8u) & 255u),
+                          float((hash >> 16u) & 255u)) / 255.0;
+    return lerp(float3(0.15), float3(1.0), color);
 }
 
 float3 evaluatePrimaryDirectLighting(float3 viewDir,
@@ -238,9 +253,15 @@ void main(uint3 tid : SV_DispatchThreadID) {
         lightingImages[pixel] = float4(depthVis, depthVis, depthVis, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_GBUFFER_ALBEDO) {
         lightingImages[pixel] = float4(albedo, 1.0);
+    } else if (push.debugView == SURFEL_DEBUG_SURFEL_ID) {
+        SurfelPathTracerSurfel surfel;
+        uint surfelIndex;
+        loadSelectedContributingSurfel(worldPosition, normal, surfel, surfelIndex);
+        lightingImages[pixel] = float4(surfelIdColor(surfelIndex), 1.0);
     } else if (push.debugView == SURFEL_DEBUG_SURFEL_RADIUS) {
         SurfelPathTracerSurfel surfel;
-        float radius = loadSelectedContributingSurfel(worldPosition, normal, surfel)
+        uint surfelIndex;
+        float radius = loadSelectedContributingSurfel(worldPosition, normal, surfel, surfelIndex)
             ? surfel.radius / max(push.cellSize * push.surfelMaxRadiusScale, 1e-4)
             : 0.05;
         lightingImages[pixel] = float4(radius.xxx, 1.0);
@@ -248,7 +269,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
         lightingImages[pixel] = float4(rawSurfelRadiance, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_SURFEL_VARIANCE) {
         SurfelPathTracerSurfel surfel;
-        float3 variance = loadSelectedContributingSurfel(worldPosition, normal, surfel) ? surfel.varianceAndInconsistency.xyz : float3(0.05, 0.0, 0.05);
+        uint surfelIndex;
+        float3 variance = loadSelectedContributingSurfel(worldPosition, normal, surfel, surfelIndex) ? surfel.varianceAndInconsistency.xyz : float3(0.05, 0.0, 0.05);
         lightingImages[pixel] = float4(variance, 1.0);
     } else if (push.debugView == SURFEL_DEBUG_REFLECTION_RAW) {
         lightingImages[pixel] = float4(reflectionRaw, 1.0);

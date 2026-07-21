@@ -249,8 +249,6 @@ class SurfelPathTracerResources
 	std::array<std::vector<vk::raii::ImageView>, 2> taaHistoryViews;
 	std::vector<VulkanUtils::VmaImage> irradianceAtlasImages;
 	std::vector<vk::raii::ImageView> irradianceAtlasViews;
-	std::vector<VulkanUtils::VmaImage> surfelDepthAtlasImages;
-	std::vector<vk::raii::ImageView> surfelDepthAtlasViews;
 
   private:
 	static constexpr uint32_t kMinCellDimension = 8;

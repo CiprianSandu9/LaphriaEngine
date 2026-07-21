@@ -262,7 +262,11 @@ float3 sampleWeightedSurfelRadiance(float3 position, float3 normal) {
                         samplesVisited += 1u;
                         float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
                         float normalWeight = saturate(dot(normal, surfelNormal));
-                        float influenceRadius = max(surfel.radius * 2.0, push.cellSize * 0.75);
+                        // Resolve must use the same physical support radius as
+                        // placement and cell intersection. Doubling it here made
+                        // the intended influence extend beyond the fixed +/-1
+                        // query neighborhood and increased cross-surface bleed.
+                        float influenceRadius = max(surfel.radius, push.cellSize * 0.75);
                         float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(influenceRadius, 0.0001));
                         float weight = normalWeight * distanceWeight * distanceWeight;
                         weightedRadiance += clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE) * weight;

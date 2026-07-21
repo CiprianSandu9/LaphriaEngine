@@ -162,7 +162,7 @@ void SurfelPathTracerPipelines::createDescriptorSetLayouts(const VulkanDevice &d
 	    vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eRaygenKHR |
 	    vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR |
 	    vk::ShaderStageFlagBits::eAnyHitKHR;
-	std::array<vk::DescriptorSetLayoutBinding, 32> storageBindings = {
+	std::array<vk::DescriptorSetLayoutBinding, 31> storageBindings = {
 	    vk::DescriptorSetLayoutBinding{.binding = 0, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 2, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
@@ -178,7 +178,6 @@ void SurfelPathTracerPipelines::createDescriptorSetLayouts(const VulkanDevice &d
 	    vk::DescriptorSetLayoutBinding{.binding = 12, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 13, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 14, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
-	    vk::DescriptorSetLayoutBinding{.binding = 15, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 16, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 17, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},
 	    vk::DescriptorSetLayoutBinding{.binding = 18, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = storageStages},

@@ -162,10 +162,22 @@ SceneNode::Ptr GltfImporter::processGltfNode(const fastgltf::Asset &gltf, size_t
 				}
 
 				fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(gltf, posAcc, [&](fastgltf::math::fvec3 p, size_t i) {
-					vertices[vCount + i].pos      = glm::vec3(p.x(), p.y(), p.z());
+					const glm::vec3 position(p.x(), p.y(), p.z());
+					vertices[vCount + i].pos      = position;
 					vertices[vCount + i].color    = glm::vec3(1.0f);
 					vertices[vCount + i].normal   = glm::vec3(0, 1, 0);
 					vertices[vCount + i].texCoord = glm::vec2(0.0f);
+					if (!loadedMesh.hasBounds)
+					{
+						loadedMesh.boundsMin = position;
+						loadedMesh.boundsMax = position;
+						loadedMesh.hasBounds = true;
+					}
+					else
+					{
+						loadedMesh.boundsMin = glm::min(loadedMesh.boundsMin, position);
+						loadedMesh.boundsMax = glm::max(loadedMesh.boundsMax, position);
+					}
 				});
 			}
 

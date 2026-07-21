@@ -127,36 +127,50 @@ void main(uint3 tid : SV_DispatchThreadID) {
         return;
     }
 
-    refreshAnchoredSurfel(surfelIndex, surfel);
-
-    uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
-    uint deadCount = counters.Load(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET);
-    float aliveRatio = 1.0 - saturate(float(deadCount) / float(max(push.maxSurfels, 1u)));
-    float distanceToCamera = length(surfel.position - ubo.cameraPos.xyz);
-    if (push.lockSurfels == 0u && shouldRecycleSurfel(surfel, frameIndex, distanceToCamera, aliveRatio))
+    if (push.lockSurfels == 0u)
     {
-        if (pushDeadSurfel(surfelIndex, push.maxSurfels))
+        refreshAnchoredSurfel(surfelIndex, surfel);
+
+        uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
+        uint deadCount = counters.Load(SURFEL_PT_COUNTER_DEAD_SURFELS_OFFSET);
+        float aliveRatio = 1.0 - saturate(float(deadCount) / float(max(push.maxSurfels, 1u)));
+        float distanceToCamera = length(surfel.position - ubo.cameraPos.xyz);
+        if (shouldRecycleSurfel(surfel, frameIndex, distanceToCamera, aliveRatio))
         {
-            surfel.flags = 0u;
-            surfel.radius = 0.0;
-            surfel.rayOffset = 0u;
-            surfel.rayCount = 0u;
-            surfelBuffer[surfelIndex] = surfel;
-            counters.InterlockedAdd(SURFEL_PT_COUNTER_RECYCLED_SURFELS_OFFSET, 1u);
+            if (pushDeadSurfel(surfelIndex, push.maxSurfels))
+            {
+                surfel.flags = 0u;
+                surfel.radius = 0.0;
+                surfel.rayOffset = 0u;
+                surfel.rayCount = 0u;
+                surfelBuffer[surfelIndex] = surfel;
+                counters.InterlockedAdd(SURFEL_PT_COUNTER_RECYCLED_SURFELS_OFFSET, 1u);
+            }
+            return;
         }
-        return;
-    }
 
-    surfel.shortMeanAndLife.w = min(surfel.shortMeanAndLife.w + 1.0f, float(SURFEL_PT_MAX_LIFE));
-    uint ageSinceSeen = frameIndex >= surfel.lastSeenFrame ? frameIndex - surfel.lastSeenFrame : 0u;
-    float varianceMagnitude = length(max(surfel.varianceAndInconsistency.xyz, float3(0.0)));
-    if (ageSinceSeen > 60u && varianceMagnitude < 0.05)
-    {
-        surfel.sleepState = SURFEL_PT_SLEEP_SLEEPING;
+        surfel.shortMeanAndLife.w = min(surfel.shortMeanAndLife.w + 1.0f, float(SURFEL_PT_MAX_LIFE));
+        float varianceMagnitude = length(max(surfel.varianceAndInconsistency.xyz, float3(0.0)));
+        // Sleeping is a convergence state, not a visibility state. RaySchedule
+        // marks represented surfels as seen every update, so lastSeenFrame could
+        // never sustain sleeping. Stable mature surfels now remain asleep and
+        // continue receiving a quarter-rate update budget until inconsistency
+        // rises enough to wake them.
+        if (surfel.shortMeanAndLife.w > 64.0 && varianceMagnitude < 0.05)
+        {
+            surfel.sleepState = SURFEL_PT_SLEEP_SLEEPING;
+        }
+        else if (surfel.shortMeanAndLife.w <= 16.0 || varianceMagnitude > 0.2)
+        {
+            surfel.sleepState = SURFEL_PT_SLEEP_AWAKE;
+        }
     }
-    else if (ageSinceSeen < 20u || varianceMagnitude > 0.2)
+    else
     {
-        surfel.sleepState = SURFEL_PT_SLEEP_AWAKE;
+        // Freezing may last longer than the recycling grace window. Keep the
+        // lifecycle clock aligned so unfreezing does not immediately recycle
+        // the entire otherwise unchanged cache.
+        surfel.lastSeenFrame = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
     }
 
     int3 centerCoord = cameraRelativeCellCoord(surfel.position, ubo.cameraPos.xyz, push.cellSize);

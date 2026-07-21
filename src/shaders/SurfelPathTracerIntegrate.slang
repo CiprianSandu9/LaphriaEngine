@@ -6,7 +6,6 @@
 [[vk::binding(11, 0)]] RWStructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer;
 [[vk::binding(13, 0)]] RWStructuredBuffer<uint> cellToSurfelBuffer;
 [[vk::binding(14, 0)]] RWTexture2D<float4> irradianceAtlas;
-[[vk::binding(15, 0)]] RWTexture2D<float> surfelDepthAtlas;
 
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 
@@ -16,6 +15,9 @@ struct IntegratePushConstants {
     uint maxRadianceSharingSamples;
     uint cellDimension;
     float cellSize;
+    uint enableGuidedSampling;
+    uint pad0;
+    uint pad1;
 };
 
 [[vk::push_constant]] IntegratePushConstants push;
@@ -25,10 +27,6 @@ float3 loadRayRadiance(uint rayIndex) {
     return float3(asfloat(rayBuffer[base + SURFEL_PT_RAY_RADIANCE_X]),
                   asfloat(rayBuffer[base + SURFEL_PT_RAY_RADIANCE_Y]),
                   asfloat(rayBuffer[base + SURFEL_PT_RAY_RADIANCE_Z]));
-}
-
-float loadRayHitT(uint rayIndex) {
-    return asfloat(rayBuffer[rayIndex * SURFEL_PT_RAY_RECORD_UINTS + SURFEL_PT_RAY_HIT_T]);
 }
 
 float loadRayPdf(uint rayIndex) {
@@ -43,7 +41,6 @@ void writeAtlas(uint surfelIndex,
                 uint guideToken,
                 float3 localDirection,
                 float3 incidentRadiance,
-                float depth,
                 uint width,
                 uint height) {
     if (width == 0u || height == 0u) {
@@ -66,7 +63,6 @@ void writeAtlas(uint surfelIndex,
                               ? lerp(previous.rgb, sampleRadiance, 0.125)
                               : sampleRadiance;
     irradianceAtlas[coord] = float4(filteredRadiance, -float(guideToken));
-    surfelDepthAtlas[coord] = depth;
 }
 
 [shader("compute")]
@@ -90,7 +86,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     float3 accumulatedRadiance = float3(0.0, 0.0, 0.0);
-    float accumulatedDepth = 0.0;
     uint sampleCount = 0u;
     uint atlasWidth = 0u;
     uint atlasHeight = 0u;
@@ -113,20 +108,19 @@ void main(uint3 tid : SV_DispatchThreadID) {
         float cosine = max(localDirection.z, 0.0);
         float integrationWeight = cosine / pdf;
         float3 weightedRadiance = rayRadiance * integrationWeight;
-        float rayDepth = max(loadRayHitT(rayIndex), 0.0);
         accumulatedRadiance += weightedRadiance;
-        accumulatedDepth += rayDepth;
         sampleCount += 1u;
         // The guide estimates the directional incident-radiance distribution.
         // Do not feed the guide its own cosine/PDF importance weight: that
         // creates a positive feedback loop and amplifies noisy low-PDF rays.
-        writeAtlas(surfelIndex,
-                   surfel.irradianceAtlasOffset,
-                   localDirection,
-                   rayRadiance,
-                   rayDepth,
-                   atlasWidth,
-                   atlasHeight);
+        if (push.enableGuidedSampling != 0u) {
+            writeAtlas(surfelIndex,
+                       surfel.irradianceAtlasOffset,
+                       localDirection,
+                       rayRadiance,
+                       atlasWidth,
+                       atlasHeight);
+        }
     }
 
     if (sampleCount == 0u) {

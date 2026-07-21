@@ -237,6 +237,9 @@ struct LoadedMesh
 {
 	std::string                name;
 	std::vector<MeshPrimitive> primitives;
+	glm::vec3                  boundsMin{0.0f};
+	glm::vec3                  boundsMax{0.0f};
+	bool                       hasBounds = false;
 };
 }        // namespace Laphria
 

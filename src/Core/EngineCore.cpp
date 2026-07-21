@@ -1033,7 +1033,7 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 	}
 
 	std::array<vk::DescriptorPoolSize, 2> poolSizes = {
-	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 18 * MAX_FRAMES_IN_FLIGHT},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 17 * MAX_FRAMES_IN_FLIGHT},
 	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 14 * MAX_FRAMES_IN_FLIGHT}};
 	vk::DescriptorPoolCreateInfo poolInfo{
 	    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
@@ -1052,13 +1052,12 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
 	{
-		const std::array<vk::DescriptorImageInfo, 13> imageInfos = {
+		const std::array<vk::DescriptorImageInfo, 12> imageInfos = {
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.outputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferNormalViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferDepthViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferMotionMaterialViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.irradianceAtlasViews[i], .imageLayout = vk::ImageLayout::eGeneral},
-		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.surfelDepthAtlasViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.reflectionViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.filteredReflectionViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.lightingViews[i], .imageLayout = vk::ImageLayout::eGeneral},
@@ -1066,7 +1065,7 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferMaterialViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferEmissiveViews[i], .imageLayout = vk::ImageLayout::eGeneral},
 		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.referenceViews[i], .imageLayout = vk::ImageLayout::eGeneral}};
-		const std::array<uint32_t, 13> imageBindings = {0, 1, 2, 3, 14, 15, 16, 17, 18, 20, 21, 22, 27};
+		const std::array<uint32_t, 12> imageBindings = {0, 1, 2, 3, 14, 16, 17, 18, 20, 21, 22, 27};
 
 		vk::DescriptorBufferInfo gBufferSourceInfo{
 		    .buffer = *surfelPathTracerResources.gBufferSourceBuffers[i],
@@ -1869,7 +1868,6 @@ void EngineCore::transitionPersistentSurfelImagesToGeneral(uint32_t frameIndex) 
 		transitionImageSet(historyImages);
 	}
 	transitionImageSet(surfelPathTracerResources.irradianceAtlasImages);
-	transitionImageSet(surfelPathTracerResources.surfelDepthAtlasImages);
 }
 
 void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
@@ -2058,22 +2056,25 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	surfelPathTracerPasses.recordImageBarrierGBufferToCompute(commandBuffer, surfelPathTracerResources, fi);
 	writeSurfelTimestamp(kSurfelTS_GBufferEnd);
 
-	const bool updateSurfels = !surfelSettings.lockSurfels || resetPersistent;
+	// A frozen cache still needs a camera-relative spatial map rebuilt every
+	// frame. Only lifecycle, sampling, and radiance integration are frozen.
+	const bool updateCacheContents = !surfelSettings.lockSurfels || resetPersistent;
 	writeSurfelTimestamp(kSurfelTS_PrepareStart);
-	if (updateSurfels)
-	{
-		surfelPathTracerPasses.recordPreparePass(commandBuffer,
-		                                         pipelines.surfelPathTracerPipelines,
-		                                         *surfelPathTracerStorageDescriptorSets[fi],
-		                                         surfelPathTracerResources.maxSurfelsCapacity(),
-		                                         resetPersistent,
-		                                         surfelPathTracerResources.cellCount(),
-		                                         surfelPathTracerResources.perCellSurfelLimitCapacity());
-		mutableSurfelPathTracerResources.markPersistentResetConsumed();
-		mutableUi.surfelPathTracerSettings.resetSurfels = false;
-		writeSurfelTimestamp(kSurfelTS_PrepareEnd);
+	surfelPathTracerPasses.recordPreparePass(commandBuffer,
+	                                         pipelines.surfelPathTracerPipelines,
+	                                         *surfelPathTracerStorageDescriptorSets[fi],
+	                                         surfelPathTracerResources.maxSurfelsCapacity(),
+	                                         resetPersistent,
+	                                         surfelPathTracerResources.cellCount(),
+	                                         surfelPathTracerResources.perCellSurfelLimitCapacity());
+	mutableSurfelPathTracerResources.markPersistentResetConsumed();
+	mutableUi.surfelPathTracerSettings.resetSurfels = false;
+	writeSurfelTimestamp(kSurfelTS_PrepareEnd);
 
-		writeSurfelTimestamp(kSurfelTS_GenerateStart);
+	writeSurfelTimestamp(kSurfelTS_GenerateStart);
+	if (updateCacheContents &&
+	    (surfelSettings.enableSurfelPlacement || surfelSettings.enableSurfelRemoval))
+	{
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		surfelPathTracerPasses.recordEvaluatePass(commandBuffer,
 		                                          pipelines.surfelPathTracerPipelines,
@@ -2095,43 +2096,50 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                          surfelSettings.maxSurfelSamplesPerQuery,
 		                                          surfelPathTracerResources.perCellSurfelLimitCapacity(),
 		                                          swapchain.extent);
-		writeSurfelTimestamp(kSurfelTS_GenerateEnd);
-		writeSurfelTimestamp(kSurfelTS_UpdateStart);
-		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
-		surfelPathTracerPasses.recordUpdatePass(commandBuffer,
-		                                        pipelines.surfelPathTracerPipelines,
-		                                        *surfelPathTracerStorageDescriptorSets[fi],
-		                                        *descriptorSets[fi],
-		                                        surfelPathTracerResources.maxSurfelsCapacity(),
-		                                        surfelPathTracerResources.maxRaysPerFrameCapacity(),
-		                                        surfelSettings.cellSize,
-		                                        surfelPathTracerResources.cellDimensionCapacity(),
-		                                        currentSurfelSourceTransformCount,
-		                                        surfelSettings.minRaysPerSurfel,
-		                                        surfelSettings.maxRaysPerSurfel,
-		                                        surfelSettings.varianceSensitivity,
-		                                        surfelSettings.lockSurfels);
-		writeSurfelTimestamp(kSurfelTS_UpdateEnd);
-		writeSurfelTimestamp(kSurfelTS_CellInfoStart);
-		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
-		surfelPathTracerPasses.recordCellInfoPass(commandBuffer,
-		                                          pipelines.surfelPathTracerPipelines,
-		                                          *surfelPathTracerStorageDescriptorSets[fi],
-		                                          surfelPathTracerResources.cellCount(),
-		                                          surfelPathTracerResources.perCellSurfelLimitCapacity());
-		writeSurfelTimestamp(kSurfelTS_CellInfoEnd);
-		writeSurfelTimestamp(kSurfelTS_CellMapStart);
-		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
-		surfelPathTracerPasses.recordCellToSurfelPass(commandBuffer,
-		                                              pipelines.surfelPathTracerPipelines,
-		                                              *surfelPathTracerStorageDescriptorSets[fi],
-		                                              *descriptorSets[fi],
-		                                              surfelPathTracerResources.maxSurfelsCapacity(),
-		                                              surfelSettings.cellSize,
-		                                              surfelPathTracerResources.cellDimensionCapacity(),
-		                                              surfelPathTracerResources.perCellSurfelLimitCapacity());
-		writeSurfelTimestamp(kSurfelTS_CellMapEnd);
-		writeSurfelTimestamp(kSurfelTS_RayScheduleStart);
+	}
+	writeSurfelTimestamp(kSurfelTS_GenerateEnd);
+
+	writeSurfelTimestamp(kSurfelTS_UpdateStart);
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	surfelPathTracerPasses.recordUpdatePass(commandBuffer,
+	                                        pipelines.surfelPathTracerPipelines,
+	                                        *surfelPathTracerStorageDescriptorSets[fi],
+	                                        *descriptorSets[fi],
+	                                        surfelPathTracerResources.maxSurfelsCapacity(),
+	                                        surfelPathTracerResources.maxRaysPerFrameCapacity(),
+	                                        surfelSettings.cellSize,
+	                                        surfelPathTracerResources.cellDimensionCapacity(),
+	                                        currentSurfelSourceTransformCount,
+	                                        surfelSettings.minRaysPerSurfel,
+	                                        surfelSettings.maxRaysPerSurfel,
+	                                        surfelSettings.varianceSensitivity,
+	                                        surfelSettings.lockSurfels);
+	writeSurfelTimestamp(kSurfelTS_UpdateEnd);
+
+	writeSurfelTimestamp(kSurfelTS_CellInfoStart);
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	surfelPathTracerPasses.recordCellInfoPass(commandBuffer,
+	                                          pipelines.surfelPathTracerPipelines,
+	                                          *surfelPathTracerStorageDescriptorSets[fi],
+	                                          surfelPathTracerResources.cellCount(),
+	                                          surfelPathTracerResources.perCellSurfelLimitCapacity());
+	writeSurfelTimestamp(kSurfelTS_CellInfoEnd);
+
+	writeSurfelTimestamp(kSurfelTS_CellMapStart);
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	surfelPathTracerPasses.recordCellToSurfelPass(commandBuffer,
+	                                              pipelines.surfelPathTracerPipelines,
+	                                              *surfelPathTracerStorageDescriptorSets[fi],
+	                                              *descriptorSets[fi],
+	                                              surfelPathTracerResources.maxSurfelsCapacity(),
+	                                              surfelSettings.cellSize,
+	                                              surfelPathTracerResources.cellDimensionCapacity(),
+	                                              surfelPathTracerResources.perCellSurfelLimitCapacity());
+	writeSurfelTimestamp(kSurfelTS_CellMapEnd);
+
+	writeSurfelTimestamp(kSurfelTS_RayScheduleStart);
+	if (updateCacheContents)
+	{
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		surfelPathTracerPasses.recordRaySchedulePass(commandBuffer,
 		                                            pipelines.surfelPathTracerPipelines,
@@ -2173,22 +2181,13 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                           surfelSettings.enableRadianceSharing,
 		                                           surfelSettings.maxRadianceSharingSamples,
 		                                           surfelPathTracerResources.cellDimensionCapacity(),
-		                                           surfelSettings.cellSize);
+		                                           surfelSettings.cellSize,
+		                                           surfelSettings.enableGuidedSampling);
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		writeSurfelTimestamp(kSurfelTS_IntegrateEnd);
 	}
 	else
 	{
-		writeSurfelTimestamp(kSurfelTS_PrepareEnd);
-		writeSurfelTimestamp(kSurfelTS_GenerateStart);
-		writeSurfelTimestamp(kSurfelTS_GenerateEnd);
-		writeSurfelTimestamp(kSurfelTS_UpdateStart);
-		writeSurfelTimestamp(kSurfelTS_UpdateEnd);
-		writeSurfelTimestamp(kSurfelTS_CellInfoStart);
-		writeSurfelTimestamp(kSurfelTS_CellInfoEnd);
-		writeSurfelTimestamp(kSurfelTS_CellMapStart);
-		writeSurfelTimestamp(kSurfelTS_CellMapEnd);
-		writeSurfelTimestamp(kSurfelTS_RayScheduleStart);
 		writeSurfelTimestamp(kSurfelTS_RayScheduleEnd);
 		writeSurfelTimestamp(kSurfelTS_RayTraceStart);
 		writeSurfelTimestamp(kSurfelTS_RayTraceEnd);
@@ -2220,24 +2219,56 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	writeSurfelTimestamp(kSurfelTS_EvaluateEnd);
 
 	writeSurfelTimestamp(kSurfelTS_ReflectionStart);
-	surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
-	surfelPathTracerPasses.recordReflectionPass(commandBuffer,
-	                                            pipelines.surfelPathTracerPipelines,
-	                                            surfelPathTracerResources,
-	                                            *surfelPathTracerRtDescriptorSets[fi],
-	                                            *surfelPathTracerStorageDescriptorSets[fi],
-	                                            *descriptorSets[fi],
-	                                            surfelSettings.enableReflections,
-	                                            surfelSettings.cellSize,
-	                                            surfelPathTracerResources.cellDimensionCapacity(),
-	                                            swapchain.extent,
-	                                            fi,
-	                                            surfelSettings.enableSurfelTermination,
-	                                            surfelSettings.useOriginalStyleGiNormalization,
-	                                            surfelSettings.maxSurfelSamplesPerQuery);
+	if (surfelSettings.enableReflections)
+	{
+		surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
+		surfelPathTracerPasses.recordReflectionPass(commandBuffer,
+		                                            pipelines.surfelPathTracerPipelines,
+		                                            surfelPathTracerResources,
+		                                            *surfelPathTracerRtDescriptorSets[fi],
+		                                            *surfelPathTracerStorageDescriptorSets[fi],
+		                                            *descriptorSets[fi],
+		                                            true,
+		                                            surfelSettings.cellSize,
+		                                            surfelPathTracerResources.cellDimensionCapacity(),
+		                                            swapchain.extent,
+		                                            fi,
+		                                            surfelSettings.enableSurfelTermination,
+		                                            surfelSettings.useOriginalStyleGiNormalization,
+		                                            surfelSettings.maxSurfelSamplesPerQuery);
+	}
+	else
+	{
+		transition_image_layout(*surfelPathTracerResources.reflectionImages[fi],
+		                        vk::ImageLayout::eGeneral,
+		                        vk::ImageLayout::eGeneral,
+		                        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+		                        vk::AccessFlagBits2::eTransferWrite,
+		                        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+		                        vk::PipelineStageFlagBits2::eTransfer,
+		                        vk::ImageAspectFlagBits::eColor);
+		const vk::ClearColorValue reflectionClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+		const vk::ImageSubresourceRange reflectionSubresourceRange{
+		    vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		commandBuffer.clearColorImage(*surfelPathTracerResources.reflectionImages[fi],
+		                              vk::ImageLayout::eGeneral,
+		                              reflectionClearColor,
+		                              reflectionSubresourceRange);
+		transition_image_layout(*surfelPathTracerResources.reflectionImages[fi],
+		                        vk::ImageLayout::eGeneral,
+		                        vk::ImageLayout::eGeneral,
+		                        vk::AccessFlagBits2::eTransferWrite,
+		                        vk::AccessFlagBits2::eShaderRead,
+		                        vk::PipelineStageFlagBits2::eTransfer,
+		                        vk::PipelineStageFlagBits2::eComputeShader,
+		                        vk::ImageAspectFlagBits::eColor);
+	}
 	writeSurfelTimestamp(kSurfelTS_ReflectionEnd);
 	writeSurfelTimestamp(kSurfelTS_PostProcessStart);
-	surfelPathTracerPasses.recordStorageBarrierRtToCompute(commandBuffer);
+	if (surfelSettings.enableReflections)
+	{
+		surfelPathTracerPasses.recordStorageBarrierRtToCompute(commandBuffer);
+	}
 	surfelPathTracerPasses.recordReflectionFilterPass(commandBuffer,
 	                                                  pipelines.surfelPathTracerPipelines,
 	                                                  *surfelPathTracerStorageDescriptorSets[fi],
@@ -3338,6 +3369,12 @@ void EngineCore::drawFrame()
 		if (needsResourceRecreate)
 		{
 			waitForSurfelPathTracerIdle("surfel path tracer persistent resource fence");
+			// Storage descriptor creation initializes both current and previous
+			// history bindings for every frame slot. Invalidate the old frame-slot
+			// relationship before rebuilding those sets; doing it afterward can
+			// make the previous slot equal the slot currently being initialized.
+			resetSurfelPathTracerTemporalHistory();
+			ptForceHistoryReset = true;
 			surfelPathTracerResources.resetPersistentResources(vulkan, ui.surfelPathTracerSettings);
 			if (atlasSettingsChanged)
 			{
@@ -3349,8 +3386,6 @@ void EngineCore::drawFrame()
 			createSurfelPathTracerRtDescriptorSets();
 			surfelPathTracerStaticSettings = nextStaticSettings;
 			surfelPathTracerStaticSettingsInitialized = true;
-			resetSurfelPathTracerTemporalHistory();
-			ptForceHistoryReset = true;
 		}
 
 		ui.surfelPathTracerStats = surfelPathTracerResources.readStats(frames.frameIndex);

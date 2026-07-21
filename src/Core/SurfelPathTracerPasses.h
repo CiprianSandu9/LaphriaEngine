@@ -99,7 +99,8 @@ class SurfelPathTracerPasses
 	                         bool enableRadianceSharing,
 	                         uint32_t maxRadianceSharingSamples,
 	                         uint32_t cellDimension,
-	                         float cellSize) const;
+	                         float cellSize,
+	                         bool enableGuidedSampling) const;
 
 	void recordEvaluatePass(const vk::raii::CommandBuffer &commandBuffer,
 	                        const SurfelPathTracerPipelines &pipelines,

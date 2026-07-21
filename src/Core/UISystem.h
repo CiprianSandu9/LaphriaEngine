@@ -93,6 +93,27 @@ public:
 
     struct SurfelPathTracerSettings
     {
+        static constexpr uint32_t kAtlasTileSize = 6;
+        static constexpr uint32_t kMinMaxSurfels = 1024;
+        static constexpr uint32_t kMaxAtlasDimension = 4096;
+        static constexpr uint64_t kMaxStorageBufferBytes = 128ull * 1024ull * 1024ull;
+        static constexpr uint32_t kRayRecordBytes = 8u * sizeof(uint32_t);
+        static constexpr uint32_t kMaxRayCapacity =
+            static_cast<uint32_t>(kMaxStorageBufferBytes / kRayRecordBytes);
+
+        static constexpr uint32_t atlasCapacity(uint32_t width, uint32_t height)
+        {
+            return (width / kAtlasTileSize) * (height / kAtlasTileSize);
+        }
+
+        static constexpr uint32_t maxPerCellLimitForDimension(uint32_t dimension)
+        {
+            const uint64_t safeDimension = dimension > 0u ? dimension : 1u;
+            const uint64_t cellCount = safeDimension * safeDimension * safeDimension;
+            const uint64_t capacity = kMaxStorageBufferBytes / (cellCount * sizeof(uint32_t));
+            return static_cast<uint32_t>(capacity > 256u ? 256u : (capacity > 0u ? capacity : 1u));
+        }
+
         bool enabled = true;
         bool lockSurfels = false;
         bool resetSurfels = false;
@@ -110,7 +131,6 @@ public:
         uint32_t irradianceAtlasHeight = 4096;
         uint32_t minRaysPerSurfel = 4;
         uint32_t maxRaysPerSurfel = 64;
-        uint32_t rayBudgetScale = 16;
         uint32_t activeMaxDepth = 3;
         uint32_t sleepingMaxDepth = 5;
         float placementThreshold = 0.35f;
@@ -121,7 +141,6 @@ public:
         float surfelMaxRadiusScale = 2.0f;
         uint32_t maxSurfelSamplesPerQuery = 64;
         uint32_t maxRadianceSharingSamples = 32;
-        uint32_t atlasTileSize = 6;
         bool enableGuidedSampling = false;
         bool enableSurfelTermination = true;
         bool useOriginalStyleGiNormalization = true;
@@ -228,6 +247,9 @@ private:
     glm::vec3 transformDragStartEuler{0.0f};
     glm::vec3 transformDragStartScale{1.0f};
     glm::vec2 transformDragStartMouse{0.0f};
+
+    SurfelPathTracerSettings surfelResourceSettingsDraft;
+    bool surfelResourceSettingsDraftInitialized = false;
 
     void drawMainMenuBar(GLFWwindow *window);
 

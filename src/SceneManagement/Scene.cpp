@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 #include <random>
 #include <cmath>
+#include <limits>
 #include <unordered_set>
 
 using namespace Laphria;
@@ -99,6 +100,58 @@ glm::quat sampleQuatTrack(const ModelResource::AnimationTrackQuat &track, float 
 	}
 	const float alpha = std::clamp((timeSeconds - t0) / (t1 - t0), 0.0f, 1.0f);
 	return glm::normalize(glm::slerp(glm::normalize(track.keyValues[idx1]), glm::normalize(track.keyValues[idx2]), alpha));
+}
+
+bool computeWorldMeshBounds(const SceneNode::Ptr &node, const ResourceManager &resourceManager, AABB &worldBounds)
+{
+	if (!node || node->modelId < 0)
+	{
+		return false;
+	}
+
+	const ModelResource *model = resourceManager.getModelResource(node->modelId);
+	if (!model)
+	{
+		return false;
+	}
+
+	glm::vec3 localMin(std::numeric_limits<float>::max());
+	glm::vec3 localMax(std::numeric_limits<float>::lowest());
+	bool hasBounds = false;
+	for (const int meshIndex : node->getMeshIndices())
+	{
+		if (meshIndex < 0 || static_cast<size_t>(meshIndex) >= model->meshes.size())
+		{
+			continue;
+		}
+		const LoadedMesh &mesh = model->meshes[meshIndex];
+		if (!mesh.hasBounds)
+		{
+			continue;
+		}
+		localMin = glm::min(localMin, mesh.boundsMin);
+		localMax = glm::max(localMax, mesh.boundsMax);
+		hasBounds = true;
+	}
+	if (!hasBounds)
+	{
+		return false;
+	}
+
+	worldBounds.min = glm::vec3(std::numeric_limits<float>::max());
+	worldBounds.max = glm::vec3(std::numeric_limits<float>::lowest());
+	const glm::mat4 &transform = node->getWorldTransform();
+	for (uint32_t corner = 0; corner < 8; ++corner)
+	{
+		const glm::vec3 local{
+		    (corner & 1u) ? localMax.x : localMin.x,
+		    (corner & 2u) ? localMax.y : localMin.y,
+		    (corner & 4u) ? localMax.z : localMin.z};
+		const glm::vec3 world(transform * glm::vec4(local, 1.0f));
+		worldBounds.min = glm::min(worldBounds.min, world);
+		worldBounds.max = glm::max(worldBounds.max, world);
+	}
+	return true;
 }
 }
 
@@ -588,27 +641,75 @@ void Scene::draw(const vk::raii::CommandBuffer &cmd, const vk::raii::PipelineLay
 	if (!root || !octree)
 		return;
 
-	// 1. Cull against octree — freeze culling snapshots the bounds for debugging
-	std::vector<SceneNode::Ptr> visibleNodes;
-	if (freezeCulling)
+	// The octree stores model origins. Expand its broad-phase query enough to
+	// include any mesh whose bounds overlap the view even when its origin does not.
+	float maxOriginRadius = 0.0f;
+	std::vector<SceneNode::Ptr> uncullableNodes;
+	for (const auto &node : allNodes)
 	{
-		// Keep using the bounds that were active when freeze was first applied
-		octree->query(frozenCullBounds, visibleNodes);
-	}
-	else
-	{
-		frozenCullBounds = cullBounds;        // Keep snapshot up-to-date for when freeze is toggled
-		octree->query(cullBounds, visibleNodes);
+		const ModelResource *model = node && node->modelId >= 0 ? resourceManager.getModelResource(node->modelId) : nullptr;
+		AABB worldBounds{};
+		if (!model || model->hasRuntimeSkinning || !computeWorldMeshBounds(node, resourceManager, worldBounds))
+		{
+			if (model)
+			{
+				// Bind-pose bounds are not conservative for GPU-skinned geometry. A
+				// model without imported bounds must also remain visible.
+				uncullableNodes.push_back(node);
+			}
+			continue;
+		}
+
+		const glm::vec3 origin = node->getWorldPosition();
+		for (uint32_t corner = 0; corner < 8; ++corner)
+		{
+			const glm::vec3 worldCorner{
+			    (corner & 1u) ? worldBounds.max.x : worldBounds.min.x,
+			    (corner & 2u) ? worldBounds.max.y : worldBounds.min.y,
+			    (corner & 4u) ? worldBounds.max.z : worldBounds.min.z};
+			maxOriginRadius = std::max(maxOriginRadius, glm::length(worldCorner - origin));
+		}
 	}
 
+	AABB activeCullBounds = freezeCulling ? frozenCullBounds : cullBounds;
+	if (!freezeCulling)
+	{
+		frozenCullBounds = cullBounds;
+	}
+	activeCullBounds.min -= glm::vec3(maxOriginRadius);
+	activeCullBounds.max += glm::vec3(maxOriginRadius);
+
+	std::vector<SceneNode::Ptr> visibleNodes;
+	octree->query(activeCullBounds, visibleNodes);
+
+	// Origins outside the octree's fixed world box were never indexed. Submit
+	// those to the final bounds test instead of treating that box as a clip plane.
+	const AABB &octreeBounds = octree->getBounds();
+	for (const auto &node : allNodes)
+	{
+		if (node && !octreeBounds.contains(node->getWorldPosition()))
+		{
+			visibleNodes.push_back(node);
+		}
+	}
+	visibleNodes.insert(visibleNodes.end(), uncullableNodes.begin(), uncullableNodes.end());
+
+	std::unordered_set<const SceneNode *> submitted;
 	for (const auto &node : visibleNodes)
 	{
-		// Keep frustum culling slightly conservative in raster mode so model origins
-		// near/behind the near plane do not pop entire meshes out.
-		constexpr float kFrustumCullMargin = 2.0f;
-		if (!frustum.containsPoint(node->getWorldPosition(), kFrustumCullMargin))
+		if (!node || !submitted.insert(node.get()).second)
 		{
 			continue;
+		}
+
+		const ModelResource *model = node->modelId >= 0 ? resourceManager.getModelResource(node->modelId) : nullptr;
+		if (model && !model->hasRuntimeSkinning)
+		{
+			AABB worldBounds{};
+			if (computeWorldMeshBounds(node, resourceManager, worldBounds) && !frustum.intersectsAABB(worldBounds))
+			{
+				continue;
+			}
 		}
 		drawNode(node, cmd, pipelineLayout, resourceManager);
 	}
