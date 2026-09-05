@@ -6,6 +6,8 @@
 [[vk::binding(11, 0)]] StructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer;
 [[vk::binding(13, 0)]] StructuredBuffer<uint> cellToSurfelBuffer;
 
+[[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
+
 struct RaySchedulePushConstants {
     uint cellCount;
     uint maxSurfels;
@@ -13,18 +15,46 @@ struct RaySchedulePushConstants {
     uint minRaysPerSurfel;
     uint maxRaysPerSurfel;
     float varianceSensitivity;
-    uint pad0;
-    uint pad1;
+    uint offscreenRayInterval;   // 1 = trace off-screen surfels every frame
+    float supportRadius;         // projected margin for the frustum test
 };
 
 [[vk::push_constant]] RaySchedulePushConstants push;
 
+// Conservative view-frustum test for a surfel's support sphere. Returns true when
+// no part of the sphere can be visible: fully behind the camera, or outside the
+// NDC square by more than the sphere's projected radius.
+bool isSurfelOutsideFrustum(float3 position, float radius)
+{
+    float4 viewPos = mul(ubo.view, float4(position, 1.0));
+    float4 clip = mul(ubo.proj, viewPos);
+    if (clip.w <= radius)
+    {
+        // At or behind the near plane (clip.w is the view-space depth).
+        return clip.w < -radius;
+    }
+    float2 ndc = clip.xy / clip.w;
+    // Projected radius in NDC: focal length (proj[0][0], proj[1][1]) times r / depth.
+    float2 margin = abs(float2(ubo.proj[0][0], ubo.proj[1][1])) * radius / clip.w;
+    return any(abs(ndc) > 1.0 + margin);
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
-    uint cellIndex = tid.x;
-    if (cellIndex >= push.cellCount) {
+    if (tid.x >= push.cellCount) {
         return;
+    }
+
+    // Ray records are claimed first-come from one counter, so when demand
+    // exceeds the budget the cells dispatched last always lose. Rotate which
+    // cell each lane handles by a per-frame offset so budget starvation is
+    // spread across the whole window instead of pinned to the highest z-slabs.
+    uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
+    uint rotation = pcgHash(frameIndex ^ 0x2C1B3C6Du) % max(push.cellCount, 1u);
+    uint cellIndex = tid.x + rotation;
+    if (cellIndex >= push.cellCount) {
+        cellIndex -= push.cellCount;
     }
 
     SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
@@ -49,7 +79,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
             continue;
         }
 
-        uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
         // This pass has uniquely claimed a surfel that survived compact-map
         // selection. Track representation here instead of relying on one
         // arbitrary resolve pixel to mark the surfel as seen.
@@ -65,6 +94,23 @@ void main(uint3 tid : SV_DispatchThreadID) {
         if (rayRequestCount == 0u || push.maxRays == 0u) {
             continue;
         }
+
+        // Off-screen surfels stay represented (lastSeenFrame above) but only trace
+        // every offscreenRayInterval-th frame, staggered by a stable per-surfel hash
+        // so the skipped set is spread evenly across frames. Surfels still in warm-up
+        // always trace: they have no usable estimate yet.
+        bool inWarmup = surfel.shortMeanAndLife.w <= 16.0;
+        if (push.offscreenRayInterval > 1u && !inWarmup &&
+            isSurfelOutsideFrustum(surfel.position, max(surfel.radius, push.supportRadius)))
+        {
+            uint phase = (pcgHash(surfelIndex ^ 0x68E31DA4u) + frameIndex) % push.offscreenRayInterval;
+            if (phase != 0u) {
+                continue;
+            }
+        }
+
+        // Record the unclamped demand so the budget saturation ratio is observable.
+        counters.InterlockedAdd(SURFEL_PT_COUNTER_DEMANDED_RAYS_OFFSET, rayRequestCount);
 
         uint rayOffset = 0u;
         counters.InterlockedAdd(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET,

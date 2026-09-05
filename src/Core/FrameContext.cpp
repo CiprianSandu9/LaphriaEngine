@@ -564,7 +564,7 @@ void FrameContext::createHistoryResources(const VulkanDevice &dev, const Swapcha
             VulkanUtils::createImage(dev.logicalDevice, dev.physicalDevice,
                                      swapchain.extent.width, swapchain.extent.height,
                                      vk::Format::eR16G16B16A16Sfloat, vk::ImageTiling::eOptimal,
-                                     vk::ImageUsageFlagBits::eStorage,
+                                     vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc, // TransferSrc: auto-exposure probe blit
                                      vk::MemoryPropertyFlagBits::eDeviceLocal, img);
             historyColor.push_back(std::move(img));
             historyColorViews.push_back(VulkanUtils::createImageView(dev.logicalDevice,

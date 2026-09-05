@@ -16,7 +16,7 @@ struct IntegratePushConstants {
     uint cellDimension;
     float cellSize;
     uint enableGuidedSampling;
-    uint pad0;
+    float surfelSupportRadius;
     uint pad1;
 };
 
@@ -137,8 +137,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
                                                    unpackNormalOctahedral(surfel.packedNormal),
                                                    push.maxRadianceSharingSamples,
                                                    surfelIndex ^ counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET),
+                                                   surfelIndex /* never blend a surfel with itself */,
+                                                   1u /* full 3x3x3 neighbourhood */,
                                                    push.maxSurfels,
                                                    push.cellSize,
+                                                   push.surfelSupportRadius,
                                                    push.cellDimension,
                                                    ubo.cameraPos.xyz,
                                                    surfelBuffer,
@@ -150,10 +153,17 @@ void main(uint3 tid : SV_DispatchThreadID) {
         }
     }
 
-    float shortAlpha = surfel.shortMeanAndLife.w <= 1.0 ? 4.0 : 0.25;
+    // The first traced estimate replaces the placement seed outright (4.0 makes
+    // both the short and the long mean blend at 1.0 inside updateMsme). Life is
+    // incremented by Update before the first samples ever arrive here, so a
+    // life-based test never fired and new surfels converged at the steady-state
+    // rate from a seed that is frequently zero.
+    bool hasSamples = (surfel.flags & SURFEL_PT_SURFEL_FLAG_HAS_SAMPLES) != 0u;
+    float shortAlpha = hasSamples ? 0.25 : 4.0;
     float3 longMean = updateMsme(sampleRadiance, surfel, shortAlpha);
 
     surfel.radiance = longMean;
     surfel.rayCount = 1u;
+    surfel.flags |= SURFEL_PT_SURFEL_FLAG_HAS_SAMPLES;
     surfelBuffer[surfelIndex] = surfel;
 }

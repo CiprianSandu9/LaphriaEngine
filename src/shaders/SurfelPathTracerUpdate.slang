@@ -34,18 +34,27 @@ bool refreshAnchoredSurfel(uint surfelIndex, inout SurfelPathTracerSurfel surfel
         return false;
     }
 
+    // Only store the failure flag on the transition; rewriting the whole source
+    // record every frame for every unanchored surfel is pure bandwidth.
+    bool alreadyFailed = (source.sourceFlags & SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED) != 0u;
     if (source.sourceNodeId >= push.sourceTransformCount)
     {
-        source.sourceFlags |= SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED;
-        surfelSourceBuffer[surfelIndex] = source;
+        if (!alreadyFailed)
+        {
+            source.sourceFlags |= SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED;
+            surfelSourceBuffer[surfelIndex] = source;
+        }
         return false;
     }
 
     SurfelPathTracerSourceTransform transform = sourceTransformBuffer[source.sourceNodeId];
     if ((transform.flags & SURFEL_PT_SOURCE_FLAG_VALID) == 0u)
     {
-        source.sourceFlags |= SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED;
-        surfelSourceBuffer[surfelIndex] = source;
+        if (!alreadyFailed)
+        {
+            source.sourceFlags |= SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED;
+            surfelSourceBuffer[surfelIndex] = source;
+        }
         return false;
     }
 
@@ -156,11 +165,17 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
         uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
         int3 centerCoord = cameraRelativeCellCoord(surfel.position, ubo.cameraPos.xyz, push.cellSize);
-        uint ageSinceSeen = frameIndex >= surfel.lastSeenFrame
-                                ? frameIndex - surfel.lastSeenFrame
-                                : 0u;
-        bool reenteredCurrentWindow = ageSinceSeen > 1u &&
-                                      isRepresentedByCurrentWindow(surfel, centerCoord);
+        // Detect a real outside->inside transition of the lookup window with a
+        // sticky flag. The previous age-based test (ageSinceSeen > 1) re-fired
+        // every other frame for any surfel inside the window that had merely
+        // dropped out of the compact map. That refreshed lastSeenFrame forever
+        // and made the "unrepresented" eviction rule unreachable inside the
+        // window: surfels evicted from the map became immortal and untraced.
+        bool inWindow = isRepresentedByCurrentWindow(surfel, centerCoord);
+        bool wasInWindow = (surfel.flags & SURFEL_PT_SURFEL_FLAG_IN_WINDOW) != 0u;
+        bool reenteredCurrentWindow = inWindow && !wasInWindow;
+        surfel.flags = inWindow ? (surfel.flags | SURFEL_PT_SURFEL_FLAG_IN_WINDOW)
+                                : (surfel.flags & ~SURFEL_PT_SURFEL_FLAG_IN_WINDOW);
         if (reenteredCurrentWindow)
         {
             // Update runs before this frame's resolve. Give a surfel that has

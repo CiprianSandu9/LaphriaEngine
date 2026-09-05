@@ -29,9 +29,23 @@ struct LightIntegratePushConstants {
     uint cellDimension;
     uint perCellSurfelLimit;
     uint useOriginalStyleGiNormalization;
+    float roughReflectionStart;
+    float roughReflectionEnd;
+    float surfelSupportRadius;
 };
 
 [[vk::push_constant]] LightIntegratePushConstants push;
+
+// Directional albedo of the GGX lobe (split-sum "environment BRDF"), analytic fit by Karis.
+// Multiplying it by the mean incident radiance gives the rough specular response without a ray.
+float3 envBrdfApprox(float3 specularColor, float roughness, float nDotV) {
+    const float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
+    const float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
+    float4 r = roughness * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28 * nDotV)) * r.x + r.y;
+    float2 ab = float2(-1.04, 1.04) * a004 + r.zw;
+    return specularColor * ab.x + ab.y;
+}
 
 static const uint SURFEL_DEBUG_FINAL_COLOR = 0u;
 static const uint SURFEL_DEBUG_GBUFFER_NORMAL = 1u;
@@ -132,7 +146,11 @@ bool loadSelectedContributingSurfel(float3 worldPosition,
 
                         float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
                         float normalWeight = saturate(dot(normal, surfelNormal));
-                        float distanceWeight = saturate(1.0 - length(worldPosition - surfel.position) / max(surfel.radius, 0.0001));
+                        // Same support radius as the resolve, otherwise the debug
+                        // views show "no surfel" wherever the raw radius is the
+                        // 5 cm minimum.
+                        float influenceRadius = max(surfel.radius, push.surfelSupportRadius);
+                        float distanceWeight = saturate(1.0 - length(worldPosition - surfel.position) / max(influenceRadius, 0.0001));
                         float weight = normalWeight * distanceWeight;
                         if (weight > bestWeight) {
                             bestWeight = weight;
@@ -216,7 +234,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 rawSurfelRadiance = max(outputImage[pixel].rgb, float3(0.0));
     float surfelCoverage = max(outputImage[pixel].a, 0.0);
     float diffuseNormalization = push.useOriginalStyleGiNormalization != 0u ? 1.0 : (1.0 / PI);
-    float3 diffuseBsdf = albedo * diffuseNormalization;
+    // Metals have no diffuse lobe; their indirect response is the cache specular term below.
+    float3 diffuseBsdf = albedo * (1.0 - metallic) * diffuseNormalization;
     float3 diffuseGiBeforeAo = push.enableDiffuseGi != 0u
                                ? diffuseBsdf * rawSurfelRadiance * SURFEL_PT_DIFFUSE_GI_SCALE
                                : float3(0.0);
@@ -237,7 +256,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 reflectionFiltered = push.useBilateralReflection != 0u
                                 ? reflectionImages[reflectionPixel].rgb
                                 : filteredReflectionImages[reflectionPixel].rgb;
-    float3 reflection = push.enableReflections != 0u ? reflectionFiltered : float3(0.0);
+    // Rough specular from the cache: E / pi is the mean incident radiance over the hemisphere
+    // and envBrdfApprox the lobe's directional albedo. The traced reflection fades into it over
+    // [roughReflectionStart, roughReflectionEnd]; above the end no reflection ray was traced.
+    float nDotV = max(dot(normal, viewDir), 0.0001);
+    float roughT = smoothstep(push.roughReflectionStart, push.roughReflectionEnd, roughness);
+    float3 cacheSpecular = envBrdfApprox(f0, roughness, nDotV) * rawSurfelRadiance * diffuseNormalization * ao;
+    float3 reflection = push.enableReflections != 0u ? lerp(reflectionFiltered, cacheSpecular, roughT) : float3(0.0);
 
     float3 lighting = clampLuminance(directLighting + diffuseGi + reflection + emissive, SURFEL_PT_MAX_RADIANCE_LUMINANCE);
     float4 referenceSample = referenceImage[pixel];

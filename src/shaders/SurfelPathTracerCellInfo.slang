@@ -7,7 +7,7 @@
 struct CellInfoPushConstants {
     uint cellCount;
     uint perCellSurfelLimit;
-    uint pad0;
+    uint mapCapacity;   // total entries in cellToSurfelBuffer (packed map, sized per surfel, not per cell)
     uint pad1;
 };
 
@@ -36,6 +36,19 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     uint surfelOffset = 0u;
     cellCounterBuffer.InterlockedAdd(CELL_RUNNING_TOTAL_OFFSET, clampedCount, surfelOffset);
+    // The packed map is sized for a fixed number of entries per surfel rather than
+    // cells x limit, so the grid can be made finer without growing the map. If the
+    // running total exceeds that capacity, the remaining cells get a truncated or
+    // empty range; the dropped entries are reported as rejected stores.
+    uint mapCapacity = max(push.mapCapacity, 1u);
+    uint available = surfelOffset < mapCapacity ? mapCapacity - surfelOffset : 0u;
+    if (clampedCount > available) {
+        counters.InterlockedAdd(SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET, clampedCount - available);
+        clampedCount = available;
+        if (clampedCount == 0u) {
+            surfelOffset = 0u;
+        }
+    }
     cellCounterBuffer.Store(cursorOffset, 0u);
 
     SurfelPathTracerCellInfo cellInfo;

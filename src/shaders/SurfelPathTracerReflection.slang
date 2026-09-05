@@ -13,6 +13,9 @@ struct ReflectionPushConstants {
     uint enableSurfelTermination;
     uint maxSurfelSamplesPerQuery;
     uint useOriginalStyleGiNormalization;
+    float roughReflectionStart;
+    float roughReflectionEnd;
+    float surfelSupportRadius;
 };
 
 [[vk::push_constant]] ReflectionPushConstants push;
@@ -113,6 +116,12 @@ void main() {
     float3 baseColor = max(gBufferAlbedo[fullPixel].rgb, float3(0.0));
     float4 material = gBufferMaterial[fullPixel];
     float roughness = clamp(material.x, MIN_ROUGHNESS, 1.0);
+    if (roughness >= push.roughReflectionEnd) {
+        // Rough lobes integrate the same incident field the diffuse term uses; LightIntegrate
+        // evaluates their specular from the surfel cache instead of a single noisy ray.
+        reflectionImages[halfPixel] = float4(0.0, 0.0, 0.0, 0.0);
+        return;
+    }
     float metallic = saturate(material.y);
     float dielectricSpec = max(material.z, 0.0);
     float3 f0 = lerp(float3(0.08 * dielectricSpec), baseColor, metallic);
@@ -177,8 +186,11 @@ void main() {
                                                        payload.hitNormal,
                                                        push.maxSurfelSamplesPerQuery,
                                                        seed,
+                                                       SURFEL_PT_INVALID_INDEX,
+                                                       0u /* centre cell only: ~1M lookups/frame at half resolution */,
                                                        push.maxSurfels,
                                                        push.cellSize,
+                                                       push.surfelSupportRadius,
                                                        push.cellDimension,
                                                        ubo.cameraPos.xyz,
                                                        surfelBuffer,

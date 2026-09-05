@@ -6,7 +6,6 @@
 [[vk::binding(4, 0)]] RWByteAddressBuffer counters;
 [[vk::binding(5, 0)]] RWStructuredBuffer<SurfelPathTracerSurfel> surfelBuffer;
 [[vk::binding(7, 0)]] RWStructuredBuffer<uint> deadBuffer;
-[[vk::binding(8, 0)]] RWStructuredBuffer<uint> dirtyBuffer;
 [[vk::binding(11, 0)]] RWStructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer;
 [[vk::binding(13, 0)]] RWStructuredBuffer<uint> cellToSurfelBuffer;
 [[vk::binding(28, 0)]] StructuredBuffer<SurfelPathTracerPixelSource> gBufferSourceBuffer;
@@ -32,7 +31,7 @@ struct EvaluatePushConstants {
     uint enableRemoval;
     uint maxSurfelSamplesPerQuery;
     uint perCellSurfelLimit;
-    uint pad1;
+    float surfelSupportRadius;
 };
 
 [[vk::push_constant]] EvaluatePushConstants push;
@@ -52,16 +51,40 @@ float3 reconstructWorldPosition(uint2 pixel, float depth) {
     return ubo.cameraPos.xyz + primaryRayDirection(pixel) * depth;
 }
 
-float estimateCoverage(float3 position, float3 normal, out uint closestSurfelIndex, bool stampClosest) {
-    closestSurfelIndex = SURFEL_PT_INVALID_INDEX;
+struct SurfelQueryResult {
+    // Sum of linear support weights (placement / removal decision).
+    float coverage;
+    // Weighted mean radiance with the squared falloff (what the screen shows).
+    float3 radiance;
+    // Highest-weight contributor; stamped as referenced by the resolve.
+    uint closestSurfelIndex;
+    // Contributor a visible pixel referenced least recently (ties: lowest
+    // weight). Removing it costs the screen the least; the old code removed the
+    // closest surfel, i.e. the one this pixel depended on most.
+    uint removalCandidateIndex;
+};
+
+// One 3x3x3 walk serves coverage, closest-surfel and the resolved radiance.
+// The resolve used to run this loop twice per pixel (coverage, then radiance).
+SurfelQueryResult querySurfels(float3 position, float3 normal, bool stampClosest) {
+    SurfelQueryResult result;
+    result.coverage = 0.0;
+    result.radiance = float3(0.0);
+    result.closestSurfelIndex = SURFEL_PT_INVALID_INDEX;
+    result.removalCandidateIndex = SURFEL_PT_INVALID_INDEX;
+
     uint dim = max(push.cellDimension, 1u);
     int3 centerCoord = cameraRelativeCellCoord(position, ubo.cameraPos.xyz, push.cellSize);
     if (!isCellCoordValid(centerCoord, dim)) {
-        return 0.0;
+        return result;
     }
 
-    float coverage = 0.0;
+    uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
+    float3 weightedRadiance = float3(0.0);
+    float weightSum = 0.0;
     float bestWeight = 0.0;
+    uint removalAge = 0u;
+    float removalWeight = 2.0;
     uint maxSamples = max(push.maxSurfelSamplesPerQuery, 1u);
     uint samplesVisited = 0u;
     uint entriesInspected = 0u;
@@ -88,7 +111,7 @@ float estimateCoverage(float3 position, float3 normal, out uint closestSurfelInd
                     // under-capacity cell are assigned by atomics and therefore
                     // have no stable order. Treat maxSamples as a between-cell
                     // soft budget so the retained set, not insertion order,
-                    // determines coverage.
+                    // determines the result.
                     for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
                         uint surfelIndex = unpackCellSurfelIndex(cellToSurfelBuffer[cellInfo.surfelOffset + slot]);
                         if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= push.maxSurfels) {
@@ -103,7 +126,14 @@ float estimateCoverage(float3 position, float3 normal, out uint closestSurfelInd
                         entriesInspected += 1u;
                         float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
                         float normalWeight = saturate(dot(normal, surfelNormal));
-                        float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(surfel.radius, 0.0001));
+                        // Coverage, resolve, termination and sharing all measure
+                        // support with the same radius (clamped to the cell size
+                        // on the host, so the fixed +/-1 query neighbourhood stays
+                        // complete). Weighting by the raw surfel radius (5 cm at
+                        // the Sponza minimum) made placement demand ~50x more
+                        // surfels per unit area than the resolve could ever read.
+                        float influenceRadius = max(surfel.radius, push.surfelSupportRadius);
+                        float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(influenceRadius, 0.0001));
                         float weight = normalWeight * distanceWeight;
                         // A spatial cell can contain several disconnected
                         // walls or arches. Candidates with no geometric support
@@ -113,23 +143,38 @@ float estimateCoverage(float3 position, float3 normal, out uint closestSurfelInd
                             continue;
                         }
                         samplesVisited += 1u;
-                        coverage += weight;
+                        result.coverage += weight;
+                        float resolveWeight = weight * distanceWeight;
+                        weightedRadiance += clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE) * resolveWeight;
+                        weightSum += resolveWeight;
                         if (weight > bestWeight) {
                             bestWeight = weight;
-                            closestSurfelIndex = surfelIndex;
+                            result.closestSurfelIndex = surfelIndex;
+                        }
+                        uint age = frameIndex >= surfel.lastReferencedFrame
+                                       ? frameIndex - surfel.lastReferencedFrame
+                                       : 0u;
+                        if (age > removalAge || (age == removalAge && weight < removalWeight)) {
+                            removalAge = age;
+                            removalWeight = weight;
+                            result.removalCandidateIndex = surfelIndex;
                         }
                     }
                 }
             }
         }
     }
-    if (stampClosest && closestSurfelIndex != SURFEL_PT_INVALID_INDEX) {
+
+    if (weightSum > 0.0001) {
+        result.radiance = weightedRadiance / weightSum;
+    }
+    if (stampClosest && result.closestSurfelIndex != SURFEL_PT_INVALID_INDEX) {
         uint previousReferenceFrame = 0u;
-        InterlockedMax(surfelBuffer[closestSurfelIndex].lastReferencedFrame,
-                       counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET),
+        InterlockedMax(surfelBuffer[result.closestSurfelIndex].lastReferencedFrame,
+                       frameIndex,
                        previousReferenceFrame);
     }
-    return coverage;
+    return result;
 }
 
 uint sourcePixelIndex(uint2 pixel)
@@ -218,86 +263,7 @@ void allocateSurfel(uint2 pixel, float3 position, float3 normal, float radius, f
     writeSurfelSource(surfelIndex, pixel, surfel.materialKey);
 
     counters.InterlockedAdd(SURFEL_PT_COUNTER_SPAWNED_SURFELS_OFFSET, 1u);
-
-    uint dirtySlot = 0u;
-    counters.InterlockedAdd(SURFEL_PT_COUNTER_DIRTY_SURFELS_OFFSET, 1u, dirtySlot);
-    if (dirtySlot < maxSurfels) {
-        dirtyBuffer[dirtySlot] = surfelIndex;
-    }
-}
-
-float3 sampleWeightedSurfelRadiance(float3 position, float3 normal) {
-    uint dim = max(push.cellDimension, 1u);
-    int3 centerCoord = cameraRelativeCellCoord(position, ubo.cameraPos.xyz, push.cellSize);
-    if (!isCellCoordValid(centerCoord, dim)) {
-        return float3(0.0);
-    }
-
-    float3 weightedRadiance = float3(0.0);
-    float weightSum = 0.0;
-    uint maxSamples = max(push.maxSurfelSamplesPerQuery, 1u);
-    uint samplesVisited = 0u;
-    uint entriesInspected = 0u;
-    uint maxEntriesInspected = maxSamples * 8u;
-    for (int shell = 0; shell <= 1; ++shell) {
-        for (int z = -shell; z <= shell; ++z) {
-            for (int y = -shell; y <= shell; ++y) {
-                for (int x = -shell; x <= shell; ++x) {
-                    if (samplesVisited >= maxSamples || entriesInspected >= maxEntriesInspected) {
-                        break;
-                    }
-                    if (max(abs(x), max(abs(y), abs(z))) != shell) {
-                        continue;
-                    }
-
-                    int3 cellCoord = centerCoord + int3(x, y, z);
-                    if (!isCellCoordValid(cellCoord, dim)) {
-                        continue;
-                    }
-
-                    uint cellIndex = flattenCameraRelativeCellCoord(cellCoord, dim);
-                    SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
-                    // As in coverage, finish the current cell before applying
-                    // the query budget. This removes partial-cell dependence on
-                    // the parallel insertion order.
-                    for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
-                        uint surfelIndex = unpackCellSurfelIndex(cellToSurfelBuffer[cellInfo.surfelOffset + slot]);
-                        if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= push.maxSurfels) {
-                            continue;
-                        }
-
-                        SurfelPathTracerSurfel surfel = surfelBuffer[surfelIndex];
-                        if (!isActiveSurfel(surfel)) {
-                            continue;
-                        }
-
-                        entriesInspected += 1u;
-                        float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
-                        float normalWeight = saturate(dot(normal, surfelNormal));
-                        // Resolve must use the same physical support radius as
-                        // placement and cell intersection. Doubling it here made
-                        // the intended influence extend beyond the fixed +/-1
-                        // query neighborhood and increased cross-surface bleed.
-                        float influenceRadius = max(surfel.radius, push.cellSize * 0.75);
-                        float distanceWeight = saturate(1.0 - length(position - surfel.position) / max(influenceRadius, 0.0001));
-                        float weight = normalWeight * distanceWeight * distanceWeight;
-                        if (weight <= 0.0001) {
-                            continue;
-                        }
-                        samplesVisited += 1u;
-                        weightedRadiance += clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE) * weight;
-                        weightSum += weight;
-                    }
-                }
-            }
-        }
-    }
-
-    return weightSum > 0.0001 ? weightedRadiance / weightSum : float3(0.0);
-}
-
-float3 resolveSurfelRadiance(float3 position, float3 normal) {
-    return sampleWeightedSurfelRadiance(position, normal);
+    counters.InterlockedAdd(SURFEL_PT_COUNTER_DIRTY_SURFELS_OFFSET, 1u);
 }
 
 [shader("compute")]
@@ -331,10 +297,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     float3 normal = normalize(rawNormal);
     float3 position = reconstructWorldPosition(pixel, depth);
-    uint closestSurfelIndex = SURFEL_PT_INVALID_INDEX;
 
     if (push.mode == SURFEL_PT_EVALUATE_GENERATE) {
-        float coverage = estimateCoverage(position, normal, closestSurfelIndex, false);
+        SurfelQueryResult query = querySurfels(position, normal, false);
+        float coverage = query.coverage;
         bool wantsPlacement = push.lockSurfels == 0u &&
                               push.enablePlacement != 0u &&
                               coverage < push.placementThreshold;
@@ -351,22 +317,24 @@ void main(uint3 tid : SV_DispatchThreadID) {
         bool placeFromThisLane = wantsPlacement && WavePrefixCountBits(wantsPlacement) == 0u;
         if (placeFromThisLane) {
             float radius = surfelRadius(depth, push.surfelTargetArea, push.surfelMinRadius, push.cellSize * push.surfelMaxRadiusScale);
-            float3 seedRadiance = resolveSurfelRadiance(position, normal);
-            allocateSurfel(pixel, position, normal, radius, seedRadiance, loadPixelMaterialKey(pixel));
+            // The seed is the same weighted neighbourhood the resolve would show.
+            allocateSurfel(pixel, position, normal, radius, query.radiance, loadPixelMaterialKey(pixel));
         }
         if (push.lockSurfels == 0u &&
             push.enableRemoval != 0u &&
             coverage > push.removalThreshold &&
-            closestSurfelIndex != SURFEL_PT_INVALID_INDEX) {
-            SurfelPathTracerSurfel surfel = surfelBuffer[closestSurfelIndex];
-            if (isActiveSurfel(surfel)) {
-                surfel.flags |= SURFEL_PT_SURFEL_FLAG_PENDING_FREE;
-                surfelBuffer[closestSurfelIndex] = surfel;
-            }
+            query.removalCandidateIndex != SURFEL_PT_INVALID_INDEX) {
+            // Set the bit atomically: several pixels may pick the same candidate
+            // in this dispatch, and a full read-modify-write of the struct could
+            // otherwise clobber a concurrent update of the same slot.
+            uint previousFlags = 0u;
+            InterlockedOr(surfelBuffer[query.removalCandidateIndex].flags,
+                          SURFEL_PT_SURFEL_FLAG_PENDING_FREE,
+                          previousFlags);
         }
         return;
     }
 
-    float coverage = estimateCoverage(position, normal, closestSurfelIndex, true);
-    outputImage[pixel] = float4(resolveSurfelRadiance(position, normal), coverage);
+    SurfelQueryResult query = querySurfels(position, normal, true);
+    outputImage[pixel] = float4(query.radiance, query.coverage);
 }

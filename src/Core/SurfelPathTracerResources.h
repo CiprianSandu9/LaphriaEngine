@@ -133,7 +133,7 @@ struct SurfelPathTracerCounters
 	uint32_t indirectRayWidth = 0;
 	uint32_t indirectRayHeight = 1;
 	uint32_t indirectRayDepth = 1;
-	uint32_t pad2 = 0;
+	uint32_t demandedRays = 0;        // unclamped ray demand (SURFEL_PT_COUNTER_DEMANDED_RAYS_OFFSET)
 };
 
 static_assert(offsetof(SurfelPathTracerCounters, indirectRayWidth) == 64u);
@@ -172,6 +172,7 @@ class SurfelPathTracerResources
 	[[nodiscard]] uint32_t maxRaysPerFrameCapacity() const { return settings_.maxRaysPerFrame; }
 	[[nodiscard]] uint32_t cellDimensionCapacity() const { return settings_.cellDimension; }
 	[[nodiscard]] uint32_t perCellSurfelLimitCapacity() const { return settings_.perCellSurfelLimit; }
+	[[nodiscard]] uint32_t cellToSurfelCapacity() const { return cellToSurfelCapacity_; }
 	[[nodiscard]] vk::DeviceAddress rayDispatchIndirectAddress() const { return rayDispatchIndirectAddress_; }
 	[[nodiscard]] bool needsPersistentResourceRecreate(
 	    const UISystem::SurfelPathTracerSettings &settings) const;
@@ -220,15 +221,11 @@ class SurfelPathTracerResources
 	VmaBuffer surfelSourceBuffer;
 	VmaBuffer sourceInstanceBuffer;
 	VmaBuffer sourceTransformBuffer;
-	VmaBuffer aliveBuffer;
 	VmaBuffer deadBuffer;
-	VmaBuffer dirtyBuffer;
-	VmaBuffer recycleBuffer;
 	VmaBuffer rayBuffer;
 	VmaBuffer cellInfoBuffer;
 	VmaBuffer cellCounterBuffer;
 	VmaBuffer cellToSurfelBuffer;
-	void *mappedCounters = nullptr;
 	vk::DeviceAddress rayDispatchIndirectAddress_ = 0;
 	uint32_t maxSourceInstances = 65536u;
 	uint32_t maxSourceTransforms = 65536u;
@@ -277,6 +274,7 @@ class SurfelPathTracerResources
 	bool initialized_ = false;
 	bool needsPersistentReset_ = true;
 	uint32_t cellCount_ = 0;
+	uint32_t cellToSurfelCapacity_ = 0;
 	UISystem::SurfelPathTracerSettings settings_{};
 	std::array<VmaBuffer, MAX_FRAMES_IN_FLIGHT> statsReadbackBuffers_;
 	std::array<void *, MAX_FRAMES_IN_FLIGHT> statsReadbackMapped_{};

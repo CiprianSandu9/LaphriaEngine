@@ -41,7 +41,7 @@ struct SurfelCellInfoPushConstants
 {
 	uint32_t cellCount = 0;
 	uint32_t perCellSurfelLimit = 0;
-	uint32_t pad0 = 0;
+	uint32_t mapCapacity = 0;
 	uint32_t pad1 = 0;
 };
 
@@ -61,8 +61,8 @@ struct SurfelRaySchedulePushConstants
 	uint32_t minRaysPerSurfel = 1;
 	uint32_t maxRaysPerSurfel = 1;
 	float varianceSensitivity = 1.0f;
-	uint32_t pad0 = 0;
-	uint32_t pad1 = 0;
+	uint32_t offscreenRayInterval = 4;
+	float surfelSupportRadius = 0.25f;
 };
 
 struct SurfelRayTracePushConstants
@@ -77,6 +77,7 @@ struct SurfelRayTracePushConstants
 	uint32_t maxSurfelSamplesPerQuery = 1;
 	uint32_t cellDimension = 1;
 	float cellSize = 1.0f;
+	float surfelSupportRadius = 0.25f;
 	uint32_t useOriginalStyleGiNormalization = 0;
 };
 
@@ -88,7 +89,7 @@ struct SurfelIntegratePushConstants
 	uint32_t cellDimension = 1;
 	float cellSize = 1.0f;
 	uint32_t enableGuidedSampling = 0;
-	uint32_t pad0 = 0;
+	float surfelSupportRadius = 0.25f;
 	uint32_t pad1 = 0;
 };
 
@@ -101,7 +102,7 @@ struct SurfelEvaluatePushConstants
 	uint32_t cellDimension = 1;
 	uint32_t maxSurfels = 0;
 	float placementThreshold = 0.35f;
-	float removalThreshold = 4.0f;
+	float removalThreshold = 12.0f;
 	float surfelTargetArea = 16.0f;
 	float surfelMinRadius = 0.05f;
 	float surfelMaxRadiusScale = 2.0f;
@@ -111,7 +112,7 @@ struct SurfelEvaluatePushConstants
 	uint32_t enableRemoval = 1;
 	uint32_t maxSurfelSamplesPerQuery = 1;
 	uint32_t perCellSurfelLimit = 1;
-	uint32_t pad1 = 0;
+	float surfelSupportRadius = 0.25f;
 };
 
 struct SurfelReflectionPushConstants
@@ -128,6 +129,9 @@ struct SurfelReflectionPushConstants
 	uint32_t enableSurfelTermination = 0;
 	uint32_t maxSurfelSamplesPerQuery = 1;
 	uint32_t useOriginalStyleGiNormalization = 0;
+	float roughReflectionStart = 0.5f;
+	float roughReflectionEnd = 0.7f;
+	float surfelSupportRadius = 0.25f;
 };
 
 struct SurfelReflectionFilterPushConstants
@@ -175,6 +179,9 @@ struct SurfelLightIntegratePushConstants
 	uint32_t cellDimension = 1;
 	uint32_t perCellSurfelLimit = 1;
 	uint32_t useOriginalStyleGiNormalization = 0;
+	float roughReflectionStart = 0.5f;
+	float roughReflectionEnd = 0.7f;
+	float surfelSupportRadius = 0.25f;
 };
 
 struct SurfelTaaPushConstants
@@ -264,10 +271,7 @@ void SurfelPathTracerPasses::recordPreparePass(const vk::raii::CommandBuffer &co
 	uint64_t workItemCount = cellCounterCount;
 	if (resetPersistent)
 	{
-		const uint64_t resetEntryCount = static_cast<uint64_t>(push.maxSurfels) * 4ull;
-		workItemCount = std::max({static_cast<uint64_t>(push.maxSurfels),
-		                          cellCounterCount,
-		                          resetEntryCount});
+		workItemCount = std::max(static_cast<uint64_t>(push.maxSurfels), cellCounterCount);
 	}
 	commandBuffer.dispatch(linearGroupCount(workItemCount), 1, 1);
 }
@@ -315,14 +319,15 @@ void SurfelPathTracerPasses::recordCellInfoPass(const vk::raii::CommandBuffer &c
                                                 const SurfelPathTracerPipelines &pipelines,
                                                 vk::DescriptorSet imageSet,
                                                 uint32_t cellCount,
-                                                uint32_t perCellSurfelLimit) const
+                                                uint32_t perCellSurfelLimit,
+                                                uint32_t cellMapCapacity) const
 {
 	bindComputeStorageSet(commandBuffer, pipelines, pipelines.cellInfoPipeline, imageSet);
 
 	const SurfelCellInfoPushConstants push{
 	    .cellCount = cellCount,
 	    .perCellSurfelLimit = std::max(perCellSurfelLimit, 1u),
-	    .pad0 = 0,
+	    .mapCapacity = std::max(cellMapCapacity, 1u),
 	    .pad1 = 0};
 	commandBuffer.pushConstants<SurfelCellInfoPushConstants>(*pipelines.computePipelineLayout,
 	                                                         vk::ShaderStageFlagBits::eCompute,
@@ -363,14 +368,23 @@ void SurfelPathTracerPasses::recordCellToSurfelPass(const vk::raii::CommandBuffe
 void SurfelPathTracerPasses::recordRaySchedulePass(const vk::raii::CommandBuffer &commandBuffer,
                                                    const SurfelPathTracerPipelines &pipelines,
                                                    vk::DescriptorSet imageSet,
+                                                   vk::DescriptorSet globalSet,
                                                    uint32_t cellCount,
                                                    uint32_t maxSurfels,
                                                    uint32_t maxRays,
                                                    uint32_t minRaysPerSurfel,
                                                    uint32_t maxRaysPerSurfel,
-                                                   float varianceSensitivity) const
+                                                   float varianceSensitivity,
+                                                   uint32_t offscreenRayInterval,
+                                                   float surfelSupportRadius) const
 {
-	bindComputeStorageSet(commandBuffer, pipelines, pipelines.raySchedulePipeline, imageSet);
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.raySchedulePipeline);
+	const std::array descriptorSets = {imageSet, globalSet};
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+	                                 *pipelines.computePipelineLayout,
+	                                 0,
+	                                 descriptorSets,
+	                                 nullptr);
 	const SurfelRaySchedulePushConstants push{
 	    .cellCount = cellCount,
 	    .maxSurfels = std::max(maxSurfels, 1u),
@@ -378,8 +392,8 @@ void SurfelPathTracerPasses::recordRaySchedulePass(const vk::raii::CommandBuffer
 	    .minRaysPerSurfel = std::max(minRaysPerSurfel, 1u),
 	    .maxRaysPerSurfel = std::max(maxRaysPerSurfel, std::max(minRaysPerSurfel, 1u)),
 	    .varianceSensitivity = std::max(varianceSensitivity, 0.0f),
-	    .pad0 = 0,
-	    .pad1 = 0};
+	    .offscreenRayInterval = std::max(offscreenRayInterval, 1u),
+	    .surfelSupportRadius = std::max(surfelSupportRadius, 0.0001f)};
 	commandBuffer.pushConstants<SurfelRaySchedulePushConstants>(*pipelines.computePipelineLayout,
 	                                                            vk::ShaderStageFlagBits::eCompute,
 	                                                            0,
@@ -403,6 +417,7 @@ void SurfelPathTracerPasses::recordSurfelRayTracePass(const vk::raii::CommandBuf
 	                                                  bool useOriginalStyleGiNormalization,
                                                       uint32_t maxSurfelSamplesPerQuery,
                                                       float cellSize,
+                                                      float surfelSupportRadius,
                                                       uint32_t cellDimension) const
 {
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.surfelRayTracingPipeline);
@@ -424,6 +439,7 @@ void SurfelPathTracerPasses::recordSurfelRayTracePass(const vk::raii::CommandBuf
 	    .maxSurfelSamplesPerQuery = std::clamp(maxSurfelSamplesPerQuery, 1u, 128u),
 	    .cellDimension = std::max(cellDimension, 1u),
 	    .cellSize = std::max(cellSize, 0.0001f),
+	    .surfelSupportRadius = std::clamp(surfelSupportRadius, 0.0001f, std::max(cellSize, 0.0001f)),
 	    .useOriginalStyleGiNormalization = useOriginalStyleGiNormalization ? 1u : 0u};
 	commandBuffer.pushConstants<SurfelRayTracePushConstants>(*pipelines.rayTracingPipelineLayout,
 	                                                         kSurfelRtPushStages,
@@ -460,6 +476,7 @@ void SurfelPathTracerPasses::recordIntegratePass(const vk::raii::CommandBuffer &
                                                  uint32_t maxRadianceSharingSamples,
                                                  uint32_t cellDimension,
                                                  float cellSize,
+                                                 float surfelSupportRadius,
                                                  bool enableGuidedSampling) const
 {
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.integratePipeline);
@@ -476,7 +493,8 @@ void SurfelPathTracerPasses::recordIntegratePass(const vk::raii::CommandBuffer &
 	    .maxRadianceSharingSamples = std::clamp(maxRadianceSharingSamples, 1u, 128u),
 	    .cellDimension = std::max(cellDimension, 1u),
 	    .cellSize = std::max(cellSize, 0.0001f),
-	    .enableGuidedSampling = enableGuidedSampling ? 1u : 0u};
+	    .enableGuidedSampling = enableGuidedSampling ? 1u : 0u,
+	    .surfelSupportRadius = std::clamp(surfelSupportRadius, 0.0001f, std::max(cellSize, 0.0001f))};
 	commandBuffer.pushConstants<SurfelIntegratePushConstants>(*pipelines.computePipelineLayout,
 	                                                          vk::ShaderStageFlagBits::eCompute,
 	                                                          0,
@@ -490,6 +508,7 @@ void SurfelPathTracerPasses::recordEvaluatePass(const vk::raii::CommandBuffer &c
                                                 vk::DescriptorSet globalSet,
                                                 SurfelPathTracerEvaluateMode mode,
                                                 float cellSize,
+                                                float surfelSupportRadius,
                                                 uint32_t cellDimension,
                                                 uint32_t maxSurfels,
                                                 float placementThreshold,
@@ -530,7 +549,8 @@ void SurfelPathTracerPasses::recordEvaluatePass(const vk::raii::CommandBuffer &c
 	    .enablePlacement = enableSurfelPlacement ? 1u : 0u,
 	    .enableRemoval = enableSurfelRemoval ? 1u : 0u,
 	    .maxSurfelSamplesPerQuery = std::clamp(maxSurfelSamplesPerQuery, 1u, 128u),
-	    .perCellSurfelLimit = std::max(perCellSurfelLimit, 1u)};
+	    .perCellSurfelLimit = std::max(perCellSurfelLimit, 1u),
+	    .surfelSupportRadius = std::clamp(surfelSupportRadius, 0.0001f, std::max(cellSize, 0.0001f))};
 	commandBuffer.pushConstants<SurfelEvaluatePushConstants>(*pipelines.computePipelineLayout,
 	                                                         vk::ShaderStageFlagBits::eCompute,
 	                                                         0,
@@ -555,12 +575,15 @@ void SurfelPathTracerPasses::recordReflectionPass(const vk::raii::CommandBuffer 
                                                   vk::DescriptorSet globalSet,
                                                   bool enabled,
                                                   float cellSize,
+                                                  float surfelSupportRadius,
                                                   uint32_t cellDimension,
                                                   vk::Extent2D extent,
                                                   uint32_t frameIndex,
                                                   bool enableSurfelTermination,
 	                                              bool useOriginalStyleGiNormalization,
-                                                  uint32_t maxSurfelSamplesPerQuery) const
+                                                  uint32_t maxSurfelSamplesPerQuery,
+                                                float roughReflectionStart,
+                                                float roughReflectionEnd) const
 {
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.reflectionRayTracingPipeline);
 	const std::array descriptorSets = {rayTracingSet, storageSet, globalSet};
@@ -584,7 +607,10 @@ void SurfelPathTracerPasses::recordReflectionPass(const vk::raii::CommandBuffer 
 	    .enabled = enabled ? 1u : 0u,
 	    .enableSurfelTermination = enableSurfelTermination ? 1u : 0u,
 	    .maxSurfelSamplesPerQuery = std::clamp(maxSurfelSamplesPerQuery, 1u, 128u),
-	    .useOriginalStyleGiNormalization = useOriginalStyleGiNormalization ? 1u : 0u};
+	    .useOriginalStyleGiNormalization = useOriginalStyleGiNormalization ? 1u : 0u,
+	    .roughReflectionStart = std::clamp(roughReflectionStart, 0.0f, 1.0f),
+	    .roughReflectionEnd = std::clamp(std::max(roughReflectionEnd, roughReflectionStart + 0.01f), 0.0f, 1.01f),
+	    .surfelSupportRadius = std::clamp(surfelSupportRadius, 0.0001f, std::max(cellSize, 0.0001f))};
 	commandBuffer.pushConstants<SurfelReflectionPushConstants>(*pipelines.rayTracingPipelineLayout,
 	                                                           kSurfelRtPushStages,
 	                                                           0,
@@ -696,7 +722,10 @@ void SurfelPathTracerPasses::recordLightIntegratePass(const vk::raii::CommandBuf
                                                       uint32_t cellDimension,
                                                       uint32_t perCellSurfelLimit,
                                                       uint32_t debugView,
-                                                      vk::Extent2D extent) const
+                                                      vk::Extent2D extent,
+                                                      float roughReflectionStart,
+                                                      float roughReflectionEnd,
+                                                      float surfelSupportRadius) const
 {
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.lightIntegratePipeline);
 	const std::array descriptorSets = {imageSet, globalSet};
@@ -717,7 +746,10 @@ void SurfelPathTracerPasses::recordLightIntegratePass(const vk::raii::CommandBuf
 	    .surfelMaxRadiusScale = std::max(surfelMaxRadiusScale, 0.25f),
 	    .cellDimension = std::max(cellDimension, 1u),
 	    .perCellSurfelLimit = std::max(perCellSurfelLimit, 1u),
-	    .useOriginalStyleGiNormalization = useOriginalStyleGiNormalization ? 1u : 0u};
+	    .useOriginalStyleGiNormalization = useOriginalStyleGiNormalization ? 1u : 0u,
+	    .roughReflectionStart = std::clamp(roughReflectionStart, 0.0f, 1.0f),
+	    .roughReflectionEnd = std::clamp(std::max(roughReflectionEnd, roughReflectionStart + 0.01f), 0.0f, 1.01f),
+	    .surfelSupportRadius = std::clamp(surfelSupportRadius, 0.0001f, std::max(cellSize, 0.0001f))};
 	commandBuffer.pushConstants<SurfelLightIntegratePushConstants>(*pipelines.computePipelineLayout,
 	                                                               vk::ShaderStageFlagBits::eCompute,
 	                                                               0,

@@ -11,6 +11,7 @@ struct SurfelRayTracePushConstants {
     uint maxSurfelSamplesPerQuery;
     uint cellDimension;
     float cellSize;
+    float surfelSupportRadius;
     uint useOriginalStyleGiNormalization;
 };
 
@@ -331,8 +332,11 @@ float3 traceSurfelPath(RayDesc initialRay,
                                                        payload.hitNormal,
                                                        push.maxSurfelSamplesPerQuery,
                                                        seed ^ (depth * 747796405u),
+                                                       SURFEL_PT_INVALID_INDEX,
+                                                       1u /* full 3x3x3 neighbourhood */,
                                                        push.maxSurfels,
                                                        push.cellSize,
+                                                       push.surfelSupportRadius,
                                                        push.cellDimension,
                                                        ubo.cameraPos.xyz,
                                                        surfelBuffer,

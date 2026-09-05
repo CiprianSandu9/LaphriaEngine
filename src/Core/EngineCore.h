@@ -18,6 +18,7 @@
 #include "SurfelPathTracerResources.h"
 #include "SwapchainManager.h"
 #include "EngineHost.h"
+#include <array>
 #include "UISystem.h"
 #include "VulkanDevice.h"
 
@@ -54,6 +55,23 @@ class EngineCore
 	FrameContext       frames;
 	Laphria::SurfelPathTracerResources surfelPathTracerResources;
 	Laphria::SurfelPathTracerPasses    surfelPathTracerPasses;
+
+	// Auto-exposure luminance probe: the HDR image is blitted down to a small image and read
+	// back on the CPU (per frame slot), where the log-average luminance drives ui.exposure.
+	static constexpr uint32_t kLuminanceProbeWidth  = 96;
+	static constexpr uint32_t kLuminanceProbeHeight = 54;
+	static constexpr vk::DeviceSize kPixelProbeBytes = 128;
+	std::array<Laphria::VulkanUtils::VmaImage, MAX_FRAMES_IN_FLIGHT>  luminanceProbeImages;
+	std::array<Laphria::VulkanUtils::VmaBuffer, MAX_FRAMES_IN_FLIGHT> luminanceReadbackBuffers;
+	std::array<void *, MAX_FRAMES_IN_FLIGHT>                           luminanceReadbackMapped{};
+	mutable std::array<bool, MAX_FRAMES_IN_FLIGHT>                     luminanceReadbackValid{};
+	mutable std::array<bool, MAX_FRAMES_IN_FLIGHT>                     luminanceProbeImageInitialized{};
+	// Pixel probe (SurfelPathTracer only): one texel of several HDR/GBuffer images copied to a host buffer.
+	std::array<Laphria::VulkanUtils::VmaBuffer, MAX_FRAMES_IN_FLIGHT> pixelProbeReadbackBuffers;
+	std::array<void *, MAX_FRAMES_IN_FLIGHT>                           pixelProbeReadbackMapped{};
+	mutable std::array<bool, MAX_FRAMES_IN_FLIGHT>                     pixelProbeReadbackValid{};
+	mutable std::array<glm::uvec2, MAX_FRAMES_IN_FLIGHT>               pixelProbeReadbackPixel{};
+	float lastDeltaTimeSeconds{0.0f};
 
 	// Global UBO sets
 	vk::raii::DescriptorPool             descriptorPool{nullptr};
@@ -120,6 +138,15 @@ class EngineCore
 	std::vector<float>                 ptRollingTotalMs;
 	std::vector<float>                 ptRollingRayTraceMs;
 	std::vector<float>                 ptRollingDenoiserMs;
+	// Surfel backend rolling window: GBuffer, Cache update, Surfel rays, Integrate,
+	// Evaluate, Reflections, Post, Total (same spans as the thesis timing table).
+	static constexpr size_t            kSurfelRollingSpanCount = 8;
+	std::array<std::vector<float>, kSurfelRollingSpanCount> surfelRollingMs;
+	// Same window for the per-frame counters: alive, rays traced, ray demand, filled cells,
+	// rejected stores, spawned, removed, recycled, guided rays, cosine rays,
+	// termination attempts, termination hits.
+	static constexpr size_t            kSurfelRollingCounterCount = 12;
+	std::array<std::vector<float>, kSurfelRollingCounterCount> surfelRollingCounters;
 	RenderMode lastSubmittedRenderMode{RenderMode::Rasterizer};
 	bool       renderModeInitialized{false};
 	std::chrono::high_resolution_clock::time_point lastFrameTime{};
@@ -175,6 +202,13 @@ class EngineCore
 	void collectPathTracerTimings(uint32_t frameSlot);
 	void collectSurfelPathTracerTimings(uint32_t frameSlot);
 	void updatePathTracerTimingPercentiles();
+	void createExposureProbeResources();
+	void destroyExposureProbeResources();
+	void recordLuminanceProbe(const vk::raii::CommandBuffer &commandBuffer, vk::Image hdrImage,
+	                          vk::Extent2D hdrExtent, uint32_t frameSlot) const;
+	void recordSurfelPixelProbe(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameSlot) const;
+	void updateAutoExposure(uint32_t frameSlot);
+	void readPixelProbe(uint32_t frameSlot);
 	void updateAdaptivePathTracerSettings();
 
 	[[nodiscard]] uint32_t getGpuTimestampQueryBase(uint32_t frameSlot) const;

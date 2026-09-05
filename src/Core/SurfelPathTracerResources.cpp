@@ -54,9 +54,8 @@ UISystem::SurfelPathTracerSettings persistentCapacitySettings(
 	capacity.maxRaysPerFrame = std::clamp(capacity.maxRaysPerFrame, 1024u,
 	                                    UISystem::SurfelPathTracerSettings::kMaxRayCapacity);
 	capacity.cellDimension = std::clamp(capacity.cellDimension, 8u, 128u);
-	const uint32_t maxPerCellLimit = UISystem::SurfelPathTracerSettings::maxPerCellLimitForDimension(
-	    capacity.cellDimension);
-	capacity.perCellSurfelLimit = std::clamp(capacity.perCellSurfelLimit, 1u, maxPerCellLimit);
+	capacity.perCellSurfelLimit = std::clamp(capacity.perCellSurfelLimit, 1u,
+	                                         UISystem::SurfelPathTracerSettings::kMaxPerCellLimit);
 	return capacity;
 }
 
@@ -278,6 +277,7 @@ UISystem::SurfelPathTracerStats SurfelPathTracerResources::readStats(uint32_t fr
 	stats.aliveSurfels = settings_.maxSurfels - deadSurfels;
 	stats.dirtySurfels = counters->dirtySurfels;
 	stats.requestedRays = counters->requestedRays;
+	stats.demandedRays = counters->demandedRays;
 	stats.rayBudget = settings_.maxRaysPerFrame;
 	stats.filledCells = counters->filledCells;
 	stats.rejectedStores = counters->rejectedStores;
@@ -317,7 +317,11 @@ void SurfelPathTracerResources::createPersistentBuffers(
 	const uint64_t cellDimension64 = cellDimension;
 	const uint64_t cellCount = cellDimension64 * cellDimension64 * cellDimension64;
 	cellCount_ = static_cast<uint32_t>(cellCount);
-	const uint64_t cellToSurfelCount = cellCount * perCellSurfelLimit;
+	// Packed compact map: sized per surfel (see cellMapEntryCount), so a finer grid does not
+	// grow it. CellInfo clamps the running total to this capacity.
+	const uint64_t cellToSurfelCount =
+	    UISystem::SurfelPathTracerSettings::cellMapEntryCount(cellDimension, perCellSurfelLimit, maxSurfels);
+	cellToSurfelCapacity_ = static_cast<uint32_t>(std::min<uint64_t>(cellToSurfelCount, UINT32_MAX));
 	const uint64_t cellCounterCount = 1u + cellCount * 2u;
 
 	auto createBuffer = [&](vk::DeviceSize size,
@@ -337,8 +341,14 @@ void SurfelPathTracerResources::createPersistentBuffers(
 		}
 	};
 
+	// Device-local: every surfel ray and every scheduled surfel performs atomics
+	// on this buffer (millions per frame). It used to be host-visible for an
+	// initial memset, which on a discrete GPU placed it in system memory behind
+	// PCIe. The prepare pass initialises every field on the first (reset) frame,
+	// which needsPersistentReset_ forces below; stats are read back through the
+	// dedicated readback buffers.
 	createBuffer(sizeof(SurfelPathTracerCounters), countersBuffer,
-	             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+	             vk::MemoryPropertyFlagBits::eDeviceLocal,
 	             vk::BufferUsageFlagBits::eStorageBuffer |
 	                 vk::BufferUsageFlagBits::eTransferSrc |
 	                 vk::BufferUsageFlagBits::eIndirectBuffer |
@@ -346,13 +356,6 @@ void SurfelPathTracerResources::createPersistentBuffers(
 	             "SurfelPathTracer.CountersBuffer");
 	rayDispatchIndirectAddress_ = VulkanUtils::getBufferDeviceAddress(dev.logicalDevice, countersBuffer) +
 	                              offsetof(SurfelPathTracerCounters, indirectRayWidth);
-	mappedCounters = countersBuffer.memory.mapMemory(0, sizeof(SurfelPathTracerCounters));
-	std::memset(mappedCounters, 0, sizeof(SurfelPathTracerCounters));
-	auto *initialCounters = static_cast<SurfelPathTracerCounters *>(mappedCounters);
-	initialCounters->aliveSurfels = 0;
-	initialCounters->deadSurfels = maxSurfels;
-	initialCounters->indirectRayHeight = 1;
-	initialCounters->indirectRayDepth = 1;
 	for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 	{
 		createBuffer(sizeof(SurfelPathTracerCounters), statsReadbackBuffers_[frameIndex],
@@ -381,22 +384,10 @@ void SurfelPathTracerResources::createPersistentBuffers(
 	             vk::MemoryPropertyFlagBits::eDeviceLocal,
 	             vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
 	             "SurfelPathTracer.SourceTransformBuffer");
-	createBuffer(byteSize(maxSurfels, sizeof(uint32_t)), aliveBuffer,
-	             vk::MemoryPropertyFlagBits::eDeviceLocal,
-	             vk::BufferUsageFlagBits::eStorageBuffer,
-	             "SurfelPathTracer.AliveBuffer");
 	createBuffer(byteSize(maxSurfels, sizeof(uint32_t)), deadBuffer,
 	             vk::MemoryPropertyFlagBits::eDeviceLocal,
 	             vk::BufferUsageFlagBits::eStorageBuffer,
 	             "SurfelPathTracer.DeadBuffer");
-	createBuffer(byteSize(maxSurfels, sizeof(uint32_t)), dirtyBuffer,
-	             vk::MemoryPropertyFlagBits::eDeviceLocal,
-	             vk::BufferUsageFlagBits::eStorageBuffer,
-	             "SurfelPathTracer.DirtyBuffer");
-	createBuffer(byteSize(static_cast<uint64_t>(maxSurfels) * 4u, sizeof(uint32_t)), recycleBuffer,
-	             vk::MemoryPropertyFlagBits::eDeviceLocal,
-	             vk::BufferUsageFlagBits::eStorageBuffer,
-	             "SurfelPathTracer.RecycleBuffer");
 	createBuffer(byteSize(static_cast<uint64_t>(maxRays) * 8u, sizeof(uint32_t)), rayBuffer,
 	             vk::MemoryPropertyFlagBits::eDeviceLocal,
 	             vk::BufferUsageFlagBits::eStorageBuffer,
@@ -481,11 +472,6 @@ void SurfelPathTracerResources::createExtentImages(const VulkanDevice &dev,
 
 void SurfelPathTracerResources::destroyPersistentBuffers()
 {
-	if (mappedCounters)
-	{
-		countersBuffer.memory.unmapMemory();
-	}
-	mappedCounters = nullptr;
 	rayDispatchIndirectAddress_ = 0;
 	for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 	{
@@ -497,8 +483,8 @@ void SurfelPathTracerResources::destroyPersistentBuffers()
 		statsReadbackValid_[frameIndex] = false;
 		statsReadbackBuffers_[frameIndex].reset();
 	}
-	destroyBuffers({&countersBuffer, &surfelBuffer, &aliveBuffer, &deadBuffer, &dirtyBuffer,
-	                &recycleBuffer, &rayBuffer, &cellInfoBuffer, &cellCounterBuffer,
+	destroyBuffers({&countersBuffer, &surfelBuffer, &deadBuffer,
+	                &rayBuffer, &cellInfoBuffer, &cellCounterBuffer,
 	                &cellToSurfelBuffer, &surfelSourceBuffer, &sourceInstanceBuffer,
 	                &sourceTransformBuffer});
 	cellCount_ = 0;

@@ -106,12 +106,19 @@ public:
             return (width / kAtlasTileSize) * (height / kAtlasTileSize);
         }
 
-        static constexpr uint32_t maxPerCellLimitForDimension(uint32_t dimension)
+        // The compact cell map is packed (CellInfo assigns each cell a range from a running
+        // total), so it is sized per surfel, not per cell: grid resolution and per-cell limit
+        // are independent. Each surfel is inserted into every cell it overlaps, which with the
+        // default radii is one to a few cells; 8 entries per surfel leaves generous headroom.
+        static constexpr uint32_t kCellMapEntriesPerSurfel = 8;
+        static constexpr uint32_t kMaxPerCellLimit = 256;
+        static constexpr uint64_t cellMapEntryCount(uint32_t dimension, uint32_t perCellLimit, uint32_t maxSurfels)
         {
             const uint64_t safeDimension = dimension > 0u ? dimension : 1u;
             const uint64_t cellCount = safeDimension * safeDimension * safeDimension;
-            const uint64_t capacity = kMaxStorageBufferBytes / (cellCount * sizeof(uint32_t));
-            return static_cast<uint32_t>(capacity > 256u ? 256u : (capacity > 0u ? capacity : 1u));
+            const uint64_t worstCase = cellCount * (perCellLimit > 0u ? perCellLimit : 1u);
+            const uint64_t perSurfel = static_cast<uint64_t>(maxSurfels) * kCellMapEntriesPerSurfel;
+            return worstCase < perSurfel ? worstCase : perSurfel;
         }
 
         bool enabled = true;
@@ -122,32 +129,58 @@ public:
         bool enableReflectionFilter = true;
         bool enableBilateralCleanup = true;
         bool enableTaa = true;
-        uint32_t maxSurfels = 150000;
-        uint32_t maxRaysPerFrame = 150000 * 16;
-        float cellSize = 2.0f;
+        // 400k surfels keep Sponza's foliage-driven population below the 85% pressure
+        // threshold, so placement never waits for the 480-frame eviction clock.
+        uint32_t maxSurfels = 400000;
+        uint32_t maxRaysPerFrame = 400000 * 8; // 3.2M rays, 102 MiB ray buffer (cap 128 MiB)
+        // 0.75 m: Cell Size is the lookup window/index granularity only (48 m span at
+        // 64^3); the effective surfel size is surfelSupportRadius below (clamped to Cell
+        // Size). At 2.0 m a cell held far more surfels than the 64-entry compact map
+        // kept, starving ray scheduling and the resolve.
+        float cellSize = 0.75f;
         uint32_t cellDimension = 64;
-        uint32_t perCellSurfelLimit = 64;
-        uint32_t irradianceAtlasWidth = 2048;
+        uint32_t perCellSurfelLimit = 128;      // compact-map slots per cell; the map itself is sized per surfel (cellMapEntryCount)
+        uint32_t irradianceAtlasWidth = 4096;   // 4096x4096 tiles of 6x6 = 465 124 surfels of capacity
         uint32_t irradianceAtlasHeight = 4096;
         uint32_t minRaysPerSurfel = 4;
         uint32_t maxRaysPerSurfel = 64;
+        // Represented surfels whose support sphere is outside the view frustum trace
+        // only every N-th frame (staggered per surfel). 1 disables the skip. Surfels in
+        // warm-up always trace.
+        uint32_t offscreenRayInterval = 4;
         uint32_t activeMaxDepth = 3;
         uint32_t sleepingMaxDepth = 5;
         float placementThreshold = 0.35f;
-        float removalThreshold = 4.0f;
+        // Removal at 12 keeps roughly a dozen overlapping supports per point; 4.0 left
+        // the cache too sparse once coverage measured the real support radius.
+        float removalThreshold = 12.0f;
         float varianceSensitivity = 1.2f;
         float surfelTargetArea = 16.0f;
         float surfelMinRadius = 0.05f;
         float surfelMaxRadiusScale = 2.0f;
+        // World-space support radius shared by resolve, coverage, path termination and
+        // radiance sharing: each surfel weights a point with max(own radius, this).
+        // Decoupled from Cell Size (it used to be 0.75 x Cell Size); clamped to Cell
+        // Size so the fixed +/-1 cell lookup neighborhood stays complete.
+        float surfelSupportRadius = 0.25f;
         uint32_t maxSurfelSamplesPerQuery = 64;
         uint32_t maxRadianceSharingSamples = 32;
         bool enableGuidedSampling = false;
         bool enableSurfelTermination = true;
-        bool useOriginalStyleGiNormalization = true;
+        // Surfels store irradiance (Integrate weights each ray by cos/pdf), so the
+        // physically consistent diffuse consumption is albedo / pi, matching the
+        // direct-lighting BRDF. "Original style" (albedo only) over-brightens all
+        // indirect light by a factor of pi; kept as a toggle for comparison only.
+        bool useOriginalStyleGiNormalization = false;
         bool enableRadianceSharing = true;
         bool enableSurfelPlacement = true;
         bool enableSurfelRemoval = true;
         bool enableReferenceValidation = false;
+        // Roughness band over which the traced glossy reflection fades into the specular
+        // term evaluated from the surfel cache (env-BRDF x E/pi). At or above the end value
+        // no reflection ray is traced at all.
+        float roughReflectionStart = 0.5f;
+        float roughReflectionEnd = 0.7f;
         SurfelPathTracerDebugView debugView = SurfelPathTracerDebugView::FinalColor;
     };
 
@@ -157,6 +190,7 @@ public:
         uint32_t deadSurfels = 0;
         uint32_t dirtySurfels = 0;
         uint32_t requestedRays = 0;
+        uint32_t demandedRays = 0;
         uint32_t rayBudget = 0;
         uint32_t filledCells = 0;
         uint32_t rejectedStores = 0;
@@ -182,6 +216,33 @@ public:
         float reflectionMs = 0.0f;
         float postProcessMs = 0.0f;
         float totalFrameMs = 0.0f;
+        // Rolling-window statistics over the last N surfel frames (N = rollingSamples),
+        // filled by EngineCore::collectSurfelPathTracerTimings. Reset with
+        // resetSurfelPathTracerStatsWindow after warm-up to measure a steady state.
+        uint32_t rollingSamples = 0;
+        float avgGBufferMs = 0.0f;
+        float avgCacheUpdateMs = 0.0f;
+        float avgSurfelRayTraceMs = 0.0f;
+        float avgIntegrateMs = 0.0f;
+        float avgEvaluateMs = 0.0f;
+        float avgReflectionMs = 0.0f;
+        float avgPostProcessMs = 0.0f;
+        float avgTotalFrameMs = 0.0f;
+        float totalP50Ms = 0.0f;
+        float totalP95Ms = 0.0f;
+        // Rolling means of the per-frame counters over the same window.
+        float avgAliveSurfels = 0.0f;
+        float avgRequestedRays = 0.0f;
+        float avgDemandedRays = 0.0f;
+        float avgFilledCells = 0.0f;
+        float avgRejectedStores = 0.0f;
+        float avgSpawnedSurfels = 0.0f;
+        float avgRemovedSurfels = 0.0f;
+        float avgRecycledSurfels = 0.0f;
+        float avgGuidedRays = 0.0f;
+        float avgCosineRays = 0.0f;
+        float avgTerminationAttempts = 0.0f;
+        float avgTerminationHits = 0.0f;
     };
 
     // Call after the swapchain has been created (needs colorFormat / depthFormat).
@@ -203,10 +264,46 @@ public:
     float physicsTime = 0.0f; // updated by EngineCore after each tick
     glm::vec3 lightDirection = glm::vec3(-0.30f, -1.0f, -0.20f);
     float exposure = 1.0f;
+    // Auto-exposure: EngineCore measures the log-average luminance of the HDR image and, when
+    // enabled, writes the adapted exposure into `exposure`. Disabling it locks the last value,
+    // which is how both backends are captured at an identical exposure.
+    struct AutoExposureSettings
+    {
+        bool  enabled = false;
+        float key = 0.18f;            // target mid-grey for the log-average luminance
+        float minExposure = 0.05f;
+        float maxExposure = 8.0f;
+        float adaptationSpeed = 0.7f; // 1/s, applied in log2 (stops); ~1.4 s time constant
+        float measuredLogMeanLuminance = 0.0f;
+        float targetExposure = 0.0f;
+    };
+    AutoExposureSettings autoExposure;
+    // Pixel probe (SurfelPathTracer): linear values of one pixel, read back by EngineCore.
+    struct PixelProbe
+    {
+        bool     enabled = false;
+        bool     freeze = false;
+        uint32_t x = 0, y = 0;               // requested pixel (follows the mouse unless frozen)
+        uint32_t sampledX = 0, sampledY = 0; // pixel the current values were read from
+        bool     valid = false;
+        glm::vec3 lighting{0.0f};            // linear composite before tonemapping
+        glm::vec3 resolvedIrradiance{0.0f};  // surfel resolve output (E)
+        float     coverage = 0.0f;
+        glm::vec3 albedo{0.0f};
+        glm::vec3 normal{0.0f};
+        float     sunVisibility = 0.0f;
+        float     ao = 0.0f;
+        float     depth = 0.0f;
+        glm::vec3 reference{0.0f};           // 1 spp reference probe, if enabled
+        bool      referenceValid = false;
+    };
+    PixelProbe pixelProbe;
     PathTracerSettings pathTracerSettings;
     PathTracerPerfStats pathTracerPerfStats;
     SurfelPathTracerSettings surfelPathTracerSettings;
     SurfelPathTracerStats surfelPathTracerStats;
+    // Set by the panel's "Reset stats window" button; consumed by EngineCore.
+    bool resetSurfelPathTracerStatsWindow = false;
     bool showEditorPanels = true;
 
 private:

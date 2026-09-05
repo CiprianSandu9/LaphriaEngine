@@ -16,6 +16,14 @@ static const uint SURFEL_PT_SLEEP_SLEEPING = 1u;
 static const uint SURFEL_PT_SURFEL_FLAG_ACTIVE = 1u;
 static const uint SURFEL_PT_SURFEL_FLAG_PENDING_FREE = 2u;
 static const uint SURFEL_PT_SURFEL_FLAG_RAY_SCHEDULED = 4u;
+// Set by Update while the surfel overlaps the camera-relative lookup window.
+// Lets Update detect a real outside->inside transition instead of re-firing the
+// re-entry grace every other frame for surfels that merely fell out of the
+// compact map (which would make them immortal).
+static const uint SURFEL_PT_SURFEL_FLAG_IN_WINDOW = 8u;
+// Set by Integrate once the surfel has accumulated at least one traced sample.
+// Until then the first sample replaces the placement seed outright.
+static const uint SURFEL_PT_SURFEL_FLAG_HAS_SAMPLES = 16u;
 static const uint SURFEL_PT_SOURCE_FLAG_VALID = 1u << 0u;
 static const uint SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED = 1u << 1u;
 static const uint SURFEL_PT_STATUS_LAST_SEEN = 0x2u;
@@ -43,6 +51,9 @@ static const uint SURFEL_PT_COUNTER_COSINE_RAYS_OFFSET = 48u;
 static const uint SURFEL_PT_COUNTER_SURFEL_TERMINATION_ATTEMPTS_OFFSET = 52u;
 static const uint SURFEL_PT_COUNTER_PATH_MISSES_OFFSET = 56u;
 static const uint SURFEL_PT_COUNTER_SURFEL_TERMINATION_HITS_OFFSET = 60u;
+// Unclamped ray demand from RaySchedule. REQUESTED_RAYS is clamped to the
+// frame budget, so this is the only way to measure budget saturation.
+static const uint SURFEL_PT_COUNTER_DEMANDED_RAYS_OFFSET = 76u;
 static const uint SURFEL_PT_INDIRECT_RAY_WIDTH_OFFSET = 64u;
 static const uint SURFEL_PT_INDIRECT_RAY_HEIGHT_OFFSET = 68u;
 static const uint SURFEL_PT_INDIRECT_RAY_DEPTH_OFFSET = 72u;
@@ -140,7 +151,7 @@ struct SurfelPathTracerCounters {
     uint indirectRayWidth;
     uint indirectRayHeight;
     uint indirectRayDepth;
-    uint pad2;
+    uint demandedRays;
 };
 
 struct SurfelPathTracerPayload {
@@ -310,9 +321,55 @@ uint hashWorldCellCoord(int3 cellCoord)
     return pcgHash(hash ^ asuint(cellCoord.z) ^ 0xC2B2AE35u);
 }
 
-uint packCellSurfelEntry(uint surfelIndex, int3 absoluteCellCoord)
+static const uint SURFEL_PT_CELL_RETENTION_KEY_BITS = 6u;
+static const uint SURFEL_PT_CELL_RETENTION_KEY_MAX = (1u << SURFEL_PT_CELL_RETENTION_KEY_BITS) - 1u;
+static const uint SURFEL_PT_CELL_RETENTION_HASH_BITS = 32u - SURFEL_PT_CELL_ENTRY_INDEX_BITS -
+                                                       SURFEL_PT_CELL_RETENTION_KEY_BITS;
+static const uint SURFEL_PT_CELL_RETENTION_HASH_MASK = (1u << SURFEL_PT_CELL_RETENTION_HASH_BITS) - 1u;
+// Stale entries re-shuffle their tie-break every 2^shift frames. A surfel that
+// rotates back into the map needs a few frames to be traced and referenced.
+static const uint SURFEL_PT_CELL_RETENTION_ROTATION_SHIFT = 2u;
+
+// Retention key for the compact cell map: smaller keys survive when a cell holds
+// more surfels than its limit. The key is the age since a visible pixel last
+// referenced the surfel, so the retained set of a full cell is the set the
+// screen actually uses instead of a hash lottery that starved e.g. wall surfels
+// next to dense foliage. Surfels still in warm-up are capped at key 9: they beat
+// anything unreferenced for more than eight frames (so a new surfel can enter a
+// cell full of stale entries and be evaluated), but they cannot displace surfels
+// the screen used in the last eight frames. Without that cap a burst of
+// placements would evict every referenced surfel in the cell.
+// The age saturates after ~60 frames. Only map members can be referenced, so
+// without a cap a surfel once evicted could never out-rank a stale retained one
+// and would sit untraced and unreferenced forever. Saturated ("stale") entries
+// instead compete through a slowly rotating hash (see packCellSurfelEntry), so
+// every stale surfel periodically re-enters the map, gets rays, and has a chance
+// to be referenced again.
+static const uint SURFEL_PT_CELL_RETENTION_WARMUP_KEY = 9u;
+uint cellRetentionKey(SurfelPathTracerSurfel surfel, uint frameIndex)
 {
-    uint priority = pcgHash(surfelIndex ^ hashWorldCellCoord(absoluteCellCoord)) &
+    uint age = frameIndex >= surfel.lastReferencedFrame ? frameIndex - surfel.lastReferencedFrame : 0u;
+    uint key = min(age + 1u, SURFEL_PT_CELL_RETENTION_KEY_MAX);
+    if (surfel.shortMeanAndLife.w <= 16.0)
+    {
+        key = min(key, SURFEL_PT_CELL_RETENTION_WARMUP_KEY);
+    }
+    return key;
+}
+
+uint packCellSurfelEntry(uint surfelIndex, int3 absoluteCellCoord, uint retentionKey, uint frameIndex)
+{
+    // 13 priority bits: 6 bits of retention key, then 7 hash bits as an
+    // order-independent tie-break among equally useful surfels. The tie-break is
+    // stable for recently used surfels (no flicker among them) and rotates every
+    // few frames for stale ones so eviction from the map is never permanent.
+    uint clampedKey = min(retentionKey, SURFEL_PT_CELL_RETENTION_KEY_MAX);
+    uint rotation = clampedKey >= SURFEL_PT_CELL_RETENTION_KEY_MAX
+                    ? (frameIndex >> SURFEL_PT_CELL_RETENTION_ROTATION_SHIFT) * 0x9E3779B9u
+                    : 0u;
+    uint hashBits = pcgHash(surfelIndex ^ hashWorldCellCoord(absoluteCellCoord) ^ rotation) &
+                    SURFEL_PT_CELL_RETENTION_HASH_MASK;
+    uint priority = ((clampedKey << SURFEL_PT_CELL_RETENTION_HASH_BITS) | hashBits) &
                     SURFEL_PT_CELL_ENTRY_PRIORITY_MASK;
     return (priority << SURFEL_PT_CELL_ENTRY_INDEX_BITS) |
            (surfelIndex & SURFEL_PT_CELL_ENTRY_INDEX_MASK);
@@ -447,12 +504,18 @@ float3 clampLuminance(float3 radiance, float maxLuminance) {
     return max(radiance, float3(0.0, 0.0, 0.0)) * (safeMax / luma);
 }
 
+// excludeSurfelIndex: a surfel querying its own neighbourhood (radiance sharing)
+// must not read itself back, or the "shared" value is dominated by its own
+// previous estimate and the blend degenerates into extra temporal lag.
 bool sampleSurfelIrradianceCell(float3 position,
                                float3 normal,
                                uint maxSamples,
                                uint sampleSeed,
+                               uint excludeSurfelIndex,
+                               uint searchShells,
                                uint maxSurfels,
                                float cellSize,
+                               float supportRadius,
                                uint cellDimension,
                                float3 cameraPosition,
                                RWStructuredBuffer<SurfelPathTracerSurfel> surfels,
@@ -462,50 +525,81 @@ bool sampleSurfelIrradianceCell(float3 position,
 {
     irradiance = float3(0.0);
     uint dim = max(cellDimension, 1u);
-    int3 cellCoord = cameraRelativeCellCoord(position, cameraPosition, cellSize);
-    if (!isCellCoordValid(cellCoord, dim))
-    {
-        return false;
-    }
-
-    uint cellIndex = flattenCameraRelativeCellCoord(cellCoord, dim);
-    SurfelPathTracerCellInfo cellInfo = cells[cellIndex];
-    uint slotCount = cellInfo.surfelCount;
-    if (slotCount == 0u)
+    int3 centerCoord = cameraRelativeCellCoord(position, cameraPosition, cellSize);
+    if (!isCellCoordValid(centerCoord, dim))
     {
         return false;
     }
 
     float3 weightedRadiance = float3(0.0);
     float weightSum = 0.0;
-    // The compact cell list is complete up to its configured per-cell limit.
-    // Consume the complete retained set so atomically assigned slot order cannot
-    // change the result from frame to frame. maxSamples remains part of the API
-    // for compatibility and is used by multi-cell callers as a soft budget.
-    uint sampleCount = slotCount;
-    for (uint sampleIndex = 0u; sampleIndex < sampleCount; ++sampleIndex)
+    uint samplesVisited = 0u;
+    uint softBudget = max(maxSamples, 1u);
+    // Search the 3x3x3 neighbourhood (searchShells = 1), centre cell first,
+    // exactly like the screen-space resolve. The support radius is clamped to the
+    // cell size on the host, so every surfel that can reach `position` lives in
+    // one of these cells; a single-cell lookup missed hit points near cell
+    // boundaries and made termination and sharing success depend on the cell
+    // size. Callers with ~1M lookups per frame (glossy reflections) pass
+    // searchShells = 0 to keep the centre-cell-only cost.
+    // Each cell's retained list is consumed completely (its slot order comes from
+    // atomics and is not stable); maxSamples is a soft budget between cells.
+    int maxShell = int(min(searchShells, 1u));
+    for (int shell = 0; shell <= maxShell; ++shell)
     {
-        uint slot = sampleIndex;
-        uint surfelIndex = unpackCellSurfelIndex(cellToSurfels[cellInfo.surfelOffset + slot]);
-        if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= maxSurfels)
+        for (int z = -shell; z <= shell; ++z)
+        for (int y = -shell; y <= shell; ++y)
+        for (int x = -shell; x <= shell; ++x)
         {
-            continue;
-        }
+            if (samplesVisited >= softBudget)
+            {
+                break;
+            }
+            if (max(abs(x), max(abs(y), abs(z))) != shell)
+            {
+                continue;
+            }
+            int3 cellCoord = centerCoord + int3(x, y, z);
+            if (!isCellCoordValid(cellCoord, dim))
+            {
+                continue;
+            }
+            uint cellIndex = flattenCameraRelativeCellCoord(cellCoord, dim);
+            SurfelPathTracerCellInfo cellInfo = cells[cellIndex];
+            for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot)
+            {
+                uint surfelIndex = unpackCellSurfelIndex(cellToSurfels[cellInfo.surfelOffset + slot]);
+                if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= maxSurfels ||
+                    surfelIndex == excludeSurfelIndex)
+                {
+                    continue;
+                }
 
-        SurfelPathTracerSurfel surfel = surfels[surfelIndex];
-        if (!isActiveSurfel(surfel))
-        {
-            continue;
-        }
+                SurfelPathTracerSurfel surfel = surfels[surfelIndex];
+                if (!isActiveSurfel(surfel))
+                {
+                    continue;
+                }
 
-        float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
-        float normalWeight = saturate(dot(normal, surfelNormal));
-        float distanceWeight = saturate(1.0 - length(position - surfel.position) /
-                                             max(surfel.radius, 0.0001));
-        float weight = normalWeight * distanceWeight;
-        weightedRadiance += clampLuminance(surfel.radiance,
-                                           SURFEL_PT_MAX_RADIANCE_LUMINANCE) * weight;
-        weightSum += weight;
+                float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
+                float normalWeight = saturate(dot(normal, surfelNormal));
+                // Same support radius and squared falloff as the screen-space
+                // resolve (Evaluate). Weighting by the raw surfel radius (often
+                // the 5 cm minimum) made this lookup miss almost every hit point.
+                float influenceRadius = max(surfel.radius, supportRadius);
+                float distanceWeight = saturate(1.0 - length(position - surfel.position) /
+                                                     max(influenceRadius, 0.0001));
+                float weight = normalWeight * distanceWeight * distanceWeight;
+                if (weight <= 0.0001)
+                {
+                    continue;
+                }
+                samplesVisited += 1u;
+                weightedRadiance += clampLuminance(surfel.radiance,
+                                                   SURFEL_PT_MAX_RADIANCE_LUMINANCE) * weight;
+                weightSum += weight;
+            }
+        }
     }
 
     if (weightSum <= 0.0001)

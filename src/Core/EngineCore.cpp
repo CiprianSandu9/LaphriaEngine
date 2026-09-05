@@ -524,6 +524,7 @@ void EngineCore::initVulkan()
 	createSurfelPathTracerStorageDescriptorSets();
 	createSurfelPathTracerRtDescriptorSets();
 	createTimestampQueryPool();
+	createExposureProbeResources();
 }
 
 void EngineCore::initImgui()
@@ -543,6 +544,7 @@ void EngineCore::mainLoop()
 		float deltaTime   = std::chrono::duration<float>(currentTime - lastFrameTime).count();
 		lastFrameTime     = currentTime;
 		updatePerformanceWindowTitle(deltaTime);
+		lastDeltaTimeSeconds = deltaTime;
 
 		glfwPollEvents();
 		camera.update(deltaTime);
@@ -681,6 +683,7 @@ void EngineCore::cleanupSwapChain()
 
 void EngineCore::cleanup()
 {
+	destroyExposureProbeResources();
 	for (size_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 	{
 		if (surfelSourceInstanceStagingMapped[frameIndex])
@@ -1091,13 +1094,10 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 		    .range = VK_WHOLE_SIZE,
 		};
 
-		const std::array<vk::DescriptorBufferInfo, 14> bufferInfos = {
+		const std::array<vk::DescriptorBufferInfo, 11> bufferInfos = {
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.countersBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.surfelBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
-		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.aliveBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.deadBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
-		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.dirtyBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
-		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.recycleBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.rayBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.cellInfoBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
 		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.cellCounterBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
@@ -1108,7 +1108,7 @@ void EngineCore::createSurfelPathTracerStorageDescriptorSets()
 		    sourceTransformInfo,
 		};
 
-		const std::array<uint32_t, 14> bufferBindings = {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 28, 29, 30, 31};
+		const std::array<uint32_t, 11> bufferBindings = {4, 5, 7, 10, 11, 12, 13, 28, 29, 30, 31};
 
 		std::vector<vk::WriteDescriptorSet> writes;
 		writes.reserve(27);
@@ -1797,6 +1797,12 @@ void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &co
 		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *gpuTimestampQueryPool, queryBase + kPtTS_DenoiserEnd);
 	}
 
+	// Auto-exposure measurement on the reprojected HDR colour (before tonemapping).
+	if (fi < frames.historyColor.size())
+	{
+		recordLuminanceProbe(commandBuffer, *frames.historyColor[fi], vk::Extent2D{rtWidth, rtHeight}, fi);
+	}
+
 	// 6. Blit denoised image to swapchain.
 	transition_image_layout(*frames.rayTracingOutputImages[fi],
 	                        vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal,
@@ -2131,7 +2137,8 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                          pipelines.surfelPathTracerPipelines,
 	                                          *surfelPathTracerStorageDescriptorSets[fi],
 	                                          surfelPathTracerResources.cellCount(),
-	                                          surfelPathTracerResources.perCellSurfelLimitCapacity());
+	                                          surfelPathTracerResources.perCellSurfelLimitCapacity(),
+	                                          surfelPathTracerResources.cellToSurfelCapacity());
 	writeSurfelTimestamp(kSurfelTS_CellInfoEnd);
 
 	writeSurfelTimestamp(kSurfelTS_CellMapStart);
@@ -2160,6 +2167,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                          *descriptorSets[fi],
 		                                          Laphria::SurfelPathTracerEvaluateMode::Generate,
 		                                          surfelSettings.cellSize,
+		                                          surfelSettings.surfelSupportRadius,
 		                                          surfelPathTracerResources.cellDimensionCapacity(),
 		                                          surfelPathTracerResources.maxSurfelsCapacity(),
 		                                          surfelSettings.placementThreshold,
@@ -2184,12 +2192,15 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		surfelPathTracerPasses.recordRaySchedulePass(commandBuffer,
 		                                            pipelines.surfelPathTracerPipelines,
 		                                            *surfelPathTracerStorageDescriptorSets[fi],
+		                                            *descriptorSets[fi],
 		                                            surfelPathTracerResources.cellCount(),
 		                                            surfelPathTracerResources.maxSurfelsCapacity(),
 		                                            surfelPathTracerResources.maxRaysPerFrameCapacity(),
 		                                            surfelSettings.minRaysPerSurfel,
 		                                            surfelSettings.maxRaysPerSurfel,
-		                                            surfelSettings.varianceSensitivity);
+		                                            surfelSettings.varianceSensitivity,
+		                                            surfelSettings.offscreenRayInterval,
+		                                            surfelSettings.surfelSupportRadius);
 		writeSurfelTimestamp(kSurfelTS_RayScheduleEnd);
 		writeSurfelTimestamp(kSurfelTS_RayTraceStart);
 		surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
@@ -2209,6 +2220,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                                surfelSettings.useOriginalStyleGiNormalization,
 		                                                surfelSettings.maxSurfelSamplesPerQuery,
 		                                                surfelSettings.cellSize,
+		                                                surfelSettings.surfelSupportRadius,
 		                                                surfelPathTracerResources.cellDimensionCapacity());
 		writeSurfelTimestamp(kSurfelTS_RayTraceEnd);
 		writeSurfelTimestamp(kSurfelTS_IntegrateStart);
@@ -2222,6 +2234,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                           surfelSettings.maxRadianceSharingSamples,
 		                                           surfelPathTracerResources.cellDimensionCapacity(),
 		                                           surfelSettings.cellSize,
+		                                           surfelSettings.surfelSupportRadius,
 		                                           surfelSettings.enableGuidedSampling);
 		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 		writeSurfelTimestamp(kSurfelTS_IntegrateEnd);
@@ -2242,6 +2255,7 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                          *descriptorSets[fi],
 	                                          Laphria::SurfelPathTracerEvaluateMode::Resolve,
 	                                          surfelSettings.cellSize,
+	                                          surfelSettings.surfelSupportRadius,
 	                                          surfelPathTracerResources.cellDimensionCapacity(),
 	                                          surfelPathTracerResources.maxSurfelsCapacity(),
 	                                          surfelSettings.placementThreshold,
@@ -2270,12 +2284,15 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                            *descriptorSets[fi],
 		                                            true,
 		                                            surfelSettings.cellSize,
+		                                            surfelSettings.surfelSupportRadius,
 		                                            surfelPathTracerResources.cellDimensionCapacity(),
 		                                            swapchain.extent,
 		                                            fi,
 		                                            surfelSettings.enableSurfelTermination,
 		                                            surfelSettings.useOriginalStyleGiNormalization,
-		                                            surfelSettings.maxSurfelSamplesPerQuery);
+		                                            surfelSettings.maxSurfelSamplesPerQuery,
+		                                            surfelSettings.roughReflectionStart,
+		                                            surfelSettings.roughReflectionEnd);
 	}
 	else
 	{
@@ -2329,6 +2346,11 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                           *surfelPathTracerStorageDescriptorSets[fi],
 	                                           useBilateralReflection,
 	                                           swapchain.extent);
+	// Bilateral writes the reflection image that LightIntegrate reads. Without
+	// reference validation the only barriers in between were image barriers
+	// scoped to the reference image, which order execution but do not make the
+	// reflection writes visible.
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
 	if (surfelSettings.enableReferenceValidation)
 	{
 		surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
@@ -2381,8 +2403,21 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                                surfelPathTracerResources.cellDimensionCapacity(),
 	                                                surfelPathTracerResources.perCellSurfelLimitCapacity(),
 	                                                static_cast<uint32_t>(surfelSettings.debugView),
-	                                                swapchain.extent);
+	                                                swapchain.extent,
+	                                                surfelSettings.roughReflectionStart,
+	                                                surfelSettings.roughReflectionEnd,
+	                                                surfelSettings.surfelSupportRadius);
 	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	// Auto-exposure measurement on the linear composite (final colour only: debug views write
+	// other data into the lighting image) and the pixel probe, both before TAA overwrites outputImage.
+	if (renderingFinalColor && fi < surfelPathTracerResources.lightingImages.size())
+	{
+		recordLuminanceProbe(commandBuffer, *surfelPathTracerResources.lightingImages[fi], swapchain.extent, fi);
+	}
+	if (ui.pixelProbe.enabled)
+	{
+		recordSurfelPixelProbe(commandBuffer, fi);
+	}
 	const bool taaPassEnabled = surfelSettings.enableTaa && renderingFinalColor;
 	const bool taaHistoryEnabled =
 	    historyReady &&
@@ -2652,8 +2687,437 @@ void EngineCore::collectSurfelPathTracerTimings(uint32_t frameSlot)
 	stats.reflectionMs = toMs(timestamps[kSurfelTS_ReflectionStart], timestamps[kSurfelTS_ReflectionEnd]);
 	stats.postProcessMs = toMs(timestamps[kSurfelTS_PostProcessStart], timestamps[kSurfelTS_PostProcessEnd]);
 	stats.totalFrameMs = toMs(timestamps[kSurfelTS_GBufferStart], timestamps[kSurfelTS_PostProcessEnd]);
+
+	// Rolling window so the panel can report steady-state means and percentiles
+	// instead of a single frame (mirrors the PathTracer panel).
+	if (ui.resetSurfelPathTracerStatsWindow)
+	{
+		for (auto &samples : surfelRollingMs)
+		{
+			samples.clear();
+		}
+		for (auto &samples : surfelRollingCounters)
+		{
+			samples.clear();
+		}
+		ui.resetSurfelPathTracerStatsWindow = false;
+	}
+	constexpr size_t kRollingWindow = 300;
+	const std::array<float, kSurfelRollingSpanCount> currentSpans{
+	    stats.gBufferMs, stats.cacheUpdateMs, stats.surfelRayTraceMs, stats.integrateMs,
+	    stats.evaluateMs, stats.reflectionMs, stats.postProcessMs, stats.totalFrameMs};
+	for (size_t i = 0; i < kSurfelRollingSpanCount; ++i)
+	{
+		auto &samples = surfelRollingMs[i];
+		samples.push_back(currentSpans[i]);
+		if (samples.size() > kRollingWindow)
+		{
+			samples.erase(samples.begin());
+		}
+	}
+	auto mean = [](const std::vector<float> &samples) -> float {
+		if (samples.empty())
+		{
+			return 0.0f;
+		}
+		double sum = 0.0;
+		for (float v : samples)
+		{
+			sum += v;
+		}
+		return static_cast<float>(sum / static_cast<double>(samples.size()));
+	};
+	stats.rollingSamples      = static_cast<uint32_t>(surfelRollingMs[0].size());
+	stats.avgGBufferMs        = mean(surfelRollingMs[0]);
+	stats.avgCacheUpdateMs    = mean(surfelRollingMs[1]);
+	stats.avgSurfelRayTraceMs = mean(surfelRollingMs[2]);
+	stats.avgIntegrateMs      = mean(surfelRollingMs[3]);
+	stats.avgEvaluateMs       = mean(surfelRollingMs[4]);
+	stats.avgReflectionMs     = mean(surfelRollingMs[5]);
+	stats.avgPostProcessMs    = mean(surfelRollingMs[6]);
+	stats.avgTotalFrameMs     = mean(surfelRollingMs[7]);
+	const auto totalPct       = computePercentiles(surfelRollingMs[7]);
+	stats.totalP50Ms          = totalPct.p50;
+	stats.totalP95Ms          = totalPct.p95;
+
+	// Counters for this slot were read back by readStats() earlier in the frame.
+	const std::array<float, kSurfelRollingCounterCount> currentCounters{
+	    static_cast<float>(stats.aliveSurfels), static_cast<float>(stats.requestedRays),
+	    static_cast<float>(stats.demandedRays), static_cast<float>(stats.filledCells),
+	    static_cast<float>(stats.rejectedStores), static_cast<float>(stats.spawnedSurfels),
+	    static_cast<float>(stats.removedSurfels), static_cast<float>(stats.recycledSurfels),
+	    static_cast<float>(stats.guidedRays), static_cast<float>(stats.cosineRays),
+	    static_cast<float>(stats.surfelTerminationAttempts), static_cast<float>(stats.surfelTerminationHits)};
+	for (size_t i = 0; i < kSurfelRollingCounterCount; ++i)
+	{
+		auto &samples = surfelRollingCounters[i];
+		samples.push_back(currentCounters[i]);
+		if (samples.size() > kRollingWindow)
+		{
+			samples.erase(samples.begin());
+		}
+	}
+	stats.avgAliveSurfels        = mean(surfelRollingCounters[0]);
+	stats.avgRequestedRays       = mean(surfelRollingCounters[1]);
+	stats.avgDemandedRays        = mean(surfelRollingCounters[2]);
+	stats.avgFilledCells         = mean(surfelRollingCounters[3]);
+	stats.avgRejectedStores      = mean(surfelRollingCounters[4]);
+	stats.avgSpawnedSurfels      = mean(surfelRollingCounters[5]);
+	stats.avgRemovedSurfels      = mean(surfelRollingCounters[6]);
+	stats.avgRecycledSurfels     = mean(surfelRollingCounters[7]);
+	stats.avgGuidedRays          = mean(surfelRollingCounters[8]);
+	stats.avgCosineRays          = mean(surfelRollingCounters[9]);
+	stats.avgTerminationAttempts = mean(surfelRollingCounters[10]);
+	stats.avgTerminationHits     = mean(surfelRollingCounters[11]);
 }
 
+
+// ---------------------------------------------------------------------------
+// Auto-exposure luminance probe + pixel probe
+// ---------------------------------------------------------------------------
+static float halfToFloat(uint16_t h)
+{
+	const uint32_t sign     = (h >> 15) & 1u;
+	uint32_t       exponent = (h >> 10) & 0x1Fu;
+	uint32_t       mantissa = h & 0x3FFu;
+	uint32_t       bits;
+	if (exponent == 0)
+	{
+		if (mantissa == 0)
+		{
+			bits = sign << 31;
+		}
+		else
+		{
+			exponent = 1;
+			while ((mantissa & 0x400u) == 0)
+			{
+				mantissa <<= 1;
+				--exponent;
+			}
+			mantissa &= 0x3FFu;
+			bits = (sign << 31) | ((exponent + 112u) << 23) | (mantissa << 13);
+		}
+	}
+	else if (exponent == 31)
+	{
+		bits = (sign << 31) | 0x7F800000u | (mantissa << 13);
+	}
+	else
+	{
+		bits = (sign << 31) | ((exponent + 112u) << 23) | (mantissa << 13);
+	}
+	float result;
+	std::memcpy(&result, &bits, sizeof(result));
+	return result;
+}
+
+static glm::vec4 readHalf4(const uint8_t *bytes)
+{
+	uint16_t h[4];
+	std::memcpy(h, bytes, sizeof(h));
+	return glm::vec4(halfToFloat(h[0]), halfToFloat(h[1]), halfToFloat(h[2]), halfToFloat(h[3]));
+}
+
+void EngineCore::createExposureProbeResources()
+{
+	destroyExposureProbeResources();
+	const vk::DeviceSize luminanceBytes =
+	    static_cast<vk::DeviceSize>(kLuminanceProbeWidth) * kLuminanceProbeHeight * 8u;
+	for (uint32_t slot = 0; slot < MAX_FRAMES_IN_FLIGHT; ++slot)
+	{
+		VulkanUtils::createImage(vulkan.logicalDevice, vulkan.physicalDevice,
+		                         kLuminanceProbeWidth, kLuminanceProbeHeight,
+		                         vk::Format::eR16G16B16A16Sfloat, vk::ImageTiling::eOptimal,
+		                         vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc,
+		                         vk::MemoryPropertyFlagBits::eDeviceLocal, luminanceProbeImages[slot]);
+		VulkanUtils::createBuffer(vulkan.logicalDevice, vulkan.physicalDevice, luminanceBytes,
+		                          vk::BufferUsageFlagBits::eTransferDst,
+		                          vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+		                          luminanceReadbackBuffers[slot]);
+		luminanceReadbackMapped[slot] = luminanceReadbackBuffers[slot].memory.mapMemory(0, luminanceBytes);
+		std::memset(luminanceReadbackMapped[slot], 0, static_cast<size_t>(luminanceBytes));
+
+		VulkanUtils::createBuffer(vulkan.logicalDevice, vulkan.physicalDevice, kPixelProbeBytes,
+		                          vk::BufferUsageFlagBits::eTransferDst,
+		                          vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+		                          pixelProbeReadbackBuffers[slot]);
+		pixelProbeReadbackMapped[slot] = pixelProbeReadbackBuffers[slot].memory.mapMemory(0, kPixelProbeBytes);
+		std::memset(pixelProbeReadbackMapped[slot], 0, static_cast<size_t>(kPixelProbeBytes));
+
+		luminanceReadbackValid[slot]         = false;
+		luminanceProbeImageInitialized[slot] = false;
+		pixelProbeReadbackValid[slot]        = false;
+	}
+}
+
+void EngineCore::destroyExposureProbeResources()
+{
+	for (uint32_t slot = 0; slot < MAX_FRAMES_IN_FLIGHT; ++slot)
+	{
+		if (luminanceReadbackMapped[slot])
+		{
+			luminanceReadbackBuffers[slot].memory.unmapMemory();
+			luminanceReadbackMapped[slot] = nullptr;
+		}
+		if (pixelProbeReadbackMapped[slot])
+		{
+			pixelProbeReadbackBuffers[slot].memory.unmapMemory();
+			pixelProbeReadbackMapped[slot] = nullptr;
+		}
+		luminanceReadbackBuffers[slot].reset();
+		pixelProbeReadbackBuffers[slot].reset();
+		luminanceProbeImages[slot].reset();
+		luminanceReadbackValid[slot]         = false;
+		luminanceProbeImageInitialized[slot] = false;
+		pixelProbeReadbackValid[slot]        = false;
+	}
+}
+
+void EngineCore::recordLuminanceProbe(const vk::raii::CommandBuffer &commandBuffer, vk::Image hdrImage,
+                                      vk::Extent2D hdrExtent, uint32_t frameSlot) const
+{
+	if (frameSlot >= MAX_FRAMES_IN_FLIGHT || !luminanceProbeImages[frameSlot].valid() ||
+	    !luminanceReadbackBuffers[frameSlot].valid() || hdrExtent.width == 0 || hdrExtent.height == 0)
+	{
+		return;
+	}
+	const vk::ImageSubresourceRange colorRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+	// Shader writes to the HDR image -> transfer read; probe image -> transfer dst.
+	vk::MemoryBarrier2 shaderToTransfer{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+	    .dstStageMask  = vk::PipelineStageFlagBits2::eTransfer,
+	    .dstAccessMask = vk::AccessFlagBits2::eTransferRead | vk::AccessFlagBits2::eTransferWrite};
+	vk::ImageMemoryBarrier2 probeToDst{
+	    .srcStageMask        = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask       = vk::AccessFlagBits2::eTransferRead,
+	    .dstStageMask        = vk::PipelineStageFlagBits2::eTransfer,
+	    .dstAccessMask       = vk::AccessFlagBits2::eTransferWrite,
+	    .oldLayout           = luminanceProbeImageInitialized[frameSlot] ? vk::ImageLayout::eTransferSrcOptimal
+	                                                                     : vk::ImageLayout::eUndefined,
+	    .newLayout           = vk::ImageLayout::eTransferDstOptimal,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .image               = *luminanceProbeImages[frameSlot],
+	    .subresourceRange    = colorRange};
+	vk::DependencyInfo beginDependency{
+	    .memoryBarrierCount      = 1,
+	    .pMemoryBarriers         = &shaderToTransfer,
+	    .imageMemoryBarrierCount = 1,
+	    .pImageMemoryBarriers    = &probeToDst};
+	commandBuffer.pipelineBarrier2(beginDependency);
+
+	vk::ImageBlit blit{
+	    .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .srcOffsets     = {{vk::Offset3D{0, 0, 0},
+	                        vk::Offset3D{static_cast<int32_t>(hdrExtent.width), static_cast<int32_t>(hdrExtent.height), 1}}},
+	    .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .dstOffsets     = {{vk::Offset3D{0, 0, 0},
+	                        vk::Offset3D{static_cast<int32_t>(kLuminanceProbeWidth), static_cast<int32_t>(kLuminanceProbeHeight), 1}}}};
+	commandBuffer.blitImage(hdrImage, vk::ImageLayout::eGeneral,
+	                        *luminanceProbeImages[frameSlot], vk::ImageLayout::eTransferDstOptimal,
+	                        blit, vk::Filter::eLinear);
+
+	vk::ImageMemoryBarrier2 probeToSrc{
+	    .srcStageMask        = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask       = vk::AccessFlagBits2::eTransferWrite,
+	    .dstStageMask        = vk::PipelineStageFlagBits2::eTransfer,
+	    .dstAccessMask       = vk::AccessFlagBits2::eTransferRead,
+	    .oldLayout           = vk::ImageLayout::eTransferDstOptimal,
+	    .newLayout           = vk::ImageLayout::eTransferSrcOptimal,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .image               = *luminanceProbeImages[frameSlot],
+	    .subresourceRange    = colorRange};
+	vk::DependencyInfo probeDependency{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &probeToSrc};
+	commandBuffer.pipelineBarrier2(probeDependency);
+
+	vk::BufferImageCopy copyRegion{
+	    .bufferOffset      = 0,
+	    .bufferRowLength   = 0,
+	    .bufferImageHeight = 0,
+	    .imageSubresource  = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .imageOffset       = {0, 0, 0},
+	    .imageExtent       = {kLuminanceProbeWidth, kLuminanceProbeHeight, 1}};
+	commandBuffer.copyImageToBuffer(*luminanceProbeImages[frameSlot], vk::ImageLayout::eTransferSrcOptimal,
+	                                *luminanceReadbackBuffers[frameSlot], copyRegion);
+
+	vk::BufferMemoryBarrier2 toHost{
+	    .srcStageMask        = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask       = vk::AccessFlagBits2::eTransferWrite,
+	    .dstStageMask        = vk::PipelineStageFlagBits2::eHost,
+	    .dstAccessMask       = vk::AccessFlagBits2::eHostRead,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .buffer              = *luminanceReadbackBuffers[frameSlot],
+	    .offset              = 0,
+	    .size                = VK_WHOLE_SIZE};
+	vk::MemoryBarrier2 transferToShader{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+	    .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite};
+	vk::DependencyInfo endDependency{
+	    .memoryBarrierCount       = 1,
+	    .pMemoryBarriers          = &transferToShader,
+	    .bufferMemoryBarrierCount = 1,
+	    .pBufferMemoryBarriers    = &toHost};
+	commandBuffer.pipelineBarrier2(endDependency);
+
+	luminanceProbeImageInitialized[frameSlot] = true;
+	luminanceReadbackValid[frameSlot]         = true;
+}
+
+void EngineCore::recordSurfelPixelProbe(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameSlot) const
+{
+	const auto &res = surfelPathTracerResources;
+	if (frameSlot >= MAX_FRAMES_IN_FLIGHT || !pixelProbeReadbackBuffers[frameSlot].valid() ||
+	    frameSlot >= res.lightingImages.size() || frameSlot >= res.outputImages.size() ||
+	    frameSlot >= res.gBufferAlbedoImages.size() || frameSlot >= res.gBufferNormalImages.size() ||
+	    frameSlot >= res.gBufferMaterialImages.size() || frameSlot >= res.gBufferDepthImages.size())
+	{
+		return;
+	}
+	const uint32_t px = std::min(ui.pixelProbe.x, swapchain.extent.width - 1);
+	const uint32_t py = std::min(ui.pixelProbe.y, swapchain.extent.height - 1);
+
+	vk::MemoryBarrier2 shaderToTransfer{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+	    .dstStageMask  = vk::PipelineStageFlagBits2::eTransfer,
+	    .dstAccessMask = vk::AccessFlagBits2::eTransferRead};
+	vk::DependencyInfo beginDependency{.memoryBarrierCount = 1, .pMemoryBarriers = &shaderToTransfer};
+	commandBuffer.pipelineBarrier2(beginDependency);
+
+	struct ProbeSource
+	{
+		vk::Image      image;
+		vk::DeviceSize offset;
+	};
+	std::vector<ProbeSource> sources{
+	    {*res.lightingImages[frameSlot], 0},
+	    {*res.outputImages[frameSlot], 16},
+	    {*res.gBufferAlbedoImages[frameSlot], 32},
+	    {*res.gBufferNormalImages[frameSlot], 48},
+	    {*res.gBufferMaterialImages[frameSlot], 64},
+	    {*res.gBufferDepthImages[frameSlot], 80}};
+	if (frameSlot < res.referenceImages.size() && res.referenceImages[frameSlot].valid())
+	{
+		sources.push_back({*res.referenceImages[frameSlot], 96});
+	}
+	for (const auto &source : sources)
+	{
+		vk::BufferImageCopy region{
+		    .bufferOffset      = source.offset,
+		    .bufferRowLength   = 0,
+		    .bufferImageHeight = 0,
+		    .imageSubresource  = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+		    .imageOffset       = {static_cast<int32_t>(px), static_cast<int32_t>(py), 0},
+		    .imageExtent       = {1, 1, 1}};
+		commandBuffer.copyImageToBuffer(source.image, vk::ImageLayout::eGeneral,
+		                                *pixelProbeReadbackBuffers[frameSlot], region);
+	}
+
+	vk::BufferMemoryBarrier2 toHost{
+	    .srcStageMask        = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask       = vk::AccessFlagBits2::eTransferWrite,
+	    .dstStageMask        = vk::PipelineStageFlagBits2::eHost,
+	    .dstAccessMask       = vk::AccessFlagBits2::eHostRead,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .buffer              = *pixelProbeReadbackBuffers[frameSlot],
+	    .offset              = 0,
+	    .size                = VK_WHOLE_SIZE};
+	vk::MemoryBarrier2 transferToShader{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+	    .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite};
+	vk::DependencyInfo endDependency{
+	    .memoryBarrierCount       = 1,
+	    .pMemoryBarriers          = &transferToShader,
+	    .bufferMemoryBarrierCount = 1,
+	    .pBufferMemoryBarriers    = &toHost};
+	commandBuffer.pipelineBarrier2(endDependency);
+
+	pixelProbeReadbackPixel[frameSlot] = glm::uvec2(px, py);
+	pixelProbeReadbackValid[frameSlot] = true;
+}
+
+void EngineCore::updateAutoExposure(uint32_t frameSlot)
+{
+	if (frameSlot >= MAX_FRAMES_IN_FLIGHT || !luminanceReadbackValid[frameSlot] || !luminanceReadbackMapped[frameSlot])
+	{
+		return;
+	}
+	luminanceReadbackValid[frameSlot] = false;
+
+	const auto *bytes = static_cast<const uint8_t *>(luminanceReadbackMapped[frameSlot]);
+	double   sumLog = 0.0;
+	uint32_t count  = 0;
+	for (uint32_t i = 0; i < kLuminanceProbeWidth * kLuminanceProbeHeight; ++i)
+	{
+		const glm::vec4 texel = readHalf4(bytes + static_cast<size_t>(i) * 8u);
+		const float     lum   = 0.2126f * texel.r + 0.7152f * texel.g + 0.0722f * texel.b;
+		if (std::isfinite(lum) && lum >= 0.0f)
+		{
+			sumLog += std::log(static_cast<double>(lum) + 1e-4);
+			++count;
+		}
+	}
+	if (count == 0)
+	{
+		return;
+	}
+	auto       &ae      = ui.autoExposure;
+	const float logMean = static_cast<float>(std::exp(sumLog / static_cast<double>(count)));
+	ae.measuredLogMeanLuminance = logMean;
+	const float target = std::clamp(ae.key / std::max(logMean, 1e-4f), ae.minExposure, ae.maxExposure);
+	ae.targetExposure  = target;
+	if (ae.enabled)
+	{
+		// Adapt in stops (log2) so a 2x brightening and a 2x darkening take the same time.
+		const float dt        = std::clamp(lastDeltaTimeSeconds, 0.0f, 0.1f);
+		const float alpha     = 1.0f - std::exp(-dt * std::max(ae.adaptationSpeed, 0.0f));
+		const float currentEv = std::log2(std::max(ui.exposure, 1e-4f));
+		const float targetEv  = std::log2(std::max(target, 1e-4f));
+		ui.exposure           = std::clamp(std::exp2(glm::mix(currentEv, targetEv, alpha)), ae.minExposure, ae.maxExposure);
+	}
+}
+
+void EngineCore::readPixelProbe(uint32_t frameSlot)
+{
+	if (frameSlot >= MAX_FRAMES_IN_FLIGHT || !pixelProbeReadbackValid[frameSlot] || !pixelProbeReadbackMapped[frameSlot])
+	{
+		return;
+	}
+	pixelProbeReadbackValid[frameSlot] = false;
+	const auto *bytes = static_cast<const uint8_t *>(pixelProbeReadbackMapped[frameSlot]);
+	auto       &probe = ui.pixelProbe;
+	const glm::vec4 lighting  = readHalf4(bytes + 0);
+	const glm::vec4 resolved  = readHalf4(bytes + 16);
+	const glm::vec4 albedo    = readHalf4(bytes + 32);
+	const glm::vec4 normal    = readHalf4(bytes + 48);
+	const glm::vec4 material  = readHalf4(bytes + 64);
+	float           depth     = 0.0f;
+	std::memcpy(&depth, bytes + 80, sizeof(depth));
+	const glm::vec4 reference = readHalf4(bytes + 96);
+	probe.sampledX           = pixelProbeReadbackPixel[frameSlot].x;
+	probe.sampledY           = pixelProbeReadbackPixel[frameSlot].y;
+	probe.lighting           = glm::vec3(lighting);
+	probe.resolvedIrradiance = glm::vec3(resolved);
+	probe.coverage           = resolved.a;
+	probe.albedo             = glm::vec3(albedo);
+	probe.normal             = glm::vec3(normal);
+	probe.sunVisibility      = normal.a;
+	probe.ao                 = material.a;
+	probe.depth              = depth;
+	probe.reference          = glm::vec3(reference);
+	probe.referenceValid     = reference.a > 0.0f;
+	probe.valid              = true;
+}
 
 void EngineCore::updatePathTracerTimingPercentiles()
 {
@@ -3370,6 +3834,10 @@ void EngineCore::drawFrame()
 	{
 		throw std::runtime_error("failed to wait for fence!");
 	}
+
+	// This slot's fence has passed: consume the readbacks recorded when it was last submitted.
+	updateAutoExposure(frames.frameIndex);
+	readPixelProbe(frames.frameIndex);
 
 	auto refreshSurfelPathTracerRuntimeResources = [&]() {
 		if (!surfelPathTracerResources.initialized())

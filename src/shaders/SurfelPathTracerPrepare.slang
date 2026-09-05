@@ -2,10 +2,7 @@
 
 [[vk::binding(4, 0)]] RWByteAddressBuffer counters;
 [[vk::binding(5, 0)]] RWStructuredBuffer<SurfelPathTracerSurfel> surfelBuffer;
-[[vk::binding(6, 0)]] RWStructuredBuffer<uint> aliveBuffer;
 [[vk::binding(7, 0)]] RWStructuredBuffer<uint> deadBuffer;
-[[vk::binding(8, 0)]] RWStructuredBuffer<uint> dirtyBuffer;
-[[vk::binding(9, 0)]] RWStructuredBuffer<uint> recycleBuffer;
 [[vk::binding(10, 0)]] RWStructuredBuffer<uint> rayBuffer;
 [[vk::binding(11, 0)]] RWStructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer;
 [[vk::binding(12, 0)]] RWByteAddressBuffer cellCounterBuffer;
@@ -42,6 +39,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         counters.Store(SURFEL_PT_COUNTER_SURFEL_TERMINATION_ATTEMPTS_OFFSET, 0u);
         counters.Store(SURFEL_PT_COUNTER_PATH_MISSES_OFFSET, 0u);
 		counters.Store(SURFEL_PT_COUNTER_SURFEL_TERMINATION_HITS_OFFSET, 0u);
+		counters.Store(SURFEL_PT_COUNTER_DEMANDED_RAYS_OFFSET, 0u);
 		counters.Store(SURFEL_PT_INDIRECT_RAY_WIDTH_OFFSET, 0u);
 		counters.Store(SURFEL_PT_INDIRECT_RAY_HEIGHT_OFFSET, 1u);
 		counters.Store(SURFEL_PT_INDIRECT_RAY_DEPTH_OFFSET, 1u);
@@ -72,9 +70,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     if (index < maxSurfels) {
-        aliveBuffer[index] = SURFEL_PT_INVALID_INDEX;
         deadBuffer[index] = index;
-        dirtyBuffer[index] = SURFEL_PT_INVALID_INDEX;
 
         SurfelPathTracerSurfel surfel;
         surfel.position = float3(0.0f, 0.0f, 0.0f);
@@ -94,10 +90,4 @@ void main(uint3 tid : SV_DispatchThreadID) {
         surfel.varianceAndInconsistency = float4(1.0, 1.0, 1.0, 1.0);
         surfelBuffer[index] = surfel;
     }
-
-    uint recycleCount = maxSurfels * 4u;
-    if (index < recycleCount) {
-        recycleBuffer[index] = SURFEL_PT_INVALID_INDEX;
-    }
-
 }

@@ -54,6 +54,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
         return;
     }
 
+    uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
+    uint retentionKey = cellRetentionKey(surfel, frameIndex);
     int3 centerCoord = cameraRelativeCellCoord(surfel.position, ubo.cameraPos.xyz, push.cellSize);
     for (int z = -1; z <= 1; ++z)
     for (int y = -1; y <= 1; ++y)
@@ -69,12 +71,15 @@ void main(uint3 tid : SV_DispatchThreadID) {
         uint cellIndex = flattenCameraRelativeCellCoord(cellCoord, push.cellDimension);
         SurfelPathTracerCellInfo cellInfo = cellInfoBuffer[cellIndex];
         if (cellInfo.surfelCount == 0u) {
-            counters.InterlockedAdd(SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET, 1u);
+            // A neighbouring cell with no centred surfels has no compact-map
+            // allocation. Dropping the overlap entry here is not an overflow, so it
+            // is not counted as a rejected store; the counter only tracks entries
+            // displaced from a full cell (the else branch below).
             continue;
         }
 
         int3 absoluteCellCoord = cellCoord + worldCellCoord(ubo.cameraPos.xyz, push.cellSize);
-        uint cellEntry = packCellSurfelEntry(surfelIndex, absoluteCellCoord);
+        uint cellEntry = packCellSurfelEntry(surfelIndex, absoluteCellCoord, retentionKey, frameIndex);
         uint rawCount = cellCounterBuffer.Load((1u + cellIndex) * 4u);
         if (rawCount <= cellInfo.surfelCount)
         {
