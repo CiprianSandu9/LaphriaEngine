@@ -133,12 +133,13 @@ public:
         // threshold, so placement never waits for the 480-frame eviction clock.
         uint32_t maxSurfels = 400000;
         uint32_t maxRaysPerFrame = 400000 * 8; // 3.2M rays, 102 MiB ray buffer (cap 128 MiB)
-        // 0.75 m: Cell Size is the lookup window/index granularity only (48 m span at
-        // 64^3); the effective surfel size is surfelSupportRadius below (clamped to Cell
-        // Size). At 2.0 m a cell held far more surfels than the 64-entry compact map
-        // kept, starving ray scheduling and the resolve.
-        float cellSize = 0.75f;
-        uint32_t cellDimension = 64;
+        // 0.4 m at 96^3 (38 m window): Cell Size is the lookup window/index granularity
+        // only; the effective surfel size is surfelSupportRadius below (clamped to Cell
+        // Size). Smaller cells keep the per-pixel 27-cell resolve walk short; at 2.0 m a
+        // cell held far more surfels than the compact map kept, starving ray scheduling
+        // and the resolve. Tuned 2026-09-05 for the performance/quality balance.
+        float cellSize = 0.4f;
+        uint32_t cellDimension = 96;
         uint32_t perCellSurfelLimit = 128;      // compact-map slots per cell; the map itself is sized per surfel (cellMapEntryCount)
         uint32_t irradianceAtlasWidth = 4096;   // 4096x4096 tiles of 6x6 = 465 124 surfels of capacity
         uint32_t irradianceAtlasHeight = 4096;
@@ -154,7 +155,10 @@ public:
         // Removal at 12 keeps roughly a dozen overlapping supports per point; 4.0 left
         // the cache too sparse once coverage measured the real support radius.
         float removalThreshold = 12.0f;
-        float varianceSensitivity = 1.2f;
+        // Multiplies the *relative* inconsistency (|short - long| / luminance) before it
+        // maps min..max rays; 10 sends any surfel above ~10% relative noise to the full
+        // budget, which is what removes the shimmer in shadowed areas.
+        float varianceSensitivity = 10.0f;
         float surfelTargetArea = 16.0f;
         float surfelMinRadius = 0.05f;
         float surfelMaxRadiusScale = 2.0f;

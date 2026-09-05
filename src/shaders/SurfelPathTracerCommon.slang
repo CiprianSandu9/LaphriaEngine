@@ -24,6 +24,16 @@ static const uint SURFEL_PT_SURFEL_FLAG_IN_WINDOW = 8u;
 // Set by Integrate once the surfel has accumulated at least one traced sample.
 // Until then the first sample replaces the placement seed outright.
 static const uint SURFEL_PT_SURFEL_FLAG_HAS_SAMPLES = 16u;
+// Bits 24..31 of flags: saturating count of integrated sample batches. Only
+// Integrate changes it (full struct write); the atomic OR users of the low bits
+// never touch it. Drives the cumulative-average warm-up blend.
+static const uint SURFEL_PT_SURFEL_SAMPLE_COUNT_SHIFT = 24u;
+static const uint SURFEL_PT_SURFEL_SAMPLE_COUNT_MAX = 255u;
+// Luminance floor for the relative-inconsistency metric (see
+// surfelRelativeInconsistency). Roughly the darkest irradiance worth chasing.
+static const float SURFEL_PT_RELATIVE_NOISE_FLOOR = 0.05;
+// Warm-up length in frames: full ray budget, no sleeping, no removal.
+static const float SURFEL_PT_WARMUP_LIFE = 16.0;
 static const uint SURFEL_PT_SOURCE_FLAG_VALID = 1u << 0u;
 static const uint SURFEL_PT_SOURCE_FLAG_REFRESH_FAILED = 1u << 1u;
 static const uint SURFEL_PT_STATUS_LAST_SEEN = 0x2u;
@@ -464,6 +474,29 @@ bool shouldRecycleSurfel(SurfelPathTracerSurfel surfel, uint frameIndex, float d
     return unrepresented || unreferencedUnderPressure || distantAndUnused;
 }
 
+uint surfelSampleCount(SurfelPathTracerSurfel surfel)
+{
+    return surfel.flags >> SURFEL_PT_SURFEL_SAMPLE_COUNT_SHIFT;
+}
+
+uint withSurfelSampleCount(uint flags, uint sampleCount)
+{
+    return (flags & ((1u << SURFEL_PT_SURFEL_SAMPLE_COUNT_SHIFT) - 1u)) |
+           (min(sampleCount, SURFEL_PT_SURFEL_SAMPLE_COUNT_MAX) << SURFEL_PT_SURFEL_SAMPLE_COUNT_SHIFT);
+}
+
+// Inconsistency (|short mean - long mean|) relative to the surfel's own
+// brightness. The absolute metric let every dark surfel fall to the minimum ray
+// count and go to sleep although its relative noise was the highest in the
+// scene, which showed as shimmer in shadowed areas.
+float surfelRelativeInconsistency(SurfelPathTracerSurfel surfel)
+{
+    const float3 lumaWeights = float3(0.2126, 0.7152, 0.0722);
+    float inconsistency = dot(max(surfel.varianceAndInconsistency.xyz, float3(0.0)), lumaWeights);
+    float reference = dot(max(surfel.meanAndVariance.xyz, float3(0.0)), lumaWeights);
+    return inconsistency / max(reference, SURFEL_PT_RELATIVE_NOISE_FLOOR);
+}
+
 uint adaptiveRayCountForSurfel(SurfelPathTracerSurfel surfel,
                                uint minRays,
                                uint maxRays,
@@ -471,11 +504,11 @@ uint adaptiveRayCountForSurfel(SurfelPathTracerSurfel surfel,
 {
     uint safeMinRays = max(minRays, 1u);
     uint safeMaxRays = max(maxRays, safeMinRays);
-    float variance = length(max(surfel.varianceAndInconsistency.xyz, float3(0.0)));
+    float variance = surfelRelativeInconsistency(surfel);
     // Give newly allocated surfels a short full-budget warm-up. Using
     // ageSinceSeen here kept every visible surfel permanently at max rays,
     // because RaySchedule marks it seen immediately before this call.
-    float warmupBoost = surfel.shortMeanAndLife.w <= 16.0 ? 1.0 : 0.0;
+    float warmupBoost = surfel.shortMeanAndLife.w <= SURFEL_PT_WARMUP_LIFE ? 1.0 : 0.0;
     float varianceT = saturate(variance * varianceSensitivity + warmupBoost);
     uint count = uint(round(lerp(float(safeMinRays), float(safeMaxRays), varianceT)));
     if (surfel.sleepState == SURFEL_PT_SLEEP_SLEEPING)
@@ -658,12 +691,12 @@ void addReflectionCandidate(inout SurfelPtReservoir reservoir,
     }
 }
 
-float3 updateMsme(float3 sampleRadiance, inout SurfelPathTracerSurfel surfel, float shortBlend)
+float3 updateMsme(float3 sampleRadiance, inout SurfelPathTracerSurfel surfel, float shortBlend, float longBlend)
 {
     float3 previousMean = surfel.meanAndVariance.xyz;
     float3 previousShort = surfel.shortMeanAndLife.xyz;
     float3 shortMean = lerp(previousShort, sampleRadiance, saturate(shortBlend));
-    float3 longMean = lerp(previousMean, sampleRadiance, saturate(shortBlend * 0.25));
+    float3 longMean = lerp(previousMean, sampleRadiance, saturate(longBlend));
     float3 delta = sampleRadiance - longMean;
     float variance = lerp(surfel.meanAndVariance.w, dot(delta, delta), saturate(shortBlend * 0.5));
     surfel.meanAndVariance = float4(longMean, variance);

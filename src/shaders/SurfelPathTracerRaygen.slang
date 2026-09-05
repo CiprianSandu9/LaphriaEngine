@@ -422,8 +422,21 @@ void main() {
     }
 
     float3 normal = unpackNormalOctahedral(surfel.packedNormal);
-    uint seed = pcgHash(rayIndex ^ (counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET) * 1664525u));
-    float2 xi = float2(randomFloat(seed), randomFloat(seed));
+    uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
+    uint seed = pcgHash(rayIndex ^ (frameIndex * 1664525u));
+    // Stratify the rays of one surfel over the hemisphere: a Fibonacci lattice in
+    // the cosine-sampling domain (radial stratum per ray, golden-ratio azimuth)
+    // with a per-surfel, per-frame Cranley-Patterson shift. Independent random
+    // directions at 4-16 rays per frame were the main shimmer source in dark
+    // areas; the shift keeps successive frames decorrelated and the estimator
+    // unbiased.
+    uint rayInSurfel = rayIndex >= surfel.rayOffset ? rayIndex - surfel.rayOffset : 0u;
+    uint raysInSurfel = max(surfel.rayCount, 1u);
+    rayInSurfel = min(rayInSurfel, raysInSurfel - 1u);
+    uint surfelSeed = pcgHash(surfelIndex ^ (frameIndex * 0x9E3779B9u));
+    float2 cpShift = float2(randomFloat(surfelSeed), randomFloat(surfelSeed));
+    float2 xi = frac(float2((float(rayInSurfel) + 0.5) / float(raysInSurfel),
+                            float(rayInSurfel) * 0.6180339887) + cpShift);
     float2 guideXi = float2(randomFloat(seed), randomFloat(seed));
     float2 guideJitter = float2(randomFloat(seed), randomFloat(seed));
     float3 localDir;

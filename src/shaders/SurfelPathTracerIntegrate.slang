@@ -158,12 +158,18 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // incremented by Update before the first samples ever arrive here, so a
     // life-based test never fired and new surfels converged at the steady-state
     // rate from a seed that is frequently zero.
-    bool hasSamples = (surfel.flags & SURFEL_PT_SURFEL_FLAG_HAS_SAMPLES) != 0u;
-    float shortAlpha = hasSamples ? 0.25 : 4.0;
-    float3 longMean = updateMsme(sampleRadiance, surfel, shortAlpha);
+    // Warm-up is a cumulative average (1, 1/2, 1/3, ...) that settles on the
+    // steady-state exponential blends. Both means start from the first traced
+    // batch instead of the placement seed, but no single noisy batch dominates.
+    uint batchesIntegrated = surfelSampleCount(surfel);
+    float cumulative = 1.0 / float(batchesIntegrated + 1u);
+    float shortAlpha = max(0.25, cumulative);
+    float longAlpha = max(0.0625, cumulative);
+    float3 longMean = updateMsme(sampleRadiance, surfel, shortAlpha, longAlpha);
 
     surfel.radiance = longMean;
     surfel.rayCount = 1u;
-    surfel.flags |= SURFEL_PT_SURFEL_FLAG_HAS_SAMPLES;
+    surfel.flags = withSurfelSampleCount(surfel.flags | SURFEL_PT_SURFEL_FLAG_HAS_SAMPLES,
+                                         batchesIntegrated + 1u);
     surfelBuffer[surfelIndex] = surfel;
 }

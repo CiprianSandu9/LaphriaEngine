@@ -7,6 +7,7 @@
 [[vk::binding(5, 0)]] RWStructuredBuffer<SurfelPathTracerSurfel> surfelBuffer;
 [[vk::binding(7, 0)]] RWStructuredBuffer<uint> deadBuffer;
 [[vk::binding(11, 0)]] RWStructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer;
+[[vk::binding(12, 0)]] RWByteAddressBuffer cellCounterBuffer;
 [[vk::binding(13, 0)]] RWStructuredBuffer<uint> cellToSurfelBuffer;
 [[vk::binding(28, 0)]] StructuredBuffer<SurfelPathTracerPixelSource> gBufferSourceBuffer;
 [[vk::binding(29, 0)]] RWStructuredBuffer<SurfelPathTracerSource> surfelSourceBuffer;
@@ -38,6 +39,44 @@ struct EvaluatePushConstants {
 
 static const uint SURFEL_PT_EVALUATE_GENERATE = 0u;
 static const uint SURFEL_PT_EVALUATE_RESOLVE = 1u;
+// Per-cell, per-frame caps on population changes. Every generate lane decides
+// from the previous frame's compact map, so without a cap a close-up wall
+// received hundreds of placements per frame in a few centimetres, followed by
+// an equally massive removal cascade the next frame (black holes, then refill).
+static const uint SURFEL_PT_MAX_PLACEMENTS_PER_CELL_PER_FRAME = 2u;
+static const uint SURFEL_PT_MAX_REMOVALS_PER_CELL_PER_FRAME = 2u;
+
+// The per-cell cursor slots of cellCounterBuffer are free once CellToSurfel has
+// run. Low 16 bits count placements this frame on top of the cursor's final
+// value (rawCount for cells filled through the non-overflow path, 0 otherwise);
+// high 16 bits count removals from a zero base.
+uint cellCursorOffset(uint cellIndex)
+{
+    uint dim = max(push.cellDimension, 1u);
+    return (1u + dim * dim * dim + cellIndex) * 4u;
+}
+
+uint cellCursorBase(uint cellIndex)
+{
+    uint rawCount = cellCounterBuffer.Load((1u + cellIndex) * 4u);
+    uint storedCount = cellInfoBuffer[cellIndex].surfelCount;
+    return rawCount <= storedCount ? rawCount : 0u;
+}
+
+bool claimCellPlacement(uint cellIndex)
+{
+    uint previous = 0u;
+    cellCounterBuffer.InterlockedAdd(cellCursorOffset(cellIndex), 1u, previous);
+    uint placementsSoFar = (previous & 0xFFFFu) - min(cellCursorBase(cellIndex), previous & 0xFFFFu);
+    return placementsSoFar < SURFEL_PT_MAX_PLACEMENTS_PER_CELL_PER_FRAME;
+}
+
+bool claimCellRemoval(uint cellIndex)
+{
+    uint previous = 0u;
+    cellCounterBuffer.InterlockedAdd(cellCursorOffset(cellIndex), 1u << 16u, previous);
+    return (previous >> 16u) < SURFEL_PT_MAX_REMOVALS_PER_CELL_PER_FRAME;
+}
 
 float3 primaryRayDirection(uint2 pixel) {
     float2 uv = (float2(pixel) + float2(0.5, 0.5)) / float2(max(push.width, 1u), max(push.height, 1u));
@@ -82,6 +121,11 @@ SurfelQueryResult querySurfels(float3 position, float3 normal, bool stampClosest
     uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
     float3 weightedRadiance = float3(0.0);
     float weightSum = 0.0;
+    // Surfels that have not integrated a single batch yet only carry their
+    // placement seed (often zero). They count towards coverage, but must not
+    // darken a pixel that sampled surfels can already explain.
+    float3 seedRadiance = float3(0.0);
+    float seedWeightSum = 0.0;
     float bestWeight = 0.0;
     uint removalAge = 0u;
     float removalWeight = 2.0;
@@ -145,16 +189,28 @@ SurfelQueryResult querySurfels(float3 position, float3 normal, bool stampClosest
                         samplesVisited += 1u;
                         result.coverage += weight;
                         float resolveWeight = weight * distanceWeight;
-                        weightedRadiance += clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE) * resolveWeight;
-                        weightSum += resolveWeight;
+                        bool sampled = (surfel.flags & SURFEL_PT_SURFEL_FLAG_HAS_SAMPLES) != 0u;
+                        float3 contribution = clampLuminance(surfel.radiance, SURFEL_PT_MAX_RADIANCE_LUMINANCE) * resolveWeight;
+                        if (sampled) {
+                            weightedRadiance += contribution;
+                            weightSum += resolveWeight;
+                        } else {
+                            seedRadiance += contribution;
+                            seedWeightSum += resolveWeight;
+                        }
                         if (weight > bestWeight) {
                             bestWeight = weight;
                             result.closestSurfelIndex = surfelIndex;
                         }
+                        // Never remove a surfel that has not been integrated or
+                        // is still warming up; it has not had a chance to be
+                        // referenced, and freeing it just re-triggers placement.
+                        bool removable = sampled && surfel.shortMeanAndLife.w > SURFEL_PT_WARMUP_LIFE;
                         uint age = frameIndex >= surfel.lastReferencedFrame
                                        ? frameIndex - surfel.lastReferencedFrame
                                        : 0u;
-                        if (age > removalAge || (age == removalAge && weight < removalWeight)) {
+                        if (removable &&
+                            (age > removalAge || (age == removalAge && weight < removalWeight))) {
                             removalAge = age;
                             removalWeight = weight;
                             result.removalCandidateIndex = surfelIndex;
@@ -167,6 +223,8 @@ SurfelQueryResult querySurfels(float3 position, float3 normal, bool stampClosest
 
     if (weightSum > 0.0001) {
         result.radiance = weightedRadiance / weightSum;
+    } else if (seedWeightSum > 0.0001) {
+        result.radiance = seedRadiance / seedWeightSum;
     }
     if (stampClosest && result.closestSurfelIndex != SURFEL_PT_INVALID_INDEX) {
         uint previousReferenceFrame = 0u;
@@ -314,23 +372,42 @@ void main(uint3 tid : SV_DispatchThreadID) {
         // win. Keep one deterministic candidate per subgroup. This preserves
         // broad screen coverage while reducing both seed searches and global
         // atomic contention by approximately the subgroup width.
+        // Positions outside the camera-relative window can never be resolved,
+        // so a surfel placed there is wasted capacity.
+        uint placementCell = cameraRelativeCellIndexForPosition(position,
+                                                                ubo.cameraPos.xyz,
+                                                                push.cellSize,
+                                                                push.cellDimension);
+        wantsPlacement = wantsPlacement && placementCell != SURFEL_PT_INVALID_INDEX;
         bool placeFromThisLane = wantsPlacement && WavePrefixCountBits(wantsPlacement) == 0u;
-        if (placeFromThisLane) {
+        if (placeFromThisLane && claimCellPlacement(placementCell)) {
             float radius = surfelRadius(depth, push.surfelTargetArea, push.surfelMinRadius, push.cellSize * push.surfelMaxRadiusScale);
             // The seed is the same weighted neighbourhood the resolve would show.
             allocateSurfel(pixel, position, normal, radius, query.radiance, loadPixelMaterialKey(pixel));
         }
-        if (push.lockSurfels == 0u &&
-            push.enableRemoval != 0u &&
-            coverage > push.removalThreshold &&
-            query.removalCandidateIndex != SURFEL_PT_INVALID_INDEX) {
-            // Set the bit atomically: several pixels may pick the same candidate
-            // in this dispatch, and a full read-modify-write of the struct could
-            // otherwise clobber a concurrent update of the same slot.
-            uint previousFlags = 0u;
-            InterlockedOr(surfelBuffer[query.removalCandidateIndex].flags,
-                          SURFEL_PT_SURFEL_FLAG_PENDING_FREE,
-                          previousFlags);
+        bool wantsRemoval = push.lockSurfels == 0u &&
+                            push.enableRemoval != 0u &&
+                            coverage > push.removalThreshold &&
+                            query.removalCandidateIndex != SURFEL_PT_INVALID_INDEX;
+        // Removal is throttled like placement (one lane per wave) and capped per
+        // cell. Unthrottled, every lane of a close-up wall marked a candidate and
+        // the area went black in one frame.
+        bool removeFromThisLane = wantsRemoval && WavePrefixCountBits(wantsRemoval) == 0u;
+        if (removeFromThisLane) {
+            SurfelPathTracerSurfel candidate = surfelBuffer[query.removalCandidateIndex];
+            uint removalCell = cameraRelativeCellIndexForPosition(candidate.position,
+                                                                  ubo.cameraPos.xyz,
+                                                                  push.cellSize,
+                                                                  push.cellDimension);
+            if (removalCell != SURFEL_PT_INVALID_INDEX && claimCellRemoval(removalCell)) {
+                // Set the bit atomically: several waves may pick the same
+                // candidate, and a full read-modify-write of the struct could
+                // otherwise clobber a concurrent update of the same slot.
+                uint previousFlags = 0u;
+                InterlockedOr(surfelBuffer[query.removalCandidateIndex].flags,
+                              SURFEL_PT_SURFEL_FLAG_PENDING_FREE,
+                              previousFlags);
+            }
         }
         return;
     }

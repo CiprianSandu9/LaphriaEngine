@@ -203,7 +203,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
         }
 
         surfel.shortMeanAndLife.w = min(surfel.shortMeanAndLife.w + 1.0f, float(SURFEL_PT_MAX_LIFE));
-        float varianceMagnitude = length(max(surfel.varianceAndInconsistency.xyz, float3(0.0)));
+        // Relative to the surfel's brightness, so dark surfels are judged by the
+        // noise the viewer sees rather than by tiny absolute deltas.
+        float varianceMagnitude = surfelRelativeInconsistency(surfel);
         // Sleeping is a convergence state, not a visibility state. RaySchedule
         // marks represented surfels as seen every update, so lastSeenFrame could
         // never sustain sleeping. Stable mature surfels now remain asleep and
@@ -213,7 +215,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         {
             surfel.sleepState = SURFEL_PT_SLEEP_SLEEPING;
         }
-        else if (surfel.shortMeanAndLife.w <= 16.0 || varianceMagnitude > 0.2)
+        else if (surfel.shortMeanAndLife.w <= SURFEL_PT_WARMUP_LIFE || varianceMagnitude > 0.2)
         {
             surfel.sleepState = SURFEL_PT_SLEEP_AWAKE;
         }
