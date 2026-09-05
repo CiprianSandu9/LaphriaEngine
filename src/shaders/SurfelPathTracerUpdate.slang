@@ -4,6 +4,7 @@
 [[vk::binding(5, 0)]] RWStructuredBuffer<SurfelPathTracerSurfel> surfelBuffer;
 [[vk::binding(7, 0)]] RWStructuredBuffer<uint> deadBuffer;
 [[vk::binding(10, 0)]] RWStructuredBuffer<uint> rayBuffer;
+[[vk::binding(11, 0)]] StructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer;
 [[vk::binding(12, 0)]] RWByteAddressBuffer cellCounterBuffer;
 [[vk::binding(29, 0)]] RWStructuredBuffer<SurfelPathTracerSource> surfelSourceBuffer;
 [[vk::binding(31, 0)]] StructuredBuffer<SurfelPathTracerSourceTransform> sourceTransformBuffer;
@@ -19,12 +20,35 @@ struct UpdatePushConstants {
     uint maxRaysPerSurfel;
     float varianceSensitivity;
     uint sourceTransformCount;
-    uint pad0;
+    uint perCellSurfelLimit;
     uint pad1;
     uint pad2;
 };
 
 [[vk::push_constant]] UpdatePushConstants push;
+
+// Surfels that are unreferenced for this long while their cell is saturated are
+// dead weight: they cannot enter the compact map ahead of referenced entries and
+// nothing else reclaims them below the global pressure threshold. Foliage cells
+// otherwise only ever grow, and the frame time never recovers without a reset.
+static const uint SURFEL_PT_OVERFLOW_EVICTION_FRAMES = 240u;
+
+bool isStrandedInSaturatedCell(SurfelPathTracerSurfel surfel, int3 centerCoord, uint frameIndex)
+{
+    if (!isCellCoordValid(centerCoord, push.cellDimension))
+    {
+        return false;
+    }
+    // cellInfoBuffer still holds last frame's map at this point (CellInfo runs
+    // after Update). A saturated cell reports surfelCount == limit.
+    uint cellIndex = flattenCameraRelativeCellCoord(centerCoord, push.cellDimension);
+    if (cellInfoBuffer[cellIndex].surfelCount < max(push.perCellSurfelLimit, 1u))
+    {
+        return false;
+    }
+    uint ageSinceRef = frameIndex >= surfel.lastReferencedFrame ? frameIndex - surfel.lastReferencedFrame : 0u;
+    return ageSinceRef > SURFEL_PT_OVERFLOW_EVICTION_FRAMES;
+}
 
 bool refreshAnchoredSurfel(uint surfelIndex, inout SurfelPathTracerSurfel surfel)
 {
@@ -188,7 +212,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
         float aliveRatio = 1.0 - saturate(float(deadCount) / float(max(push.maxSurfels, 1u)));
         float distanceToCamera = length(surfel.position - ubo.cameraPos.xyz);
         if (!reenteredCurrentWindow &&
-            shouldRecycleSurfel(surfel, frameIndex, distanceToCamera, aliveRatio))
+            (shouldRecycleSurfel(surfel, frameIndex, distanceToCamera, aliveRatio) ||
+             isStrandedInSaturatedCell(surfel, centerCoord, frameIndex)))
         {
             if (pushDeadSurfel(surfelIndex, push.maxSurfels))
             {

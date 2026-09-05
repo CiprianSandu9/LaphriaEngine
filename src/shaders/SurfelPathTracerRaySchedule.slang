@@ -52,6 +52,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // spread across the whole window instead of pinned to the highest z-slabs.
     uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
     uint rotation = pcgHash(frameIndex ^ 0x2C1B3C6Du) % max(push.cellCount, 1u);
+    // Budget scaling from last frame's demand (see PREVIOUS_DEMANDED_RAYS).
+    // Requests never drop below minRaysPerSurfel; if even that exceeds the
+    // budget, the rotated first-come clamp below still applies.
+    uint previousDemand = counters.Load(SURFEL_PT_COUNTER_PREVIOUS_DEMANDED_RAYS_OFFSET);
+    float budgetScale = previousDemand > push.maxRays
+                        ? float(push.maxRays) / float(previousDemand)
+                        : 1.0;
     uint cellIndex = tid.x + rotation;
     if (cellIndex >= push.cellCount) {
         cellIndex -= push.cellCount;
@@ -91,6 +98,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
                                                          push.minRaysPerSurfel,
                                                          push.maxRaysPerSurfel,
                                                          push.varianceSensitivity);
+        rayRequestCount = max(push.minRaysPerSurfel,
+                              uint(round(float(rayRequestCount) * budgetScale)));
         if (rayRequestCount == 0u || push.maxRays == 0u) {
             continue;
         }

@@ -2128,7 +2128,8 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                        surfelSettings.minRaysPerSurfel,
 	                                        surfelSettings.maxRaysPerSurfel,
 	                                        surfelSettings.varianceSensitivity,
-	                                        surfelSettings.lockSurfels);
+	                                        surfelSettings.lockSurfels,
+	                                        surfelPathTracerResources.perCellSurfelLimitCapacity());
 	writeSurfelTimestamp(kSurfelTS_UpdateEnd);
 
 	writeSurfelTimestamp(kSurfelTS_CellInfoStart);

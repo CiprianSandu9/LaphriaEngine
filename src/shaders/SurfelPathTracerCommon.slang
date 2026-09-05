@@ -53,6 +53,10 @@ static const uint SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET = 12u;
 static const uint SURFEL_PT_COUNTER_FILLED_CELLS_OFFSET = 16u;
 static const uint SURFEL_PT_COUNTER_REJECTED_STORES_OFFSET = 20u;
 static const uint SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET = 24u;
+// Last frame's unclamped demand, copied by Prepare before DEMANDED is zeroed.
+// RaySchedule scales every request by budget / previousDemand so an over-budget
+// frame degrades all surfels evenly instead of starving whoever comes last.
+static const uint SURFEL_PT_COUNTER_PREVIOUS_DEMANDED_RAYS_OFFSET = 28u;
 static const uint SURFEL_PT_COUNTER_RECYCLED_SURFELS_OFFSET = 32u;
 static const uint SURFEL_PT_COUNTER_SPAWNED_SURFELS_OFFSET = 36u;
 static const uint SURFEL_PT_COUNTER_REMOVED_SURFELS_OFFSET = 40u;
@@ -149,7 +153,7 @@ struct SurfelPathTracerCounters {
     uint filledCells;
     uint rejectedStores;
     uint frameIndex;
-    uint pad0;
+    uint previousDemandedRays;
     uint recycledSurfels;
     uint spawnedSurfels;
     uint removedSurfels;
@@ -338,7 +342,9 @@ static const uint SURFEL_PT_CELL_RETENTION_HASH_BITS = 32u - SURFEL_PT_CELL_ENTR
 static const uint SURFEL_PT_CELL_RETENTION_HASH_MASK = (1u << SURFEL_PT_CELL_RETENTION_HASH_BITS) - 1u;
 // Stale entries re-shuffle their tie-break every 2^shift frames. A surfel that
 // rotates back into the map needs a few frames to be traced and referenced.
-static const uint SURFEL_PT_CELL_RETENTION_ROTATION_SHIFT = 2u;
+// 16 frames: with every contributing surfel stamped by the resolve, "stale"
+// now means unused by the screen, so the rotation can be slow.
+static const uint SURFEL_PT_CELL_RETENTION_ROTATION_SHIFT = 4u;
 
 // Retention key for the compact cell map: smaller keys survive when a cell holds
 // more surfels than its limit. The key is the age since a visible pixel last
@@ -383,6 +389,15 @@ uint packCellSurfelEntry(uint surfelIndex, int3 absoluteCellCoord, uint retentio
                     SURFEL_PT_CELL_ENTRY_PRIORITY_MASK;
     return (priority << SURFEL_PT_CELL_ENTRY_INDEX_BITS) |
            (surfelIndex & SURFEL_PT_CELL_ENTRY_INDEX_MASK);
+}
+
+// Retention key of a packed compact-map entry (63 = stale, 0..9 = warm-up or
+// referenced within the last few frames). Lets placement see whether a cell's
+// map has any slot a new warm-up surfel could actually take.
+uint unpackCellRetentionKey(uint entry)
+{
+    return (entry >> (SURFEL_PT_CELL_ENTRY_INDEX_BITS + SURFEL_PT_CELL_RETENTION_HASH_BITS)) &
+           SURFEL_PT_CELL_RETENTION_KEY_MAX;
 }
 
 uint unpackCellSurfelIndex(uint entry)
@@ -568,6 +583,11 @@ bool sampleSurfelIrradianceCell(float3 position,
     float weightSum = 0.0;
     uint samplesVisited = 0u;
     uint softBudget = max(maxSamples, 1u);
+    // Zero-weight entries (wrong face, out of range) are read but not counted
+    // by the soft budget, so an overflowing foliage cell could cost thousands of
+    // struct reads per ray. Bound the walk like the screen-space resolve does.
+    uint entriesInspected = 0u;
+    uint maxEntriesInspected = softBudget * 8u;
     // Search the 3x3x3 neighbourhood (searchShells = 1), centre cell first,
     // exactly like the screen-space resolve. The support radius is clamped to the
     // cell size on the host, so every surfel that can reach `position` lives in
@@ -584,7 +604,7 @@ bool sampleSurfelIrradianceCell(float3 position,
         for (int y = -shell; y <= shell; ++y)
         for (int x = -shell; x <= shell; ++x)
         {
-            if (samplesVisited >= softBudget)
+            if (samplesVisited >= softBudget || entriesInspected >= maxEntriesInspected)
             {
                 break;
             }
@@ -614,6 +634,7 @@ bool sampleSurfelIrradianceCell(float3 position,
                     continue;
                 }
 
+                entriesInspected += 1u;
                 float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
                 float normalWeight = saturate(dot(normal, surfelNormal));
                 // Same support radius and squared falloff as the screen-space

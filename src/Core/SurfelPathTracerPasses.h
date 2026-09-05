@@ -46,7 +46,8 @@ class SurfelPathTracerPasses
 	                      uint32_t minRaysPerSurfel,
 	                      uint32_t maxRaysPerSurfel,
 	                      float varianceSensitivity,
-	                      bool lockSurfels) const;
+	                      bool lockSurfels,
+	                      uint32_t perCellSurfelLimit) const;
 
 	void recordCellInfoPass(const vk::raii::CommandBuffer &commandBuffer,
 	                        const SurfelPathTracerPipelines &pipelines,

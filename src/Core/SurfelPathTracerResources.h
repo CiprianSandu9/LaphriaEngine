@@ -121,7 +121,7 @@ struct SurfelPathTracerCounters
 	uint32_t filledCells = 0;
 	uint32_t rejectedStores = 0;
 	uint32_t frameIndex = 0;
-	uint32_t pad0 = 0;
+	uint32_t previousDemandedRays = 0;
 	uint32_t recycledSurfels = 0;
 	uint32_t spawnedSurfels = 0;
 	uint32_t removedSurfels = 0;

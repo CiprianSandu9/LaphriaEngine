@@ -27,6 +27,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     uint cellCounterCount = 1u + cellCount * 2u;
 
     if (index == 0u) {
+        counters.Store(SURFEL_PT_COUNTER_PREVIOUS_DEMANDED_RAYS_OFFSET,
+                       push.resetPersistent != 0u ? 0u : counters.Load(SURFEL_PT_COUNTER_DEMANDED_RAYS_OFFSET));
         counters.Store(SURFEL_PT_COUNTER_DIRTY_SURFELS_OFFSET, 0u);
         counters.Store(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET, 0u);
         counters.Store(SURFEL_PT_COUNTER_FILLED_CELLS_OFFSET, 0u);

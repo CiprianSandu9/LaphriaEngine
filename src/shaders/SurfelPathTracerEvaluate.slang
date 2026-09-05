@@ -45,6 +45,17 @@ static const uint SURFEL_PT_EVALUATE_RESOLVE = 1u;
 // an equally massive removal cascade the next frame (black holes, then refill).
 static const uint SURFEL_PT_MAX_PLACEMENTS_PER_CELL_PER_FRAME = 2u;
 static const uint SURFEL_PT_MAX_REMOVALS_PER_CELL_PER_FRAME = 2u;
+// Removal only takes surfels the screen has stopped using. With every
+// contributor stamped within a few frames, a candidate referenced more recently
+// than this is still being averaged somewhere; removing it just triggered a
+// placement next to it (spawned ~= removed ~= 170 per frame in foliage).
+static const uint SURFEL_PT_REMOVAL_MIN_UNREFERENCED_FRAMES = 32u;
+// A saturated cell (more surfels than the compact map keeps) shows placement an
+// incomplete picture: a pixel whose surfel was dropped from the map reads
+// coverage 0 and places a duplicate, which displaces another entry, and so on
+// without bound (90k surfels and 1.5M rays in the ivy). Placement into such a
+// cell is limited to true zero coverage and to one frame in this many per cell.
+static const uint SURFEL_PT_SATURATED_PLACEMENT_INTERVAL = 32u;
 
 // The per-cell cursor slots of cellCounterBuffer are free once CellToSurfel has
 // run. Low 16 bits count placements this frame on top of the cursor's final
@@ -101,16 +112,33 @@ struct SurfelQueryResult {
     // weight). Removing it costs the screen the least; the old code removed the
     // closest surfel, i.e. the one this pixel depended on most.
     uint removalCandidateIndex;
+    // Largest retention key among the centre cell's compact-map entries. If no
+    // entry is worse than a warm-up surfel, a placement here could never enter
+    // the map: it would be a zombie that costs rays and dies unreferenced.
+    uint maxCenterCellRetentionKey;
 };
+
+// Contributors below this weight are averaged but not stamped as referenced.
+// Stamping everything with a positive weight inflated the referenced set of
+// dense cells far past the compact-map limit and made membership thrash.
+static const float SURFEL_PT_CONTRIBUTOR_STAMP_MIN_WEIGHT = 0.2;
 
 // One 3x3x3 walk serves coverage, closest-surfel and the resolved radiance.
 // The resolve used to run this loop twice per pixel (coverage, then radiance).
-SurfelQueryResult querySurfels(float3 position, float3 normal, bool stampClosest) {
+// Only the closest surfel is stamped by every pixel. The other contributors are
+// stamped by a sparse pixel subset (stampAllContributors), and only when their
+// stamp is older than a few frames, so the compact map's retention key sees
+// every surfel the screen averages without an atomic per contributor per pixel.
+static const uint SURFEL_PT_CONTRIBUTOR_STAMP_STRIDE = 16u;
+static const uint SURFEL_PT_CONTRIBUTOR_STAMP_MAX_AGE = 4u;
+
+SurfelQueryResult querySurfels(float3 position, float3 normal, bool stampClosest, bool stampAllContributors) {
     SurfelQueryResult result;
     result.coverage = 0.0;
     result.radiance = float3(0.0);
     result.closestSurfelIndex = SURFEL_PT_INVALID_INDEX;
     result.removalCandidateIndex = SURFEL_PT_INVALID_INDEX;
+    result.maxCenterCellRetentionKey = 0u;
 
     uint dim = max(push.cellDimension, 1u);
     int3 centerCoord = cameraRelativeCellCoord(position, ubo.cameraPos.xyz, push.cellSize);
@@ -157,9 +185,14 @@ SurfelQueryResult querySurfels(float3 position, float3 normal, bool stampClosest
                     // soft budget so the retained set, not insertion order,
                     // determines the result.
                     for (uint slot = 0u; slot < cellInfo.surfelCount; ++slot) {
-                        uint surfelIndex = unpackCellSurfelIndex(cellToSurfelBuffer[cellInfo.surfelOffset + slot]);
+                        uint entry = cellToSurfelBuffer[cellInfo.surfelOffset + slot];
+                        uint surfelIndex = unpackCellSurfelIndex(entry);
                         if (surfelIndex == SURFEL_PT_INVALID_INDEX || surfelIndex >= push.maxSurfels) {
                             continue;
+                        }
+                        if (shell == 0) {
+                            result.maxCenterCellRetentionKey =
+                                max(result.maxCenterCellRetentionKey, unpackCellRetentionKey(entry));
                         }
 
                         SurfelPathTracerSurfel surfel = surfelBuffer[surfelIndex];
@@ -198,6 +231,14 @@ SurfelQueryResult querySurfels(float3 position, float3 normal, bool stampClosest
                             seedRadiance += contribution;
                             seedWeightSum += resolveWeight;
                         }
+                        if (stampAllContributors &&
+                            weight >= SURFEL_PT_CONTRIBUTOR_STAMP_MIN_WEIGHT &&
+                            frameIndex > surfel.lastReferencedFrame + SURFEL_PT_CONTRIBUTOR_STAMP_MAX_AGE) {
+                            uint previousStamp = 0u;
+                            InterlockedMax(surfelBuffer[surfelIndex].lastReferencedFrame,
+                                           frameIndex,
+                                           previousStamp);
+                        }
                         if (weight > bestWeight) {
                             bestWeight = weight;
                             result.closestSurfelIndex = surfelIndex;
@@ -205,10 +246,12 @@ SurfelQueryResult querySurfels(float3 position, float3 normal, bool stampClosest
                         // Never remove a surfel that has not been integrated or
                         // is still warming up; it has not had a chance to be
                         // referenced, and freeing it just re-triggers placement.
-                        bool removable = sampled && surfel.shortMeanAndLife.w > SURFEL_PT_WARMUP_LIFE;
                         uint age = frameIndex >= surfel.lastReferencedFrame
                                        ? frameIndex - surfel.lastReferencedFrame
                                        : 0u;
+                        bool removable = sampled &&
+                                         surfel.shortMeanAndLife.w > SURFEL_PT_WARMUP_LIFE &&
+                                         age >= SURFEL_PT_REMOVAL_MIN_UNREFERENCED_FRAMES;
                         if (removable &&
                             (age > removalAge || (age == removalAge && weight < removalWeight))) {
                             removalAge = age;
@@ -357,7 +400,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 position = reconstructWorldPosition(pixel, depth);
 
     if (push.mode == SURFEL_PT_EVALUATE_GENERATE) {
-        SurfelQueryResult query = querySurfels(position, normal, false);
+        SurfelQueryResult query = querySurfels(position, normal, false, false);
         float coverage = query.coverage;
         bool wantsPlacement = push.lockSurfels == 0u &&
                               push.enablePlacement != 0u &&
@@ -379,6 +422,19 @@ void main(uint3 tid : SV_DispatchThreadID) {
                                                                 push.cellSize,
                                                                 push.cellDimension);
         wantsPlacement = wantsPlacement && placementCell != SURFEL_PT_INVALID_INDEX;
+        if (wantsPlacement) {
+            uint rawCount = cellCounterBuffer.Load((1u + placementCell) * 4u);
+            bool saturated = rawCount > cellInfoBuffer[placementCell].surfelCount;
+            if (saturated) {
+                uint frameIndex = counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET);
+                bool placementFrame = ((pcgHash(placementCell ^ 0x7F4A7C15u) + frameIndex) %
+                                       SURFEL_PT_SATURATED_PLACEMENT_INTERVAL) == 0u;
+                // A warm-up surfel enters the map at SURFEL_PT_CELL_RETENTION_WARMUP_KEY;
+                // if every retained entry ranks better, the placement is a zombie.
+                bool canEnterMap = query.maxCenterCellRetentionKey > SURFEL_PT_CELL_RETENTION_WARMUP_KEY;
+                wantsPlacement = coverage <= 0.0001 && placementFrame && canEnterMap;
+            }
+        }
         bool placeFromThisLane = wantsPlacement && WavePrefixCountBits(wantsPlacement) == 0u;
         if (placeFromThisLane && claimCellPlacement(placementCell)) {
             float radius = surfelRadius(depth, push.surfelTargetArea, push.surfelMinRadius, push.cellSize * push.surfelMaxRadiusScale);
@@ -412,6 +468,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
         return;
     }
 
-    SurfelQueryResult query = querySurfels(position, normal, true);
+    // A rotating 1-in-16 pixel subset stamps all of its contributors; any surfel
+    // covering more than a handful of pixels is refreshed every frame.
+    uint stampPhase = (pixel.x + pixel.y * 7u + counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET)) %
+                      SURFEL_PT_CONTRIBUTOR_STAMP_STRIDE;
+    SurfelQueryResult query = querySurfels(position, normal, true, stampPhase == 0u);
     outputImage[pixel] = float4(query.radiance, query.coverage);
 }
