@@ -1213,6 +1213,10 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         showItemTooltip("Use learned 6x6 directional radiance distributions. Changing this resets the cache.");
         ImGui::Checkbox("Surfel Termination", &settings.enableSurfelTermination);
         showItemTooltip("At the final path bounce, use nearby cached irradiance when available.");
+        ImGui::Checkbox("Unoriented Foliage GI", &settings.unorientedFoliageGi);
+        showItemTooltip("Alpha-tested materials (ivy, curtains) place no surfels and resolve with an unoriented normal weight, "
+                        "borrowing the cache of the surfaces around them. Bounds the population and ray cost in dense foliage; "
+                        "leaves lose per-face directional GI. Reset Surfels after toggling to drop existing foliage surfels.");
         if (ImGui::Checkbox("Original-Style GI Normalization", &settings.useOriginalStyleGiNormalization)) {
             settings.resetSurfels = true;
         }

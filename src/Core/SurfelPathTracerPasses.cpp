@@ -113,6 +113,7 @@ struct SurfelEvaluatePushConstants
 	uint32_t maxSurfelSamplesPerQuery = 1;
 	uint32_t perCellSurfelLimit = 1;
 	float surfelSupportRadius = 0.25f;
+	uint32_t unorientedFoliage = 1;
 };
 
 struct SurfelReflectionPushConstants
@@ -524,7 +525,8 @@ void SurfelPathTracerPasses::recordEvaluatePass(const vk::raii::CommandBuffer &c
                                                 bool enableSurfelRemoval,
                                                 uint32_t maxSurfelSamplesPerQuery,
                                                 uint32_t perCellSurfelLimit,
-                                                vk::Extent2D extent) const
+                                                vk::Extent2D extent,
+                                                bool unorientedFoliage) const
 {
 	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.evaluatePipeline);
 	const std::array descriptorSets = {imageSet, globalSet};
@@ -552,7 +554,8 @@ void SurfelPathTracerPasses::recordEvaluatePass(const vk::raii::CommandBuffer &c
 	    .enableRemoval = enableSurfelRemoval ? 1u : 0u,
 	    .maxSurfelSamplesPerQuery = std::clamp(maxSurfelSamplesPerQuery, 1u, 128u),
 	    .perCellSurfelLimit = std::max(perCellSurfelLimit, 1u),
-	    .surfelSupportRadius = std::clamp(surfelSupportRadius, 0.0001f, std::max(cellSize, 0.0001f))};
+	    .surfelSupportRadius = std::clamp(surfelSupportRadius, 0.0001f, std::max(cellSize, 0.0001f)),
+	    .unorientedFoliage = unorientedFoliage ? 1u : 0u};
 	commandBuffer.pushConstants<SurfelEvaluatePushConstants>(*pipelines.computePipelineLayout,
 	                                                         vk::ShaderStageFlagBits::eCompute,
 	                                                         0,

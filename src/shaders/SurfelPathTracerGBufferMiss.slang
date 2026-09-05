@@ -11,6 +11,7 @@ struct SurfelPathTracerGBufferPayload {
     float dielectricSpec;
     float ao;
     float3 emissive;
+    float alphaTested;
     uint sourceNodeId;
     uint sourceInstanceId;
     uint sourceInstanceCustomIndex;

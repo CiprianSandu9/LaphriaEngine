@@ -11,6 +11,7 @@ struct SurfelPathTracerGBufferPayload {
     float dielectricSpec;
     float ao;
     float3 emissive;
+    float alphaTested;
     uint sourceNodeId;
     uint sourceInstanceId;
     uint sourceInstanceCustomIndex;
@@ -46,6 +47,7 @@ SurfelPathTracerGBufferPayload makeEmptyGBufferPayload()
     payload.dielectricSpec = 1.0;
     payload.ao = 1.0;
     payload.emissive = float3(0.0);
+    payload.alphaTested = 0.0;
     payload.sourceNodeId = SURFEL_PT_INVALID_INDEX;
     payload.sourceInstanceId = SURFEL_PT_INVALID_INDEX;
     payload.sourceInstanceCustomIndex = SURFEL_PT_INVALID_INDEX;
@@ -181,5 +183,6 @@ void main() {
     gBufferMotionMaterial[launchID] = float4(motion, float(payload.modelId), float(payload.materialIndex));
     gBufferAlbedo[launchID] = float4(payload.baseColor, 1.0);
     gBufferMaterial[launchID] = float4(payload.roughness, payload.metallic, payload.dielectricSpec, payload.ao);
-    gBufferEmissive[launchID] = float4(payload.emissive, 0.0);
+    // Alpha channel: alpha-tested flag consumed by the surfel evaluate pass.
+    gBufferEmissive[launchID] = float4(payload.emissive, payload.alphaTested);
 }

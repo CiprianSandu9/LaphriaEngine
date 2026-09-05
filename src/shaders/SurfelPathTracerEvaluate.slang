@@ -9,6 +9,7 @@
 [[vk::binding(11, 0)]] RWStructuredBuffer<SurfelPathTracerCellInfo> cellInfoBuffer;
 [[vk::binding(12, 0)]] RWByteAddressBuffer cellCounterBuffer;
 [[vk::binding(13, 0)]] RWStructuredBuffer<uint> cellToSurfelBuffer;
+[[vk::binding(22, 0)]] RWTexture2D<float4> gBufferEmissive;
 [[vk::binding(28, 0)]] StructuredBuffer<SurfelPathTracerPixelSource> gBufferSourceBuffer;
 [[vk::binding(29, 0)]] RWStructuredBuffer<SurfelPathTracerSource> surfelSourceBuffer;
 
@@ -33,6 +34,10 @@ struct EvaluatePushConstants {
     uint maxSurfelSamplesPerQuery;
     uint perCellSurfelLimit;
     float surfelSupportRadius;
+    // Alpha-tested pixels (foliage, curtains) place no surfels and resolve with
+    // an unoriented normal weight. Every leaf has its own orientation and two
+    // faces, so oriented placement converged toward one surfel per leaf face.
+    uint unorientedFoliage;
 };
 
 [[vk::push_constant]] EvaluatePushConstants push;
@@ -132,7 +137,7 @@ static const float SURFEL_PT_CONTRIBUTOR_STAMP_MIN_WEIGHT = 0.2;
 static const uint SURFEL_PT_CONTRIBUTOR_STAMP_STRIDE = 16u;
 static const uint SURFEL_PT_CONTRIBUTOR_STAMP_MAX_AGE = 4u;
 
-SurfelQueryResult querySurfels(float3 position, float3 normal, bool stampClosest, bool stampAllContributors) {
+SurfelQueryResult querySurfels(float3 position, float3 normal, bool stampClosest, bool stampAllContributors, bool unoriented) {
     SurfelQueryResult result;
     result.coverage = 0.0;
     result.radiance = float3(0.0);
@@ -202,7 +207,8 @@ SurfelQueryResult querySurfels(float3 position, float3 normal, bool stampClosest
 
                         entriesInspected += 1u;
                         float3 surfelNormal = unpackNormalOctahedral(surfel.packedNormal);
-                        float normalWeight = saturate(dot(normal, surfelNormal));
+                        float normalAlignment = dot(normal, surfelNormal);
+                        float normalWeight = unoriented ? abs(normalAlignment) : saturate(normalAlignment);
                         // Coverage, resolve, termination and sharing all measure
                         // support with the same radius (clamped to the cell size
                         // on the host, so the fixed +/-1 query neighbourhood stays
@@ -398,9 +404,15 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     float3 normal = normalize(rawNormal);
     float3 position = reconstructWorldPosition(pixel, depth);
+    bool foliage = push.unorientedFoliage != 0u && gBufferEmissive[pixel].a > 0.5;
 
     if (push.mode == SURFEL_PT_EVALUATE_GENERATE) {
-        SurfelQueryResult query = querySurfels(position, normal, false, false);
+        if (foliage) {
+            // Foliage neither places nor removes: it borrows the cache of the
+            // surfaces around it.
+            return;
+        }
+        SurfelQueryResult query = querySurfels(position, normal, false, false, false);
         float coverage = query.coverage;
         bool wantsPlacement = push.lockSurfels == 0u &&
                               push.enablePlacement != 0u &&
@@ -472,6 +484,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // covering more than a handful of pixels is refreshed every frame.
     uint stampPhase = (pixel.x + pixel.y * 7u + counters.Load(SURFEL_PT_COUNTER_FRAME_INDEX_OFFSET)) %
                       SURFEL_PT_CONTRIBUTOR_STAMP_STRIDE;
-    SurfelQueryResult query = querySurfels(position, normal, true, stampPhase == 0u);
+    SurfelQueryResult query = querySurfels(position, normal, true, stampPhase == 0u, foliage);
     outputImage[pixel] = float4(query.radiance, query.coverage);
 }

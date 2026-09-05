@@ -11,6 +11,9 @@ struct SurfelPathTracerGBufferPayload {
     float dielectricSpec;
     float ao;
     float3 emissive;
+    // 1 for alpha-tested materials (foliage, curtains): the surfel cache treats
+    // those as unoriented thin geometry, see Evaluate.
+    float alphaTested;
     uint sourceNodeId;
     uint sourceInstanceId;
     uint sourceInstanceCustomIndex;
@@ -46,6 +49,7 @@ struct GBufferSurface {
     float dielectricSpec;
     float ao;
     float3 emissive;
+    float alphaTested;
     uint sourceNodeId;
     uint sourceInstanceId;
     uint sourceInstanceCustomIndex;
@@ -172,6 +176,7 @@ GBufferSurface decodeGBufferSurface(uint instanceId, uint geometryIndex, uint pr
     surface.dielectricSpec = max(dielectricSpec + f0.x * 0.0, 0.0);
     surface.ao = ao;
     surface.emissive = max(emissive, float3(0.0));
+    surface.alphaTested = mat.alphaCutoff > 0.0 ? 1.0 : 0.0;
     surface.sourceInstanceId = sourceInstanceId;
     surface.sourceNodeId = sourceInstance.sourceNodeId;
     surface.sourceInstanceCustomIndex = sourceInstanceCustomIndex;
@@ -195,6 +200,7 @@ void main(inout SurfelPathTracerGBufferPayload payload, in BuiltInTriangleInters
     payload.dielectricSpec = surface.dielectricSpec;
     payload.ao = surface.ao;
     payload.emissive = surface.emissive;
+    payload.alphaTested = surface.alphaTested;
     payload.sourceNodeId = surface.sourceNodeId;
     payload.sourceInstanceId = surface.sourceInstanceId;
     payload.sourceInstanceCustomIndex = surface.sourceInstanceCustomIndex;

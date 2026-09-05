@@ -129,7 +129,8 @@ class SurfelPathTracerPasses
 	                        bool enableSurfelRemoval,
 	                        uint32_t maxSurfelSamplesPerQuery,
 	                        uint32_t perCellSurfelLimit,
-	                        vk::Extent2D extent) const;
+	                        vk::Extent2D extent,
+	                        bool unorientedFoliage) const;
 
 	void recordReflectionPass(const vk::raii::CommandBuffer &commandBuffer,
 	                          const SurfelPathTracerPipelines &pipelines,

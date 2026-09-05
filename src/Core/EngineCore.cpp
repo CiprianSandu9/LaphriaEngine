@@ -2182,7 +2182,8 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 		                                          surfelSettings.enableSurfelRemoval,
 		                                          surfelSettings.maxSurfelSamplesPerQuery,
 		                                          surfelPathTracerResources.perCellSurfelLimitCapacity(),
-		                                          swapchain.extent);
+		                                          swapchain.extent,
+		                                          surfelSettings.unorientedFoliageGi);
 	}
 	writeSurfelTimestamp(kSurfelTS_GenerateEnd);
 
@@ -2270,7 +2271,8 @@ void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuff
 	                                          false,
 	                                          surfelSettings.maxSurfelSamplesPerQuery,
 	                                          surfelPathTracerResources.perCellSurfelLimitCapacity(),
-	                                          swapchain.extent);
+	                                          swapchain.extent,
+	                                          surfelSettings.unorientedFoliageGi);
 	writeSurfelTimestamp(kSurfelTS_EvaluateEnd);
 
 	writeSurfelTimestamp(kSurfelTS_ReflectionStart);

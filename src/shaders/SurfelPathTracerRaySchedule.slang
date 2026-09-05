@@ -98,8 +98,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
                                                          push.minRaysPerSurfel,
                                                          push.maxRaysPerSurfel,
                                                          push.varianceSensitivity);
-        rayRequestCount = max(push.minRaysPerSurfel,
-                              uint(round(float(rayRequestCount) * budgetScale)));
         if (rayRequestCount == 0u || push.maxRays == 0u) {
             continue;
         }
@@ -118,8 +116,12 @@ void main(uint3 tid : SV_DispatchThreadID) {
             }
         }
 
-        // Record the unclamped demand so the budget saturation ratio is observable.
+        // Record the unscaled demand so the budget saturation ratio is observable
+        // and so next frame's budgetScale is derived from real demand (recording
+        // the scaled request made the scale relax to 1 every other frame).
         counters.InterlockedAdd(SURFEL_PT_COUNTER_DEMANDED_RAYS_OFFSET, rayRequestCount);
+        rayRequestCount = max(push.minRaysPerSurfel,
+                              uint(round(float(rayRequestCount) * budgetScale)));
 
         uint rayOffset = 0u;
         counters.InterlockedAdd(SURFEL_PT_COUNTER_REQUESTED_RAYS_OFFSET,

@@ -129,17 +129,21 @@ public:
         bool enableReflectionFilter = true;
         bool enableBilateralCleanup = true;
         bool enableTaa = true;
-        // 400k surfels keep Sponza's foliage-driven population below the 85% pressure
-        // threshold, so placement never waits for the 480-frame eviction clock.
-        uint32_t maxSurfels = 400000;
-        uint32_t maxRaysPerFrame = 400000 * 8; // 3.2M rays, 102 MiB ray buffer (cap 128 MiB)
-        // 0.4 m at 96^3 (38 m window): Cell Size is the lookup window/index granularity
-        // only; the effective surfel size is surfelSupportRadius below (clamped to Cell
-        // Size). Smaller cells keep the per-pixel 27-cell resolve walk short; at 2.0 m a
-        // cell held far more surfels than the compact map kept, starving ray scheduling
-        // and the resolve. Tuned 2026-09-05 for the performance/quality balance.
+        // 250k: with foliage no longer placing surfels, Sponza settles well below this;
+        // the 85% pressure threshold (212k) is the safety net, not the steady state.
+        uint32_t maxSurfels = 250000;
+        // Hard per-frame ray cost cap: RaySchedule scales every request by
+        // budget / last frame's demand (never below Min Rays/Surfel). 500k rays is
+        // ~10-18 ms depending on how much foliage the paths traverse. 16 MiB ray buffer.
+        uint32_t maxRaysPerFrame = 500000;
+        // 0.4 m at 128^3 (51 m window, covers Sponza): Cell Size is the lookup
+        // window/index granularity only; the effective surfel size is
+        // surfelSupportRadius below (clamped to Cell Size). Smaller cells keep the
+        // per-pixel 27-cell resolve walk short; at 2.0 m a cell held far more surfels
+        // than the compact map kept, starving ray scheduling and the resolve.
+        // Tuned 2026-09-05 for the performance/quality balance.
         float cellSize = 0.4f;
-        uint32_t cellDimension = 96;
+        uint32_t cellDimension = 128;
         uint32_t perCellSurfelLimit = 128;      // compact-map slots per cell; the map itself is sized per surfel (cellMapEntryCount)
         uint32_t irradianceAtlasWidth = 4096;   // 4096x4096 tiles of 6x6 = 465 124 surfels of capacity
         uint32_t irradianceAtlasHeight = 4096;
@@ -156,9 +160,10 @@ public:
         // the cache too sparse once coverage measured the real support radius.
         float removalThreshold = 12.0f;
         // Multiplies the *relative* inconsistency (|short - long| / luminance) before it
-        // maps min..max rays; 10 sends any surfel above ~10% relative noise to the full
-        // budget, which is what removes the shimmer in shadowed areas.
-        float varianceSensitivity = 10.0f;
+        // maps min..max rays; 5 sends any surfel above ~20% relative noise to the full
+        // budget, which is what removes the shimmer in shadowed areas without pinning
+        // every foliage-adjacent surfel at 64 rays.
+        float varianceSensitivity = 5.0f;
         float surfelTargetArea = 16.0f;
         float surfelMinRadius = 0.05f;
         float surfelMaxRadiusScale = 2.0f;
@@ -167,10 +172,16 @@ public:
         // Decoupled from Cell Size (it used to be 0.75 x Cell Size); clamped to Cell
         // Size so the fixed +/-1 cell lookup neighborhood stays complete.
         float surfelSupportRadius = 0.25f;
-        uint32_t maxSurfelSamplesPerQuery = 64;
+        // 32: halves the 27-cell resolve walk in dense cells versus 64 (2026-09-05).
+        uint32_t maxSurfelSamplesPerQuery = 32;
         uint32_t maxRadianceSharingSamples = 32;
         bool enableGuidedSampling = false;
         bool enableSurfelTermination = true;
+        // Alpha-tested materials (ivy, curtains) place no surfels and resolve with an
+        // unoriented normal weight, borrowing the cache of surrounding surfaces. Oriented
+        // placement converged toward one surfel per leaf face (80k+ surfels, ray budget
+        // saturated) in the Sponza ivy.
+        bool unorientedFoliageGi = true;
         // Surfels store irradiance (Integrate weights each ray by cos/pdf), so the
         // physically consistent diffuse consumption is albedo / pi, matching the
         // direct-lighting BRDF. "Original style" (albedo only) over-brightens all

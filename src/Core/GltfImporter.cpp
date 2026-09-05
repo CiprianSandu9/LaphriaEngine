@@ -565,6 +565,24 @@ void GltfImporter::populateMaterials(const fastgltf::Asset &gltf, ModelResource 
 		pbrMat.data.baseColorFactor = glm::vec4(mat.pbrData.baseColorFactor[0], mat.pbrData.baseColorFactor[1], mat.pbrData.baseColorFactor[2], mat.pbrData.baseColorFactor[3]);
 		pbrMat.data.metallicFactor  = mat.pbrData.metallicFactor;
 		pbrMat.data.roughnessFactor = mat.pbrData.roughnessFactor;
+		// alphaCutoff doubles as the "alpha-tested" flag: the any-hit shaders skip the
+		// texture fetch when it is 0, and the surfel cache treats > 0 as thin foliage.
+		// The glTF default of 0.5 only has meaning in MASK mode; leaving it on OPAQUE
+		// materials marked every surface as foliage. BLEND keeps the previous 0.5 test
+		// so translucent cloth still cuts out in the ray-traced paths.
+		switch (mat.alphaMode)
+		{
+			case fastgltf::AlphaMode::Opaque:
+				pbrMat.data.alphaCutoff = 0.0f;
+				break;
+			case fastgltf::AlphaMode::Mask:
+				pbrMat.data.alphaCutoff = std::max(mat.alphaCutoff, 0.001f);
+				break;
+			case fastgltf::AlphaMode::Blend:
+			default:
+				pbrMat.data.alphaCutoff = 0.5f;
+				break;
+		}
 
 		if (mat.pbrData.baseColorTexture.has_value())
 		{
