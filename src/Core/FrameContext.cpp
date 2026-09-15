@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
 
 using namespace Laphria;
@@ -26,10 +27,27 @@ void destroyImagesAndReleaseAllocations(std::vector<VulkanUtils::VmaImage> &imag
 		image.reset();
 	}
 }
+
+void unmapBuffers(std::vector<VulkanUtils::VmaBuffer> &buffers, std::vector<void *> &mappedPointers)
+{
+	const size_t mappedCount = std::min(buffers.size(), mappedPointers.size());
+	for (size_t i = 0; i < mappedCount; ++i)
+	{
+		if (mappedPointers[i] && *buffers[i].memory)
+		{
+			buffers[i].memory.unmapMemory();
+		}
+		mappedPointers[i] = nullptr;
+	}
+	mappedPointers.clear();
+}
 } // namespace
 
 FrameContext::~FrameContext()
 {
+	unmapBuffers(uniformBuffers, uniformBuffersMapped);
+	unmapBuffers(tlasInstanceBuffers, tlasInstanceBuffersMapped);
+
 	destroyImagesAndReleaseAllocations(shadowImages);
 	destroyImagesAndReleaseAllocations(depthImages);
 	destroyImagesAndReleaseAllocations(storageImages);
@@ -242,8 +260,9 @@ void FrameContext::createRayTracingOutputImages(const VulkanDevice &dev, const S
 }
 
 void FrameContext::createUniformBuffers(const VulkanDevice &dev) {
+	unmapBuffers(uniformBuffers, uniformBuffersMapped);
+	destroyBuffersAndReleaseAllocations(uniformBuffers);
     uniformBuffers.clear();
-    uniformBuffersMapped.clear();
 
     // Host-visible + host-coherent so we can memcpy each frame without an explicit flush.
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -545,7 +564,7 @@ void FrameContext::createHistoryResources(const VulkanDevice &dev, const Swapcha
             VulkanUtils::createImage(dev.logicalDevice, dev.physicalDevice,
                                      swapchain.extent.width, swapchain.extent.height,
                                      vk::Format::eR16G16B16A16Sfloat, vk::ImageTiling::eOptimal,
-                                     vk::ImageUsageFlagBits::eStorage,
+                                     vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc, // TransferSrc: auto-exposure probe blit
                                      vk::MemoryPropertyFlagBits::eDeviceLocal, img);
             historyColor.push_back(std::move(img));
             historyColorViews.push_back(VulkanUtils::createImageView(dev.logicalDevice,

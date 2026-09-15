@@ -22,6 +22,9 @@ struct DenoisePushConstants {
     float phiNormal;
     float exposureScale;
     int   useRawInput;
+    uint  renderWidth;
+    uint  renderHeight;
+    int   resetHistory;
 };
 [[vk::push_constant]] DenoisePushConstants push;
 
@@ -31,8 +34,7 @@ float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 [numthreads(16, 16, 1)]
 void reprojectionMain(uint3 dispatchID : SV_DispatchThreadID)
 {
-    uint2 dims;
-    noisyColor.GetDimensions(dims.x, dims.y);
+    uint2 dims = uint2(push.renderWidth, push.renderHeight);
     uint2 pixel = dispatchID.xy;
     if (pixel.x >= dims.x || pixel.y >= dims.y) return;
 
@@ -42,13 +44,16 @@ void reprojectionMain(uint3 dispatchID : SV_DispatchThreadID)
 
     // ── Firefly suppression: clamp outlier luminance before temporal blend ───
     float currentLum = luminance(currentColor);
-    float2 prevMomentsVal = historyMomentsIn[pixel];
+    bool historyEnabled = push.resetHistory == 0;
+    float2 prevMomentsVal = historyEnabled ? historyMomentsIn[pixel] : float2(0.0, 0.0);
     float  prevMean       = prevMomentsVal.x;
     float  prevVar        = max(prevMomentsVal.y - prevMean * prevMean, 0.0);
     float  sigma          = sqrt(prevVar);
     float  clampMax       = prevMean + 4.0 * sigma;
     if (prevVar > 0.001 && currentLum > clampMax)
+    {
         currentColor *= clampMax / max(currentLum, 0.0001);
+    }
 
     // ── Temporal reprojection ────────────────────────────────────────────────
     // mv = currentCenterUV - prevCenterUV, where centerUV = (pixel + 0.5) / dims.
@@ -60,7 +65,7 @@ void reprojectionMain(uint3 dispatchID : SV_DispatchThreadID)
     int2   prevPixel = int2(floor(float2(pixel) + 0.5 - mv * float2(dims)));
 
     // Rejection heuristics: normals must align and depths must be close.
-    bool   valid = all(prevPixel >= int2(0, 0)) && all(prevPixel < int2(dims));
+    bool   valid = historyEnabled && all(prevPixel >= int2(0, 0)) && all(prevPixel < int2(dims));
     float3 histColor = float3(0.0, 0.0, 0.0);
     float  alpha     = 1.0;   // 1.0 = trust only current (no history)
 
@@ -75,9 +80,30 @@ void reprojectionMain(uint3 dispatchID : SV_DispatchThreadID)
 
         if (normalDot > 0.9 && depthRelErr < 0.1 && currentDepth > 0.0 && prevDepth > 0.0) {
             histColor = historyColorIn[prevPixel].rgb;
+            // Conservative neighborhood clamp on reprojected history to limit ghost trails.
+            float minLum = 1e20;
+            float maxLum = -1e20;
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    int2 samplePixel = clamp(int2(pixel) + int2(dx, dy), int2(0, 0), int2(dims) - int2(1, 1));
+                    float sampleLum = luminance(noisyColor[samplePixel].rgb);
+                    minLum = min(minLum, sampleLum);
+                    maxLum = max(maxLum, sampleLum);
+                }
+            }
+
+            float histLum = luminance(histColor);
+            float centerLum = 0.5 * (minLum + maxLum);
+            float baseHalfRange = max(0.5 * (maxLum - minLum) * 1.1, 0.0001);
+            float temporalHalfRange = min(max(prevMean, 0.0) + 2.0 * sigma, 0.08);
+            float halfRange = max(baseHalfRange, temporalHalfRange);
+            float clampedHistLum = clamp(histLum, centerLum - halfRange, centerLum + halfRange);
+            if (histLum > 0.0001) {
+                histColor *= clampedHistLum / histLum;
+            }
+
             // push.phiColor carries historyAlpha from C++:
-            //   0.1 when camera is static  → blend 10% current / 90% history for fast convergence
-            //   1.0 when camera moved      → discard history entirely to prevent ghosting bands
+            // lower alpha = stronger history reuse, higher alpha = more current-frame trust.
             alpha = push.phiColor;
         }
     }

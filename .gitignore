@@ -3,6 +3,7 @@
 /build*
 /bin
 /docs
+/node_modules/
 
 ##############################
 #CLion specific

@@ -1,5 +1,6 @@
 #ifndef LAPHRIAENGINE_SCENENODE_H
 #define LAPHRIAENGINE_SCENENODE_H
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
@@ -116,6 +117,7 @@ class SceneNode : public std::enable_shared_from_this<SceneNode>
 	int modelId = -1;
 	// Original glTF node index, used to map imported animation channels back to this node.
 	int sourceNodeIndex = -1;
+	uint32_t surfelSourceNodeId = UINT32_MAX;
 
 	enum class ColliderType
 	{

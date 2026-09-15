@@ -13,6 +13,7 @@
 #include <imgui_impl_vulkan.h>
 
 #include "EngineAuxiliary.h"
+#include "EngineConfig.h"
 #include "ResourceManager.h"
 
 using namespace Laphria;
@@ -135,6 +136,26 @@ float worldUnitsPerPixel(float cameraDistance, float verticalFovRadians, float v
     const float visibleHeight = 2.0f * std::tan(verticalFovRadians * 0.5f) * std::max(cameraDistance, 0.01f);
     return visibleHeight / viewportHeightPixels;
 }
+
+template <typename DrawFunc>
+void withDisabledControl(bool disabled, const char *tooltip, DrawFunc drawFunc)
+{
+    ImGui::BeginDisabled(disabled);
+    drawFunc();
+    ImGui::EndDisabled();
+    if (disabled && tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+}
+
+void showItemTooltip(const char *tooltip)
+{
+    if (tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+    {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+}
 } // namespace
 
 void UISystem::init(VulkanDevice &dev, GLFWwindow *window,
@@ -207,7 +228,6 @@ void UISystem::draw(GLFWwindow *window, Scene &scene, PhysicsSystem &physics,
 
     drawMainMenuBar(window);
     drawAssetBrowser(scene, rm, matLayout);
-    drawValidationPanel();
     drawSceneHierarchy(scene);
     drawInspector(rm);
     drawPhysicsUI(scene, physics, rm, matLayout);
@@ -624,10 +644,12 @@ void UISystem::drawSelectedNodeTransformGizmo(Camera &camera)
         return;
     }
 
-    constexpr float kFovRadians = glm::radians(45.0f);
+    constexpr float kFovRadians = glm::radians(EngineConfig::kMainCameraFovDegrees);
     const float aspectRatio = io.DisplaySize.x / io.DisplaySize.y;
     const glm::mat4 view = camera.getViewMatrix();
-    const glm::mat4 proj = glm::perspective(kFovRadians, aspectRatio, 0.1f, 1000.0f);
+    const glm::mat4 proj = glm::perspective(
+        kFovRadians, aspectRatio,
+        EngineConfig::kMainCameraNearPlane, EngineConfig::kMainCameraFarPlane);
     const glm::mat4 viewProj = proj * view;
 
     glm::vec3 origin = selectedNode->getPosition();
@@ -938,69 +960,6 @@ void UISystem::drawAssetBrowser(Scene &scene, ResourceManager &rm, vk::Descripto
     ImGui::End();
 }
 
-void UISystem::drawValidationPanel()
-{
-    ImGui::Begin("Validation");
-
-    ImGui::TextWrapped("Validate project and scene JSON for structural issues.");
-
-    if (ImGui::Button("Run Project Validation"))
-    {
-        lastValidationReport = LaphriaEditor::EditorValidator::validateProjectFile(projectPath);
-        hasValidationReport = true;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Run Scene Validation"))
-    {
-        lastValidationReport = LaphriaEditor::EditorValidator::validateSceneFile(scenePath);
-        hasValidationReport = true;
-    }
-
-    if (ImGui::Button("Run Full Validation"))
-    {
-        const std::string sceneToValidate = hasLoadedProject ? project.sceneOutputPath : std::string(scenePath);
-        lastValidationReport = LaphriaEditor::EditorValidator::validateProjectAndScene(projectPath, sceneToValidate);
-        hasValidationReport = true;
-    }
-
-    if (!hasValidationReport)
-    {
-        ImGui::Separator();
-        ImGui::TextUnformatted("No validation run yet.");
-        ImGui::End();
-        return;
-    }
-
-    const size_t errorCount = lastValidationReport.errorCount();
-    const size_t warningCount = lastValidationReport.warningCount();
-    ImGui::Separator();
-    ImGui::Text("Errors: %llu | Warnings: %llu",
-                static_cast<unsigned long long>(errorCount),
-                static_cast<unsigned long long>(warningCount));
-
-    if (lastValidationReport.messages.empty())
-    {
-        ImGui::TextColored(ImVec4(0.55f, 0.90f, 0.55f, 1.0f), "No issues detected.");
-        ImGui::End();
-        return;
-    }
-
-    ImGui::BeginChild("ValidationMessages", ImVec2(0, 240), true);
-    for (const auto &message : lastValidationReport.messages)
-    {
-        const bool isError = message.severity == LaphriaEditor::ValidationSeverity::Error;
-        const ImVec4 color = isError ? ImVec4(1.0f, 0.40f, 0.40f, 1.0f) : ImVec4(1.0f, 0.76f, 0.35f, 1.0f);
-
-        ImGui::TextColored(color, "[%s] %s", LaphriaEditor::validationSeverityToString(message.severity), message.message.c_str());
-        ImGui::TextWrapped("File: %s", message.file.c_str());
-        ImGui::TextWrapped("Field: %s", message.fieldPath.c_str());
-        ImGui::Separator();
-    }
-    ImGui::EndChild();
-
-    ImGui::End();
-}
-
 void UISystem::refreshAssetCache() {
     cachedAssetFiles.clear();
     std::vector<std::string> roots = project.assetRoots;
@@ -1044,6 +1003,77 @@ bool UISystem::isDescendant(const SceneNode::Ptr &node, const SceneNode::Ptr &ca
     return false;
 }
 
+void UISystem::drawPathTracerMainControls() {
+    ImGui::SliderFloat("Resolution Scale", &pathTracerSettings.resolutionScale, 0.5f, 1.0f, "%.2f");
+    ImGui::SliderInt("Denoiser Iterations", &pathTracerSettings.denoiserIterations, 1, 5);
+
+    const char *qualityModes[] = {"Manual", "Auto Balanced", "Auto Aggressive"};
+    int qualityMode = static_cast<int>(pathTracerSettings.qualityMode);
+    if (ImGui::Combo("Quality Mode", &qualityMode, qualityModes, IM_ARRAYSIZE(qualityModes))) {
+        pathTracerSettings.qualityMode = static_cast<PathTracerQualityMode>(qualityMode);
+    }
+
+    ImGui::Checkbox("Reduce Secondary Effects", &pathTracerSettings.reduceSecondaryEffects);
+    ImGui::DragFloat("Target Frame (ms)", &pathTracerSettings.targetFrameMs, 0.1f, 8.0f, 40.0f, "%.2f");
+
+    ImGui::Separator();
+    ImGui::Text("Temporal Filtering:");
+    ImGui::Checkbox("Enable Reprojection", &pathTracerSettings.enableReprojection);
+    ImGui::Checkbox("Enable Denoiser", &pathTracerSettings.enableDenoiser);
+    ImGui::Checkbox("Enable Motion-Aware Accumulation", &pathTracerSettings.enableMotionAwareAccumulation);
+    ImGui::SliderFloat("Motion Alpha Min", &pathTracerSettings.motionAlphaMin, 0.05f, 0.40f, "%.2f");
+    ImGui::SliderFloat("Motion Alpha Max", &pathTracerSettings.motionAlphaMax, 0.20f, 1.00f, "%.2f");
+    ImGui::SliderFloat("History Reset Motion Threshold", &pathTracerSettings.historyResetMotionThreshold, 0.25f, 10.0f, "%.2f");
+}
+
+void UISystem::drawPathTracerAdvancedLightingControls() {
+    if (!ImGui::CollapsingHeader("Advanced Lighting")) {
+        return;
+    }
+
+    ImGui::Checkbox("Environment NEE", &pathTracerSettings.enableEnvironmentNEE);
+    ImGui::Checkbox("Black Environment", &pathTracerSettings.blackEnvironment);
+
+    const char *envNeeBounceModes[] = {"First Only", "First Two", "All Bounces"};
+    withDisabledControl(!pathTracerSettings.enableEnvironmentNEE,
+                        "Environment NEE bounces only apply when Environment NEE is enabled",
+                        [&]() {
+                            ImGui::Combo("Env NEE Bounces", &pathTracerSettings.environmentNeeBounceMode,
+                                         envNeeBounceModes, IM_ARRAYSIZE(envNeeBounceModes));
+                        });
+    pathTracerSettings.environmentNeeBounceMode = std::clamp(pathTracerSettings.environmentNeeBounceMode, 0, 2);
+
+    const char *envNeeSamplingModes[] = {"Cosine Hemisphere", "Sky Biased"};
+    int envNeeSamplingMode = static_cast<int>(pathTracerSettings.environmentNeeSamplingMode);
+    withDisabledControl(!pathTracerSettings.enableEnvironmentNEE,
+                        "Environment NEE sampling only applies when Environment NEE is enabled",
+                        [&]() {
+                            if (ImGui::Combo("Env NEE Sampling", &envNeeSamplingMode, envNeeSamplingModes, IM_ARRAYSIZE(envNeeSamplingModes))) {
+                                pathTracerSettings.environmentNeeSamplingMode = static_cast<EnvironmentNeeSamplingMode>(envNeeSamplingMode);
+                            }
+                        });
+}
+
+void UISystem::drawPathTracerStats() {
+    if (!ImGui::CollapsingHeader("Performance Stats", ImGuiTreeNodeFlags_DefaultOpen)) {
+        return;
+    }
+
+    ImGui::Text("TLAS: %.3f ms", pathTracerPerfStats.tlasBuildMs);
+    ImGui::Text("Ray Trace: %.3f ms", pathTracerPerfStats.rayTraceMs);
+    ImGui::Text("Reprojection: %.3f ms", pathTracerPerfStats.reprojectionMs);
+    ImGui::Text("Denoiser: %.3f ms", pathTracerPerfStats.denoiserMs);
+    ImGui::Text("Total: %.3f ms", pathTracerPerfStats.totalFrameMs);
+    ImGui::Text("Total P50/P95/P99: %.3f / %.3f / %.3f ms",
+                pathTracerPerfStats.totalFrameP50Ms,
+                pathTracerPerfStats.totalFrameP95Ms,
+                pathTracerPerfStats.totalFrameP99Ms);
+    ImGui::Text("RayTrace P95: %.3f ms | Denoiser P95: %.3f ms",
+                pathTracerPerfStats.rayTraceP95Ms,
+                pathTracerPerfStats.denoiserP95Ms);
+    ImGui::Text("Camera Motion Factor: %.3f", pathTracerPerfStats.cameraMotionFactor);
+}
+
 void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
                              ResourceManager &rm, vk::DescriptorSetLayout matLayout) {
     ImGui::Begin("Engine Controls");
@@ -1057,7 +1087,23 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
     ImGui::SameLine();
     if (ImGui::RadioButton("Path Tracer##render_mode", renderMode == RenderMode::PathTracer))
         renderMode = RenderMode::PathTracer;
-    ImGui::SliderFloat("Exposure", &exposure, 0.1f, 4.0f, "%.2f");
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Surfel PT", renderMode == RenderMode::SurfelPathTracer))
+        renderMode = RenderMode::SurfelPathTracer;
+    ImGui::SliderFloat("Exposure", &exposure, 0.02f, 8.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+    ImGui::Checkbox("Auto Exposure", &autoExposure.enabled);
+    showItemTooltip("Adapts Exposure so the log-average luminance of the HDR image lands on the key.\n"
+                    "Untick to lock the current value; capture both backends with the lock on.");
+    if (autoExposure.enabled)
+    {
+        ImGui::SliderFloat("Exposure Key", &autoExposure.key, 0.05f, 0.5f, "%.2f");
+        ImGui::SliderFloat("Adaptation Speed", &autoExposure.adaptationSpeed, 0.1f, 5.0f, "%.2f /s");
+        showItemTooltip("Rate of approach to the target in stops per second (log2), so brightening and darkening are symmetric.");
+        ImGui::SliderFloat("Min Exposure", &autoExposure.minExposure, 0.02f, 1.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Max Exposure", &autoExposure.maxExposure, 1.0f, 8.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
+    }
+    ImGui::Text("Scene log-mean luminance: %.4f | target exposure: %.3f",
+                autoExposure.measuredLogMeanLuminance, autoExposure.targetExposure);
     const char *colorSpaceModels[] = {"Hardware SRGB", "Legacy Manual"};
     int colorSpaceMode = static_cast<int>(textureColorSpaceModel);
     ImGui::Combo("Texture Color Space", &colorSpaceMode, colorSpaceModels, IM_ARRAYSIZE(colorSpaceModels));
@@ -1067,29 +1113,435 @@ void UISystem::drawPhysicsUI(Scene &scene, PhysicsSystem &physics,
         pathTracerSettings.resolutionScale = std::clamp(pathTracerSettings.resolutionScale, 0.5f, 1.0f);
         pathTracerSettings.denoiserIterations = std::clamp(pathTracerSettings.denoiserIterations, 1, 5);
         pathTracerSettings.targetFrameMs = std::clamp(pathTracerSettings.targetFrameMs, 8.0f, 40.0f);
-
-        ImGui::SliderFloat("Resolution Scale", &pathTracerSettings.resolutionScale, 0.5f, 1.0f, "%.2f");
-        ImGui::SliderInt("Denoiser Iterations", &pathTracerSettings.denoiserIterations, 1, 5);
-        const char *qualityModes[] = {"Manual", "Auto Balanced", "Auto Aggressive"};
-        int qualityMode = static_cast<int>(pathTracerSettings.qualityMode);
-        if (ImGui::Combo("Quality Mode", &qualityMode, qualityModes, IM_ARRAYSIZE(qualityModes))) {
-            pathTracerSettings.qualityMode = static_cast<PathTracerQualityMode>(qualityMode);
+        pathTracerSettings.motionAlphaMin = std::clamp(pathTracerSettings.motionAlphaMin, 0.05f, 0.40f);
+        pathTracerSettings.motionAlphaMax = std::clamp(pathTracerSettings.motionAlphaMax, 0.20f, 1.00f);
+        pathTracerSettings.historyResetMotionThreshold = std::clamp(pathTracerSettings.historyResetMotionThreshold, 0.25f, 10.0f);
+        if (pathTracerSettings.motionAlphaMax < pathTracerSettings.motionAlphaMin) {
+            pathTracerSettings.motionAlphaMax = pathTracerSettings.motionAlphaMin;
         }
-        ImGui::Checkbox("Reduce Secondary Effects", &pathTracerSettings.reduceSecondaryEffects);
-        ImGui::DragFloat("Target Frame (ms)", &pathTracerSettings.targetFrameMs, 0.1f, 8.0f, 40.0f, "%.2f");
-        
+
+        drawPathTracerMainControls();
         ImGui::Separator();
-        ImGui::Text("Debug Toggles:");
-        ImGui::Checkbox("Enable Reprojection", &pathTracerSettings.enableReprojection);
-        ImGui::Checkbox("Enable Denoiser", &pathTracerSettings.enableDenoiser);
+        drawPathTracerAdvancedLightingControls();
+        ImGui::Separator();
+        drawPathTracerStats();
+    }
+
+    if (ImGui::CollapsingHeader("Surfel Path Tracer##settings")) {
+        auto &settings = surfelPathTracerSettings;
+        auto clampDynamicSettings = [&settings]() {
+            settings.minRaysPerSurfel = std::clamp(settings.minRaysPerSurfel, 1u, 64u);
+            settings.maxRaysPerSurfel = std::clamp(settings.maxRaysPerSurfel, settings.minRaysPerSurfel, 128u);
+            settings.offscreenRayInterval = std::clamp(settings.offscreenRayInterval, 1u, 16u);
+            settings.activeMaxDepth = std::clamp(settings.activeMaxDepth, 1u, 8u);
+            settings.sleepingMaxDepth = std::clamp(settings.sleepingMaxDepth, settings.activeMaxDepth, 8u);
+            settings.placementThreshold = std::clamp(settings.placementThreshold, 0.05f, 4.0f);
+            settings.removalThreshold = std::clamp(settings.removalThreshold, settings.placementThreshold, 16.0f);
+            settings.varianceSensitivity = std::clamp(settings.varianceSensitivity, 0.01f, 16.0f);
+            settings.surfelTargetArea = std::clamp(settings.surfelTargetArea, 1.0f, 256.0f);
+            settings.surfelMinRadius = std::clamp(settings.surfelMinRadius, 0.001f, 1.0f);
+            settings.surfelMaxRadiusScale = std::clamp(settings.surfelMaxRadiusScale, 0.25f, 2.0f);
+            settings.surfelSupportRadius = std::clamp(settings.surfelSupportRadius, 0.01f, std::max(settings.cellSize, 0.01f));
+            settings.maxSurfelSamplesPerQuery = std::clamp(settings.maxSurfelSamplesPerQuery, 1u, 128u);
+            settings.maxRadianceSharingSamples = std::clamp(settings.maxRadianceSharingSamples, 1u, 128u);
+        };
+        clampDynamicSettings();
+
+        auto copyAppliedResourcesToDraft = [&]() {
+            surfelResourceSettingsDraft.maxSurfels = settings.maxSurfels;
+            surfelResourceSettingsDraft.maxRaysPerFrame = settings.maxRaysPerFrame;
+            surfelResourceSettingsDraft.cellSize = settings.cellSize;
+            surfelResourceSettingsDraft.cellDimension = settings.cellDimension;
+            surfelResourceSettingsDraft.perCellSurfelLimit = settings.perCellSurfelLimit;
+            surfelResourceSettingsDraft.irradianceAtlasWidth = settings.irradianceAtlasWidth;
+            surfelResourceSettingsDraft.irradianceAtlasHeight = settings.irradianceAtlasHeight;
+        };
+        if (!surfelResourceSettingsDraftInitialized) {
+            copyAppliedResourcesToDraft();
+            surfelResourceSettingsDraftInitialized = true;
+        }
+
+        auto &resourceDraft = surfelResourceSettingsDraft;
+        auto clampResourceDraft = [&]() {
+            resourceDraft.cellSize = std::clamp(resourceDraft.cellSize, 0.05f, 64.0f);
+            resourceDraft.cellDimension = std::clamp(resourceDraft.cellDimension, 8u, 128u);
+            resourceDraft.perCellSurfelLimit =
+                std::clamp(resourceDraft.perCellSurfelLimit, 4u, SurfelPathTracerSettings::kMaxPerCellLimit);
+            resourceDraft.irradianceAtlasWidth = std::clamp(resourceDraft.irradianceAtlasWidth, 512u,
+                                                            SurfelPathTracerSettings::kMaxAtlasDimension);
+            resourceDraft.irradianceAtlasHeight = std::clamp(resourceDraft.irradianceAtlasHeight, 512u,
+                                                             SurfelPathTracerSettings::kMaxAtlasDimension);
+            const uint32_t atlasCapacity = SurfelPathTracerSettings::atlasCapacity(
+                resourceDraft.irradianceAtlasWidth, resourceDraft.irradianceAtlasHeight);
+            resourceDraft.maxSurfels = std::clamp(resourceDraft.maxSurfels,
+                                                  SurfelPathTracerSettings::kMinMaxSurfels,
+                                                  atlasCapacity);
+            const uint64_t usefulRayCapacity = static_cast<uint64_t>(resourceDraft.maxSurfels) * 128ull;
+            const uint32_t maxRayCapacity = static_cast<uint32_t>(std::min<uint64_t>(
+                SurfelPathTracerSettings::kMaxRayCapacity, usefulRayCapacity));
+            resourceDraft.maxRaysPerFrame = std::clamp(resourceDraft.maxRaysPerFrame, 1024u,
+                                                       std::max(maxRayCapacity, 1024u));
+        };
+        clampResourceDraft();
+
+        ImGui::Checkbox("Enabled", &settings.enabled);
+        showItemTooltip("Enable the complete surfel renderer. Disabling it uses the sky fallback.");
+        ImGui::Checkbox("Freeze Cache", &settings.lockSurfels);
+        showItemTooltip("Freeze surfel lifecycle and radiance, while rebuilding the camera-relative lookup grid so camera motion remains valid.");
+        if (ImGui::Button("Reset Surfels")) {
+            settings.resetSurfels = true;
+        }
+        showItemTooltip("Discard all surfels and restart cache convergence.");
+        ImGui::Checkbox("Diffuse GI", &settings.enableDiffuseGi);
+        showItemTooltip("Include cached diffuse GI in final composition. Cache updates continue when disabled.");
+        ImGui::Checkbox("Reflections", &settings.enableReflections);
+        ImGui::SliderFloat("Rough Reflection Fade Start", &settings.roughReflectionStart, 0.0f, 1.0f, "%.2f");
+        showItemTooltip("Below this roughness the glossy reflection is ray traced.");
+        ImGui::SliderFloat("Rough Reflection Fade End", &settings.roughReflectionEnd, 0.0f, 1.0f, "%.2f");
+        showItemTooltip("At or above this roughness no reflection ray is traced; the specular term comes from the surfel cache.");
+        settings.roughReflectionEnd = std::max(settings.roughReflectionEnd, settings.roughReflectionStart + 0.01f);
+        showItemTooltip("Include half-resolution ray-traced reflections.");
+        ImGui::Checkbox("Reflection Filter", &settings.enableReflectionFilter);
+        showItemTooltip("Apply spatial and temporal reconstruction to reflections.");
+        ImGui::Checkbox("Bilateral Cleanup", &settings.enableBilateralCleanup);
+        showItemTooltip("Apply an additional edge-aware 5x5 reflection cleanup pass.");
+        ImGui::Checkbox("TAA", &settings.enableTaa);
+        showItemTooltip("Apply temporal anti-aliasing to Final Color only.");
+        if (ImGui::Checkbox("Guided Sampling", &settings.enableGuidedSampling)) {
+            settings.resetSurfels = true;
+        }
+        showItemTooltip("Use learned 6x6 directional radiance distributions. Changing this resets the cache.");
+        ImGui::Checkbox("Surfel Termination", &settings.enableSurfelTermination);
+        showItemTooltip("At the final path bounce, use nearby cached irradiance when available.");
+        ImGui::Checkbox("Unoriented Foliage GI", &settings.unorientedFoliageGi);
+        showItemTooltip("Alpha-tested materials (ivy, curtains) place no surfels and resolve with an unoriented normal weight, "
+                        "borrowing the cache of the surfaces around them. Bounds the population and ray cost in dense foliage; "
+                        "leaves lose per-face directional GI. Reset Surfels after toggling to drop existing foliage surfels.");
+        if (ImGui::Checkbox("Original-Style GI Normalization", &settings.useOriginalStyleGiNormalization)) {
+            settings.resetSurfels = true;
+        }
+        showItemTooltip("Use albedo instead of albedo/pi for cached diffuse GI, matching the inspiration renderers but producing brighter non-Lambertian normalization.");
+        ImGui::Checkbox("Radiance Sharing", &settings.enableRadianceSharing);
+        showItemTooltip("Blend 25% same-cell neighboring radiance into each surfel update.");
+        ImGui::Checkbox("Surfel Placement", &settings.enableSurfelPlacement);
+        showItemTooltip("Allow new screen-derived surfels to be allocated in under-covered regions.");
+        ImGui::Checkbox("Redundancy Removal", &settings.enableSurfelRemoval);
+        showItemTooltip("Allow redundancy-based thinning. Age and distance recycling remain active.");
+        ImGui::Checkbox("1-SPP Reference Probe", &settings.enableReferenceValidation);
+        showItemTooltip("Run one unaccumulated stochastic path per pixel for qualitative comparison; this is not a converged reference renderer.");
 
         ImGui::Separator();
-        ImGui::Text("PT Timings (GPU):");
-        ImGui::Text("TLAS: %.3f ms", pathTracerPerfStats.tlasBuildMs);
-        ImGui::Text("Ray Trace: %.3f ms", pathTracerPerfStats.rayTraceMs);
-        ImGui::Text("Reprojection: %.3f ms", pathTracerPerfStats.reprojectionMs);
-        ImGui::Text("Denoiser: %.3f ms", pathTracerPerfStats.denoiserMs);
-        ImGui::Text("Total: %.3f ms", pathTracerPerfStats.totalFrameMs);
+        ImGui::TextUnformatted("Resource capacity (edit, then Apply)");
+        int maxSurfels = static_cast<int>(resourceDraft.maxSurfels);
+        ImGui::SliderInt("Max Surfels", &maxSurfels, 1024,
+                         static_cast<int>(SurfelPathTracerSettings::atlasCapacity(
+                             SurfelPathTracerSettings::kMaxAtlasDimension,
+                             SurfelPathTracerSettings::kMaxAtlasDimension)));
+        resourceDraft.maxSurfels = static_cast<uint32_t>(maxSurfels);
+        showItemTooltip("Persistent cache capacity. Limited by the fixed 6x6 atlas tile capacity.");
+        int maxRaysPerFrame = static_cast<int>(resourceDraft.maxRaysPerFrame);
+        ImGui::SliderInt("Max Rays/Frame", &maxRaysPerFrame, 1024,
+                         static_cast<int>(SurfelPathTracerSettings::kMaxRayCapacity));
+        resourceDraft.maxRaysPerFrame = static_cast<uint32_t>(maxRaysPerFrame);
+        showItemTooltip("Hard global ray-buffer and dispatch cap. This is now independent of Max Surfels.");
+        ImGui::SliderFloat("Cell Size", &resourceDraft.cellSize, 0.05f, 64.0f, "%.2f");
+        showItemTooltip("World-space cell width. Smaller reduces mixing; larger increases range and potential light bleeding.");
+        int cellDimension = static_cast<int>(resourceDraft.cellDimension);
+        ImGui::SliderInt("Cell Dimension", &cellDimension, 8, 128);
+        resourceDraft.cellDimension = static_cast<uint32_t>(cellDimension);
+        showItemTooltip("Cells per axis. Memory and cell-pass work scale cubically.");
+        int perCellLimit = static_cast<int>(resourceDraft.perCellSurfelLimit);
+        ImGui::SliderInt("Per Cell Limit", &perCellLimit, 4, 256);
+        resourceDraft.perCellSurfelLimit = static_cast<uint32_t>(perCellLimit);
+        showItemTooltip("Maximum compact-map entries per cell. Independent of Cell Dimension: the map is packed and sized per surfel.");
+        int irradianceAtlasWidth = static_cast<int>(resourceDraft.irradianceAtlasWidth);
+        ImGui::SliderInt("Irradiance Atlas Width", &irradianceAtlasWidth, 512, 4096);
+        resourceDraft.irradianceAtlasWidth = static_cast<uint32_t>(irradianceAtlasWidth);
+        showItemTooltip("Guidance capacity only; the directional tile remains 6x6, so this does not improve angular quality.");
+        int irradianceAtlasHeight = static_cast<int>(resourceDraft.irradianceAtlasHeight);
+        ImGui::SliderInt("Irradiance Atlas Height", &irradianceAtlasHeight, 512, 4096);
+        resourceDraft.irradianceAtlasHeight = static_cast<uint32_t>(irradianceAtlasHeight);
+        showItemTooltip("Guidance capacity only; unused pixels consume VRAM without improving quality.");
+        clampResourceDraft();
+
+        const uint64_t cellCount = static_cast<uint64_t>(resourceDraft.cellDimension) *
+                                   resourceDraft.cellDimension * resourceDraft.cellDimension;
+        const double cellMapMiB = static_cast<double>(
+                                      SurfelPathTracerSettings::cellMapEntryCount(resourceDraft.cellDimension,
+                                                                                  resourceDraft.perCellSurfelLimit,
+                                                                                  resourceDraft.maxSurfels) *
+                                      sizeof(uint32_t)) /
+                                  (1024.0 * 1024.0);
+        const double cellGridMiB = static_cast<double>(cellCount * (sizeof(uint32_t) * 2u + sizeof(uint32_t) * 2u)) /
+                                   (1024.0 * 1024.0); // cellInfo (8 B) + cellCounter (count + cursor)
+        const double rayBufferMiB = static_cast<double>(resourceDraft.maxRaysPerFrame) *
+                                    SurfelPathTracerSettings::kRayRecordBytes / (1024.0 * 1024.0);
+        const double atlasMiB = static_cast<double>(resourceDraft.irradianceAtlasWidth) *
+                                resourceDraft.irradianceAtlasHeight * 8.0 * MAX_FRAMES_IN_FLIGHT /
+                                (1024.0 * 1024.0);
+        const uint32_t atlasCapacity = SurfelPathTracerSettings::atlasCapacity(
+            resourceDraft.irradianceAtlasWidth, resourceDraft.irradianceAtlasHeight);
+        ImGui::Text("Buffers: rays %.1f MiB | cell map %.1f MiB | cell grid %.1f MiB", rayBufferMiB, cellMapMiB, cellGridMiB);
+        ImGui::Text("Guide atlas: %.1f MiB | capacity %u surfels", atlasMiB, atlasCapacity);
+
+        const bool resourceSettingsChanged =
+            resourceDraft.maxSurfels != settings.maxSurfels ||
+            resourceDraft.maxRaysPerFrame != settings.maxRaysPerFrame ||
+            resourceDraft.cellSize != settings.cellSize ||
+            resourceDraft.cellDimension != settings.cellDimension ||
+            resourceDraft.perCellSurfelLimit != settings.perCellSurfelLimit ||
+            resourceDraft.irradianceAtlasWidth != settings.irradianceAtlasWidth ||
+            resourceDraft.irradianceAtlasHeight != settings.irradianceAtlasHeight;
+        ImGui::BeginDisabled(!resourceSettingsChanged);
+        if (ImGui::Button("Apply Resource Changes")) {
+            settings.maxSurfels = resourceDraft.maxSurfels;
+            settings.maxRaysPerFrame = resourceDraft.maxRaysPerFrame;
+            settings.cellSize = resourceDraft.cellSize;
+            settings.cellDimension = resourceDraft.cellDimension;
+            settings.perCellSurfelLimit = resourceDraft.perCellSurfelLimit;
+            settings.irradianceAtlasWidth = resourceDraft.irradianceAtlasWidth;
+            settings.irradianceAtlasHeight = resourceDraft.irradianceAtlasHeight;
+            settings.resetSurfels = true;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!resourceSettingsChanged);
+        if (ImGui::Button("Revert Resource Edits")) {
+            copyAppliedResourcesToDraft();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Sampling and cache behavior");
+        int minRaysPerSurfel = static_cast<int>(settings.minRaysPerSurfel);
+        ImGui::SliderInt("Min Rays/Surfel", &minRaysPerSurfel, 1, 64);
+        settings.minRaysPerSurfel = static_cast<uint32_t>(minRaysPerSurfel);
+        showItemTooltip("Baseline rays for each represented surfel after its 16-update warm-up.");
+        int maxRaysPerSurfel = static_cast<int>(settings.maxRaysPerSurfel);
+        ImGui::SliderInt("Max Rays/Surfel", &maxRaysPerSurfel, static_cast<int>(settings.minRaysPerSurfel), 128);
+        settings.maxRaysPerSurfel = static_cast<uint32_t>(maxRaysPerSurfel);
+        showItemTooltip("Per-surfel adaptive cap and the count used during the first 16 updates.");
+        int offscreenRayInterval = static_cast<int>(settings.offscreenRayInterval);
+        ImGui::SliderInt("Off-screen Ray Interval", &offscreenRayInterval, 1, 16);
+        settings.offscreenRayInterval = static_cast<uint32_t>(offscreenRayInterval);
+        showItemTooltip("Surfels whose support sphere is outside the view frustum trace only every N-th frame (staggered by a per-surfel hash). 1 traces every frame. Warm-up surfels always trace.");
+        int activeMaxDepth = static_cast<int>(settings.activeMaxDepth);
+        ImGui::SliderInt("Active Max Depth", &activeMaxDepth, 1, 8);
+        settings.activeMaxDepth = static_cast<uint32_t>(activeMaxDepth);
+        showItemTooltip("Maximum path depth for active surfels. Higher captures more bounces but increases ray cost.");
+        int sleepingMaxDepth = static_cast<int>(settings.sleepingMaxDepth);
+        ImGui::SliderInt("Sleeping Max Depth", &sleepingMaxDepth, static_cast<int>(settings.activeMaxDepth), 8);
+        settings.sleepingMaxDepth = static_cast<uint32_t>(sleepingMaxDepth);
+        showItemTooltip("Maximum path depth for stable sleeping surfels, which request one quarter as many rays.");
+        ImGui::SliderFloat("Placement Threshold", &settings.placementThreshold, 0.05f, 4.0f, "%.2f");
+        showItemTooltip("Place when summed local surfel support is below this value. Higher creates a denser cache; this is not a percentage.");
+        ImGui::SliderFloat("Removal Threshold", &settings.removalThreshold, settings.placementThreshold, 16.0f, "%.2f");
+        showItemTooltip("Thin when summed local support exceeds this value. Lower removes overlap more aggressively.");
+        ImGui::SliderFloat("Inconsistency Sensitivity", &settings.varianceSensitivity, 0.01f, 16.0f, "%.2f");
+        showItemTooltip("Sensitivity to RGB short/long-term inconsistency. Higher drives more surfels toward Max Rays/Surfel.");
+        ImGui::SliderFloat("Surfel Target Area", &settings.surfelTargetArea, 1.0f, 256.0f, "%.1f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) settings.resetSurfels = true;
+        showItemTooltip("Projected-area radius heuristic. Higher creates larger, smoother surfels. Applied consistently after an automatic reset.");
+        ImGui::SliderFloat("Surfel Min Radius", &settings.surfelMinRadius, 0.001f, 1.0f, "%.3f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) settings.resetSurfels = true;
+        showItemTooltip("World-space radius floor. Higher fills gaps but increases cross-surface leakage.");
+        ImGui::SliderFloat("Surfel Max Radius Scale", &settings.surfelMaxRadiusScale, 0.25f, 2.0f, "%.2f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) settings.resetSurfels = true;
+        showItemTooltip("Radius ceiling as Cell Size times this value. Capped at 2 to match the fixed spatial lookup neighborhood.");
+        ImGui::SliderFloat("Surfel Support Radius", &settings.surfelSupportRadius, 0.01f, 2.0f, "%.3f m");
+        showItemTooltip("World-space radius over which a surfel supports resolve, coverage, path termination and radiance sharing (max(own radius, this)). This is the effective surfel size. Clamped to Cell Size so the +/-1 cell search stays complete; previously fixed at 0.75 x Cell Size.");
+        int maxSurfelSamplesPerQuery = static_cast<int>(settings.maxSurfelSamplesPerQuery);
+        ImGui::SliderInt("Max Surfel Samples/Query", &maxSurfelSamplesPerQuery, 1, 128);
+        settings.maxSurfelSamplesPerQuery = static_cast<uint32_t>(maxSurfelSamplesPerQuery);
+        showItemTooltip("Candidate cap for resolve, coverage, path termination, and reflection termination.");
+        int maxRadianceSharingSamples = static_cast<int>(settings.maxRadianceSharingSamples);
+        ImGui::SliderInt("Max Radiance Sharing Samples", &maxRadianceSharingSamples, 1, 128);
+        settings.maxRadianceSharingSamples = static_cast<uint32_t>(maxRadianceSharingSamples);
+        showItemTooltip("Same-cell candidate cap for the optional 25% radiance-sharing blend.");
+        clampDynamicSettings();
+        const char *debugViews[] = {
+            "Final Color",
+            "GBuffer Normal",
+            "GBuffer Depth",
+            "Surfel ID",
+            "Surfel Radius",
+            "Surfel Radiance",
+            "Surfel Variance",
+            "Cell Occupancy",
+            "Reflection Raw",
+            "Reflection Filtered",
+            "Surfel Coverage",
+            "Reference Color",
+            "Reference Difference",
+            "GBuffer Albedo",
+            "Diffuse GI",
+            "Sun Visibility",
+            "Ambient Occlusion",
+            "Diffuse GI Before AO"};
+        int debugView = static_cast<int>(settings.debugView);
+        ImGui::Combo("Debug View", &debugView, debugViews, IM_ARRAYSIZE(debugViews));
+        debugView = std::clamp(debugView,
+                               static_cast<int>(SurfelPathTracerDebugView::FinalColor),
+                               static_cast<int>(SurfelPathTracerDebugView::DiffuseGiBeforeAo));
+        settings.debugView = static_cast<SurfelPathTracerDebugView>(debugView);
+        // "dirty" is the per-frame spawn list, so it always equals spawnedSurfels; show it once.
+        ImGui::Text("Surfels: %u alive / %u dead",
+                    surfelPathTracerStats.aliveSurfels,
+                    surfelPathTracerStats.deadSurfels);
+        // requestedRays is clamped to the budget on the GPU; demandedRays is the unclamped sum.
+        const float budgetSaturation = surfelPathTracerStats.rayBudget > 0u
+            ? 100.0f * static_cast<float>(surfelPathTracerStats.demandedRays) /
+                  static_cast<float>(surfelPathTracerStats.rayBudget)
+            : 0.0f;
+        ImGui::Text("Rays: %u traced / %u budget | demand %u (%.0f%% of budget)",
+                    surfelPathTracerStats.requestedRays,
+                    surfelPathTracerStats.rayBudget,
+                    surfelPathTracerStats.demandedRays,
+                    budgetSaturation);
+        ImGui::Text("Cells: %u | Rejected Stores: %u",
+                    surfelPathTracerStats.filledCells,
+                    surfelPathTracerStats.rejectedStores);
+        ImGui::Text("Recycled Surfels: %u", surfelPathTracerStats.recycledSurfels);
+        ImGui::Text("Spawned Surfels: %u", surfelPathTracerStats.spawnedSurfels);
+        ImGui::Text("Removed Surfels: %u", surfelPathTracerStats.removedSurfels);
+        ImGui::Text("Guided Rays: %u", surfelPathTracerStats.guidedRays);
+        ImGui::Text("Cosine Rays: %u", surfelPathTracerStats.cosineRays);
+        const uint32_t unsupportedTerminations =
+            surfelPathTracerStats.surfelTerminationAttempts >= surfelPathTracerStats.surfelTerminationHits
+                ? surfelPathTracerStats.surfelTerminationAttempts - surfelPathTracerStats.surfelTerminationHits
+                : 0u;
+        ImGui::Text("Termination Attempts: %u", surfelPathTracerStats.surfelTerminationAttempts);
+        ImGui::Text("Termination Cache Hits: %u", surfelPathTracerStats.surfelTerminationHits);
+        ImGui::Text("Unsupported Terminations: %u", unsupportedTerminations);
+        ImGui::Text("Path Misses: %u", surfelPathTracerStats.pathMisses);
+        ImGui::SeparatorText("GPU timings");
+        ImGui::Text("GBuffer: %.3f ms | Cache update: %.3f ms",
+                    surfelPathTracerStats.gBufferMs,
+                    surfelPathTracerStats.cacheUpdateMs);
+        ImGui::Text("Prepare: %.3f | Generate: %.3f | Update: %.3f ms",
+                    surfelPathTracerStats.prepareMs,
+                    surfelPathTracerStats.generateMs,
+                    surfelPathTracerStats.updateMs);
+        ImGui::Text("Cell info: %.3f ms | Cell map: %.3f ms",
+                    surfelPathTracerStats.cellInfoMs,
+                    surfelPathTracerStats.cellMapMs);
+        ImGui::Text("Ray schedule: %.3f ms", surfelPathTracerStats.rayScheduleMs);
+        ImGui::Text("Surfel rays: %.3f ms | Integrate: %.3f ms",
+                    surfelPathTracerStats.surfelRayTraceMs,
+                    surfelPathTracerStats.integrateMs);
+        ImGui::Text("Evaluate: %.3f ms | Reflections: %.3f ms",
+                    surfelPathTracerStats.evaluateMs,
+                    surfelPathTracerStats.reflectionMs);
+        ImGui::Text("Post: %.3f ms | Total: %.3f ms",
+                    surfelPathTracerStats.postProcessMs,
+                    surfelPathTracerStats.totalFrameMs);
+        ImGui::SeparatorText("Rolling window");
+        ImGui::Text("Mean over %u frames (max 300):", surfelPathTracerStats.rollingSamples);
+        ImGui::Text("GBuffer %.2f | Cache update %.2f | Surfel rays %.2f | Integrate %.2f ms",
+                    surfelPathTracerStats.avgGBufferMs,
+                    surfelPathTracerStats.avgCacheUpdateMs,
+                    surfelPathTracerStats.avgSurfelRayTraceMs,
+                    surfelPathTracerStats.avgIntegrateMs);
+        ImGui::Text("Evaluate %.2f | Reflections %.2f | Post %.2f | Total %.2f ms",
+                    surfelPathTracerStats.avgEvaluateMs,
+                    surfelPathTracerStats.avgReflectionMs,
+                    surfelPathTracerStats.avgPostProcessMs,
+                    surfelPathTracerStats.avgTotalFrameMs);
+        ImGui::Text("Total P50 / P95: %.2f / %.2f ms",
+                    surfelPathTracerStats.totalP50Ms,
+                    surfelPathTracerStats.totalP95Ms);
+        ImGui::Text("Counters (mean): alive %.0f | rays traced %.0f / demand %.0f | cells %.0f | rejected stores %.0f",
+                    surfelPathTracerStats.avgAliveSurfels,
+                    surfelPathTracerStats.avgRequestedRays,
+                    surfelPathTracerStats.avgDemandedRays,
+                    surfelPathTracerStats.avgFilledCells,
+                    surfelPathTracerStats.avgRejectedStores);
+        ImGui::Text("Counters (mean): spawned %.1f / removed %.1f / recycled %.1f per frame | guided %.0f / cosine %.0f | termination hits %.0f / attempts %.0f",
+                    surfelPathTracerStats.avgSpawnedSurfels,
+                    surfelPathTracerStats.avgRemovedSurfels,
+                    surfelPathTracerStats.avgRecycledSurfels,
+                    surfelPathTracerStats.avgGuidedRays,
+                    surfelPathTracerStats.avgCosineRays,
+                    surfelPathTracerStats.avgTerminationHits,
+                    surfelPathTracerStats.avgTerminationAttempts);
+        if (ImGui::Button("Reset stats window"))
+        {
+            resetSurfelPathTracerStatsWindow = true;
+        }
+        showItemTooltip("Clear the rolling window after warm-up so the means describe the steady state.");
+        ImGui::SameLine();
+        if (ImGui::Button("Copy rolling stats"))
+        {
+            const auto &s = surfelPathTracerStats;
+            char csv[1024];
+            std::snprintf(csv, sizeof(csv),
+                          "samples,cellSize,supportRadius,maxSurfels,perCellLimit,samplesPerQuery,minRays,maxRays,offscreenInterval,activeDepth,sleepingDepth,termination,sharing,guided,originalStyleGi,"
+                          "gbuffer_ms,cache_update_ms,surfel_rays_ms,integrate_ms,evaluate_ms,reflections_ms,post_ms,total_ms,total_p50_ms,total_p95_ms,"
+                          "alive,rays_traced,rays_demand,cells,rejected_stores,spawned,removed,recycled,guided_rays,cosine_rays,term_hits,term_attempts\n"
+                          "%u,%.2f,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%d,%d,"
+                          "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,"
+                          "%.0f,%.0f,%.0f,%.0f,%.0f,%.1f,%.1f,%.1f,%.0f,%.0f,%.0f,%.0f\n",
+                          s.rollingSamples, settings.cellSize, settings.surfelSupportRadius, settings.maxSurfels, settings.perCellSurfelLimit,
+                          settings.maxSurfelSamplesPerQuery, settings.minRaysPerSurfel, settings.maxRaysPerSurfel, settings.offscreenRayInterval,
+                          settings.activeMaxDepth, settings.sleepingMaxDepth, settings.enableSurfelTermination ? 1 : 0,
+                          settings.enableRadianceSharing ? 1 : 0, settings.enableGuidedSampling ? 1 : 0,
+                          settings.useOriginalStyleGiNormalization ? 1 : 0,
+                          s.avgGBufferMs, s.avgCacheUpdateMs, s.avgSurfelRayTraceMs, s.avgIntegrateMs, s.avgEvaluateMs,
+                          s.avgReflectionMs, s.avgPostProcessMs, s.avgTotalFrameMs, s.totalP50Ms, s.totalP95Ms,
+                          s.avgAliveSurfels, s.avgRequestedRays, s.avgDemandedRays, s.avgFilledCells, s.avgRejectedStores,
+                          s.avgSpawnedSurfels, s.avgRemovedSurfels, s.avgRecycledSurfels, s.avgGuidedRays, s.avgCosineRays,
+                          s.avgTerminationHits, s.avgTerminationAttempts);
+            ImGui::SetClipboardText(csv);
+        }
+        showItemTooltip("Copy the rolling means and the current settings as two CSV lines (header + values).");
+
+        ImGui::SeparatorText("Pixel probe");
+        ImGui::Checkbox("Pixel Probe", &pixelProbe.enabled);
+        showItemTooltip("Reads back the linear values of the pixel under the mouse (before tonemapping).");
+        ImGui::SameLine();
+        ImGui::Checkbox("Freeze", &pixelProbe.freeze);
+        if (pixelProbe.enabled)
+        {
+            ImGuiIO &probeIo = ImGui::GetIO();
+            if (!pixelProbe.freeze && !probeIo.WantCaptureMouse)
+            {
+                const ImVec2 mouse = ImGui::GetMousePos();
+                pixelProbe.x = static_cast<uint32_t>(std::max(0.0f, mouse.x * probeIo.DisplayFramebufferScale.x));
+                pixelProbe.y = static_cast<uint32_t>(std::max(0.0f, mouse.y * probeIo.DisplayFramebufferScale.y));
+            }
+            const auto lum = [](const glm::vec3 &c) { return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z; };
+            ImGui::Text("Pixel (%u, %u)%s", pixelProbe.sampledX, pixelProbe.sampledY, pixelProbe.freeze ? " [frozen]" : "");
+            if (pixelProbe.valid)
+            {
+                ImGui::Text("Lighting (linear): %.4f %.4f %.4f | lum %.4f",
+                            pixelProbe.lighting.x, pixelProbe.lighting.y, pixelProbe.lighting.z, lum(pixelProbe.lighting));
+                ImGui::Text("Surfel irradiance E: %.4f %.4f %.4f | lum %.4f | coverage %.2f",
+                            pixelProbe.resolvedIrradiance.x, pixelProbe.resolvedIrradiance.y, pixelProbe.resolvedIrradiance.z,
+                            lum(pixelProbe.resolvedIrradiance), pixelProbe.coverage);
+                const glm::vec3 diffuseGi = pixelProbe.albedo * pixelProbe.resolvedIrradiance *
+                                            (settings.useOriginalStyleGiNormalization ? 1.0f : (1.0f / 3.14159265f)) * pixelProbe.ao;
+                ImGui::Text("Diffuse GI = albedo%s x E x AO: lum %.4f",
+                            settings.useOriginalStyleGiNormalization ? "" : "/pi", lum(diffuseGi));
+                ImGui::Text("Albedo: %.3f %.3f %.3f | AO %.2f | sun visibility %.2f | depth %.2f",
+                            pixelProbe.albedo.x, pixelProbe.albedo.y, pixelProbe.albedo.z,
+                            pixelProbe.ao, pixelProbe.sunVisibility, pixelProbe.depth);
+                ImGui::Text("Normal: %.2f %.2f %.2f", pixelProbe.normal.x, pixelProbe.normal.y, pixelProbe.normal.z);
+                if (pixelProbe.referenceValid)
+                {
+                    const float refLum = lum(pixelProbe.reference);
+                    ImGui::Text("Reference (1 spp): lum %.4f | lighting / reference = %.2f",
+                                refLum, refLum > 1e-6f ? lum(pixelProbe.lighting) / refLum : 0.0f);
+                }
+                else
+                {
+                    ImGui::TextDisabled("Reference: enable the 1-SPP Reference Probe to compare.");
+                }
+            }
+            else
+            {
+                ImGui::TextDisabled("Waiting for readback...");
+            }
+        }
     }
 
     ImGui::Separator();

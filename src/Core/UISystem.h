@@ -3,11 +3,11 @@
 
 #include <random>
 #include <string>
+#include <cstdint>
 #include <vector>
 
 #include "../Physics/PhysicsSystem.h"
 #include "../SceneManagement/Scene.h"
-#include "EditorValidation.h"
 #include "EditorProject.h"
 #include "Camera.h"
 #include "EngineAuxiliary.h"
@@ -23,15 +23,57 @@ public:
         AutoAggressive = 2
     };
 
+    enum class EnvironmentNeeSamplingMode
+    {
+        CosineHemisphere = 0,
+        SkyBiased = 1
+    };
+
+    enum class SurfelPathTracerDebugView
+    {
+        FinalColor = 0,
+        GBufferNormal = 1,
+        GBufferDepth = 2,
+        SurfelId = 3,
+        SurfelRadius = 4,
+        SurfelRadiance = 5,
+        SurfelVariance = 6,
+        CellOccupancy = 7,
+        ReflectionRaw = 8,
+        ReflectionFiltered = 9,
+        SurfelCoverage = 10,
+        ReferenceColor = 11,
+        ReferenceDifference = 12,
+        GBufferAlbedo = 13,
+        DiffuseGi = 14,
+        SunVisibility = 15,
+        AmbientOcclusion = 16,
+        DiffuseGiBeforeAo = 17
+    };
+    static constexpr SurfelPathTracerDebugView kMaxSurfelPathTracerDebugView =
+        SurfelPathTracerDebugView::DiffuseGiBeforeAo;
+
     struct PathTracerSettings
     {
         float                 resolutionScale = 1.0f;
         int                   denoiserIterations = 1;
         PathTracerQualityMode qualityMode = PathTracerQualityMode::Manual;
         bool                  reduceSecondaryEffects = false;
+        bool                  enableEnvironmentNEE = true;
+        // 0 = first bounce only, 1 = first 2 bounces, 2 = all bounces.
+        int                   environmentNeeBounceMode = 0;
+        bool                  blackEnvironment = false;
+        EnvironmentNeeSamplingMode environmentNeeSamplingMode = EnvironmentNeeSamplingMode::SkyBiased;
+        int                   pathTracerMaxBounces = 8;
+        // 0 = all bounces, 1 = first bounce only, 2 = first 2 bounces.
+        int                   directSunBounceMode = 0;
         float                 targetFrameMs = 16.6f;
         bool                  enableReprojection = true;
         bool                  enableDenoiser = true;
+        bool                  enableMotionAwareAccumulation = true;
+        float                 motionAlphaMin = 0.14f;
+        float                 motionAlphaMax = 0.55f;
+        float                 historyResetMotionThreshold = 1.5f;
     };
 
     struct PathTracerPerfStats
@@ -41,6 +83,181 @@ public:
         float reprojectionMs = 0.0f;
         float denoiserMs = 0.0f;
         float totalFrameMs = 0.0f;
+        float totalFrameP50Ms = 0.0f;
+        float totalFrameP95Ms = 0.0f;
+        float totalFrameP99Ms = 0.0f;
+        float rayTraceP95Ms = 0.0f;
+        float denoiserP95Ms = 0.0f;
+        float cameraMotionFactor = 0.0f;
+    };
+
+    struct SurfelPathTracerSettings
+    {
+        static constexpr uint32_t kAtlasTileSize = 6;
+        static constexpr uint32_t kMinMaxSurfels = 1024;
+        static constexpr uint32_t kMaxAtlasDimension = 4096;
+        static constexpr uint64_t kMaxStorageBufferBytes = 128ull * 1024ull * 1024ull;
+        static constexpr uint32_t kRayRecordBytes = 8u * sizeof(uint32_t);
+        static constexpr uint32_t kMaxRayCapacity =
+            static_cast<uint32_t>(kMaxStorageBufferBytes / kRayRecordBytes);
+
+        static constexpr uint32_t atlasCapacity(uint32_t width, uint32_t height)
+        {
+            return (width / kAtlasTileSize) * (height / kAtlasTileSize);
+        }
+
+        // The compact cell map is packed (CellInfo assigns each cell a range from a running
+        // total), so it is sized per surfel, not per cell: grid resolution and per-cell limit
+        // are independent. Each surfel is inserted into every cell it overlaps, which with the
+        // default radii is one to a few cells; 8 entries per surfel leaves generous headroom.
+        static constexpr uint32_t kCellMapEntriesPerSurfel = 8;
+        static constexpr uint32_t kMaxPerCellLimit = 256;
+        static constexpr uint64_t cellMapEntryCount(uint32_t dimension, uint32_t perCellLimit, uint32_t maxSurfels)
+        {
+            const uint64_t safeDimension = dimension > 0u ? dimension : 1u;
+            const uint64_t cellCount = safeDimension * safeDimension * safeDimension;
+            const uint64_t worstCase = cellCount * (perCellLimit > 0u ? perCellLimit : 1u);
+            const uint64_t perSurfel = static_cast<uint64_t>(maxSurfels) * kCellMapEntriesPerSurfel;
+            return worstCase < perSurfel ? worstCase : perSurfel;
+        }
+
+        bool enabled = true;
+        bool lockSurfels = false;
+        bool resetSurfels = false;
+        bool enableDiffuseGi = true;
+        bool enableReflections = true;
+        bool enableReflectionFilter = true;
+        bool enableBilateralCleanup = true;
+        bool enableTaa = true;
+        // 250k: with foliage no longer placing surfels, Sponza settles well below this;
+        // the 85% pressure threshold (212k) is the safety net, not the steady state.
+        uint32_t maxSurfels = 250000;
+        // Hard per-frame ray cost cap: RaySchedule scales every request by
+        // budget / last frame's demand (never below Min Rays/Surfel). 500k rays is
+        // ~10-18 ms depending on how much foliage the paths traverse. 16 MiB ray buffer.
+        uint32_t maxRaysPerFrame = 500000;
+        // 0.4 m at 128^3 (51 m window, covers Sponza): Cell Size is the lookup
+        // window/index granularity only; the effective surfel size is
+        // surfelSupportRadius below (clamped to Cell Size). Smaller cells keep the
+        // per-pixel 27-cell resolve walk short; at 2.0 m a cell held far more surfels
+        // than the compact map kept, starving ray scheduling and the resolve.
+        // Tuned 2026-09-05 for the performance/quality balance.
+        float cellSize = 0.4f;
+        uint32_t cellDimension = 128;
+        uint32_t perCellSurfelLimit = 128;      // compact-map slots per cell; the map itself is sized per surfel (cellMapEntryCount)
+        uint32_t irradianceAtlasWidth = 4096;   // 4096x4096 tiles of 6x6 = 465 124 surfels of capacity
+        uint32_t irradianceAtlasHeight = 4096;
+        uint32_t minRaysPerSurfel = 4;
+        uint32_t maxRaysPerSurfel = 64;
+        // Represented surfels whose support sphere is outside the view frustum trace
+        // only every N-th frame (staggered per surfel). 1 disables the skip. Surfels in
+        // warm-up always trace.
+        uint32_t offscreenRayInterval = 4;
+        uint32_t activeMaxDepth = 3;
+        uint32_t sleepingMaxDepth = 5;
+        float placementThreshold = 0.35f;
+        // Removal at 12 keeps roughly a dozen overlapping supports per point; 4.0 left
+        // the cache too sparse once coverage measured the real support radius.
+        float removalThreshold = 12.0f;
+        // Multiplies the *relative* inconsistency (|short - long| / luminance) before it
+        // maps min..max rays; 5 sends any surfel above ~20% relative noise to the full
+        // budget, which is what removes the shimmer in shadowed areas without pinning
+        // every foliage-adjacent surfel at 64 rays.
+        float varianceSensitivity = 5.0f;
+        float surfelTargetArea = 16.0f;
+        float surfelMinRadius = 0.05f;
+        float surfelMaxRadiusScale = 2.0f;
+        // World-space support radius shared by resolve, coverage, path termination and
+        // radiance sharing: each surfel weights a point with max(own radius, this).
+        // Decoupled from Cell Size (it used to be 0.75 x Cell Size); clamped to Cell
+        // Size so the fixed +/-1 cell lookup neighborhood stays complete.
+        float surfelSupportRadius = 0.25f;
+        // 32: halves the 27-cell resolve walk in dense cells versus 64 (2026-09-05).
+        uint32_t maxSurfelSamplesPerQuery = 32;
+        uint32_t maxRadianceSharingSamples = 32;
+        bool enableGuidedSampling = false;
+        bool enableSurfelTermination = true;
+        // Alpha-tested materials (ivy, curtains) place no surfels and resolve with an
+        // unoriented normal weight, borrowing the cache of surrounding surfaces. Oriented
+        // placement converged toward one surfel per leaf face (80k+ surfels, ray budget
+        // saturated) in the Sponza ivy.
+        bool unorientedFoliageGi = true;
+        // Surfels store irradiance (Integrate weights each ray by cos/pdf), so the
+        // physically consistent diffuse consumption is albedo / pi, matching the
+        // direct-lighting BRDF. "Original style" (albedo only) over-brightens all
+        // indirect light by a factor of pi; kept as a toggle for comparison only.
+        bool useOriginalStyleGiNormalization = false;
+        bool enableRadianceSharing = true;
+        bool enableSurfelPlacement = true;
+        bool enableSurfelRemoval = true;
+        bool enableReferenceValidation = false;
+        // Roughness band over which the traced glossy reflection fades into the specular
+        // term evaluated from the surfel cache (env-BRDF x E/pi). At or above the end value
+        // no reflection ray is traced at all.
+        float roughReflectionStart = 0.5f;
+        float roughReflectionEnd = 0.7f;
+        SurfelPathTracerDebugView debugView = SurfelPathTracerDebugView::FinalColor;
+    };
+
+    struct SurfelPathTracerStats
+    {
+        uint32_t aliveSurfels = 0;
+        uint32_t deadSurfels = 0;
+        uint32_t dirtySurfels = 0;
+        uint32_t requestedRays = 0;
+        uint32_t demandedRays = 0;
+        uint32_t rayBudget = 0;
+        uint32_t filledCells = 0;
+        uint32_t rejectedStores = 0;
+        uint32_t recycledSurfels = 0;
+        uint32_t spawnedSurfels = 0;
+        uint32_t removedSurfels = 0;
+        uint32_t guidedRays = 0;
+        uint32_t cosineRays = 0;
+        uint32_t surfelTerminationAttempts = 0;
+        uint32_t surfelTerminationHits = 0;
+        uint32_t pathMisses = 0;
+        float gBufferMs = 0.0f;
+        float cacheUpdateMs = 0.0f;
+        float prepareMs = 0.0f;
+        float generateMs = 0.0f;
+        float updateMs = 0.0f;
+        float cellInfoMs = 0.0f;
+        float cellMapMs = 0.0f;
+        float rayScheduleMs = 0.0f;
+        float surfelRayTraceMs = 0.0f;
+        float integrateMs = 0.0f;
+        float evaluateMs = 0.0f;
+        float reflectionMs = 0.0f;
+        float postProcessMs = 0.0f;
+        float totalFrameMs = 0.0f;
+        // Rolling-window statistics over the last N surfel frames (N = rollingSamples),
+        // filled by EngineCore::collectSurfelPathTracerTimings. Reset with
+        // resetSurfelPathTracerStatsWindow after warm-up to measure a steady state.
+        uint32_t rollingSamples = 0;
+        float avgGBufferMs = 0.0f;
+        float avgCacheUpdateMs = 0.0f;
+        float avgSurfelRayTraceMs = 0.0f;
+        float avgIntegrateMs = 0.0f;
+        float avgEvaluateMs = 0.0f;
+        float avgReflectionMs = 0.0f;
+        float avgPostProcessMs = 0.0f;
+        float avgTotalFrameMs = 0.0f;
+        float totalP50Ms = 0.0f;
+        float totalP95Ms = 0.0f;
+        // Rolling means of the per-frame counters over the same window.
+        float avgAliveSurfels = 0.0f;
+        float avgRequestedRays = 0.0f;
+        float avgDemandedRays = 0.0f;
+        float avgFilledCells = 0.0f;
+        float avgRejectedStores = 0.0f;
+        float avgSpawnedSurfels = 0.0f;
+        float avgRemovedSurfels = 0.0f;
+        float avgRecycledSurfels = 0.0f;
+        float avgGuidedRays = 0.0f;
+        float avgCosineRays = 0.0f;
+        float avgTerminationAttempts = 0.0f;
+        float avgTerminationHits = 0.0f;
     };
 
     // Call after the swapchain has been created (needs colorFormat / depthFormat).
@@ -62,8 +279,46 @@ public:
     float physicsTime = 0.0f; // updated by EngineCore after each tick
     glm::vec3 lightDirection = glm::vec3(-0.30f, -1.0f, -0.20f);
     float exposure = 1.0f;
+    // Auto-exposure: EngineCore measures the log-average luminance of the HDR image and, when
+    // enabled, writes the adapted exposure into `exposure`. Disabling it locks the last value,
+    // which is how both backends are captured at an identical exposure.
+    struct AutoExposureSettings
+    {
+        bool  enabled = false;
+        float key = 0.18f;            // target mid-grey for the log-average luminance
+        float minExposure = 0.05f;
+        float maxExposure = 8.0f;
+        float adaptationSpeed = 0.7f; // 1/s, applied in log2 (stops); ~1.4 s time constant
+        float measuredLogMeanLuminance = 0.0f;
+        float targetExposure = 0.0f;
+    };
+    AutoExposureSettings autoExposure;
+    // Pixel probe (SurfelPathTracer): linear values of one pixel, read back by EngineCore.
+    struct PixelProbe
+    {
+        bool     enabled = false;
+        bool     freeze = false;
+        uint32_t x = 0, y = 0;               // requested pixel (follows the mouse unless frozen)
+        uint32_t sampledX = 0, sampledY = 0; // pixel the current values were read from
+        bool     valid = false;
+        glm::vec3 lighting{0.0f};            // linear composite before tonemapping
+        glm::vec3 resolvedIrradiance{0.0f};  // surfel resolve output (E)
+        float     coverage = 0.0f;
+        glm::vec3 albedo{0.0f};
+        glm::vec3 normal{0.0f};
+        float     sunVisibility = 0.0f;
+        float     ao = 0.0f;
+        float     depth = 0.0f;
+        glm::vec3 reference{0.0f};           // 1 spp reference probe, if enabled
+        bool      referenceValid = false;
+    };
+    PixelProbe pixelProbe;
     PathTracerSettings pathTracerSettings;
     PathTracerPerfStats pathTracerPerfStats;
+    SurfelPathTracerSettings surfelPathTracerSettings;
+    SurfelPathTracerStats surfelPathTracerStats;
+    // Set by the panel's "Reset stats window" button; consumed by EngineCore.
+    bool resetSurfelPathTracerStatsWindow = false;
     bool showEditorPanels = true;
 
 private:
@@ -95,8 +350,6 @@ private:
     std::vector<std::string> cachedAssetFiles;
     std::string selectedAssetPath;
     std::vector<std::string> lastImportMessages;
-    LaphriaEditor::ValidationReport lastValidationReport;
-    bool hasValidationReport = false;
     SceneNode::Ptr nodePendingReparent{nullptr};
     std::mt19937 rng{std::random_device{}()};
     TransformGizmoMode transformGizmoMode = TransformGizmoMode::Translate;
@@ -107,6 +360,9 @@ private:
     glm::vec3 transformDragStartScale{1.0f};
     glm::vec2 transformDragStartMouse{0.0f};
 
+    SurfelPathTracerSettings surfelResourceSettingsDraft;
+    bool surfelResourceSettingsDraftInitialized = false;
+
     void drawMainMenuBar(GLFWwindow *window);
 
     void drawSceneHierarchy(Scene &scene);
@@ -116,7 +372,9 @@ private:
     void drawInspector(ResourceManager &rm);
 
     void drawAssetBrowser(Scene &scene, ResourceManager &rm, vk::DescriptorSetLayout matLayout);
-    void drawValidationPanel();
+    void drawPathTracerMainControls();
+    void drawPathTracerAdvancedLightingControls();
+    void drawPathTracerStats();
 
     void refreshAssetCache();
 

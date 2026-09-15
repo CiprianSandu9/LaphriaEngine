@@ -5,7 +5,7 @@
 
 namespace Laphria::EngineConfig
 {
-constexpr float kDefaultSceneBoundsExtent = 1000.0f;
+constexpr float kDefaultSceneBoundsExtent = 10000.0f;
 
 constexpr uint32_t kMaxPhysicsObjects = 10000;
 constexpr uint32_t kMaxTLASInstances = 10000;
@@ -15,7 +15,8 @@ constexpr uint32_t kDescriptorPoolScale = 1000;
 
 constexpr float kMainCameraFovDegrees = 45.0f;
 constexpr float kMainCameraNearPlane = 0.1f;
-constexpr float kMainCameraFarPlane = 1000.0f;
+// Match the 10,000-unit ray TMax used by the ray tracer and path tracers.
+constexpr float kMainCameraFarPlane = 10000.0f;
 
 constexpr float kPhysicsBroadphaseCellSize = 4.0f;
 } // namespace Laphria::EngineConfig

@@ -52,7 +52,8 @@ public:
     // Runtime
     void update(float deltaTime, const ResourceManager &resourceManager) const;
 
-    // Draws all nodes whose world position falls within cullBounds (octree-accelerated query).
+    // Draws nodes whose world-space mesh bounds intersect the camera frustum.
+    // The octree is only the broad phase; final visibility never relies on an origin alone.
     void draw(const vk::raii::CommandBuffer &cmd, const vk::raii::PipelineLayout &pipelineLayout, const ResourceManager &resourceManager,
               const Laphria::AABB &cullBounds, const Laphria::Frustum &frustum) const;
 
@@ -65,6 +66,7 @@ private:
     std::unique_ptr<Laphria::Octree> octree;
     bool freezeCulling = false;
     mutable Laphria::AABB frozenCullBounds{{0,0,0},{0,0,0}};
+    mutable std::vector<glm::vec3> spatialIndexPositions;
 
     // Cached Model IDs for physics primitives
     int sphereModelId = -1;

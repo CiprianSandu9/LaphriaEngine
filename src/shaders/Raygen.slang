@@ -26,6 +26,132 @@ struct RayPayload {
 // Set 1 — global UBO
 [[vk::binding(0, 1)]] ConstantBuffer<UniformBuffer> ubo;
 
+[[vk::push_constant]] ScenePushConstants push;
+
+static const int ENV_NEE_SAMPLING_COSINE_HEMISPHERE = 0;
+static const int ENV_NEE_SAMPLING_SKY_BIASED = 1;
+static const int ENV_NEE_BOUNCE_FIRST_ONLY = 0;
+static const int ENV_NEE_BOUNCE_FIRST_TWO = 1;
+static const int ENV_NEE_BOUNCE_ALL = 2;
+static const int DIRECT_SUN_BOUNCE_ALL = 0;
+static const int DIRECT_SUN_BOUNCE_FIRST_ONLY = 1;
+static const int DIRECT_SUN_BOUNCE_FIRST_TWO = 2;
+static const uint PT_MATERIAL_MAX_BOUNCE_SHIFT = 26u;
+static const uint PT_MATERIAL_MAX_BOUNCE_MASK = 0x3u;
+static const uint PT_MATERIAL_DIRECT_SUN_SHIFT = 28u;
+static const uint PT_MATERIAL_DIRECT_SUN_MASK = 0x3u;
+static const uint PT_FLAGS_ENVIRONMENT_NEE_BIT = 1u << 0;
+static const uint PT_FLAGS_BLACK_ENVIRONMENT_BIT = 1u << 1;
+static const uint PT_FLAGS_ENVIRONMENT_SAMPLING_SHIFT = 3u;
+static const uint PT_FLAGS_ENVIRONMENT_SAMPLING_MASK = 0x3u;
+static const uint PT_FLAGS_ENVIRONMENT_BOUNCE_SHIFT = 21u;
+static const uint PT_FLAGS_ENVIRONMENT_BOUNCE_MASK = 0x3u;
+
+RayPayload makeVisibilityPayload()
+{
+    RayPayload payload;
+    payload.hitT        = 1.0;
+    payload.albedo      = float3(0.0, 0.0, 0.0);
+    payload.emission    = float3(0.0, 0.0, 0.0);
+    payload.worldNormal = float3(0.0, 1.0, 0.0);
+    payload.hitPos      = float3(0.0, 0.0, 0.0);
+    payload.roughness   = 1.0;
+    payload.metallic    = 0.0;
+    payload.F0          = float3(0.0, 0.0, 0.0);
+    payload.ao          = 1.0;
+    payload.instanceID  = 0;
+    return payload;
+}
+
+float powerHeuristic(float sampleCountA, float pdfA, float sampleCountB, float pdfB)
+{
+    float a = max(sampleCountA, 0.0) * max(pdfA, 0.0);
+    float b = max(sampleCountB, 0.0) * max(pdfB, 0.0);
+    float a2 = a * a;
+    float b2 = b * b;
+    float denom = a2 + b2;
+    return (denom > 0.0) ? (a2 / denom) : 0.0;
+}
+
+float environmentSamplePdf(float3 envDir, float3 N)
+{
+    return max(dot(N, envDir), 0.0) / PI;
+}
+
+float skyBiasedEnvironmentPdf(float3 envDir)
+{
+    return max(envDir.y, 0.0) / PI;
+}
+
+float environmentSamplePdf(float3 envDir, float3 N, int samplingMode)
+{
+    if (samplingMode == ENV_NEE_SAMPLING_SKY_BIASED) {
+        return skyBiasedEnvironmentPdf(envDir);
+    }
+    return environmentSamplePdf(envDir, N);
+}
+
+float bsdfPdfForEnvironmentDirection(float3 envDir, float3 N, float diffuseSelectionProbability)
+{
+    return max(diffuseSelectionProbability, 0.0) * environmentSamplePdf(envDir, N);
+}
+
+float3 sampleSkyBiasedEnvironmentDirection(float2 xi)
+{
+    return cosineSampleHemisphere(xi, float3(0.0, 1.0, 0.0));
+}
+
+bool environmentNeeEnabledForBounce(int bounce, int environmentNeeBounceMode)
+{
+    return environmentNeeBounceMode == ENV_NEE_BOUNCE_ALL ||
+           (environmentNeeBounceMode == ENV_NEE_BOUNCE_FIRST_TWO && bounce <= 1) ||
+           (environmentNeeBounceMode == ENV_NEE_BOUNCE_FIRST_ONLY && bounce == 0);
+}
+
+bool directSunEnabledForBounce(int bounce, int directSunBounceMode)
+{
+    return directSunBounceMode == DIRECT_SUN_BOUNCE_ALL ||
+           (directSunBounceMode == DIRECT_SUN_BOUNCE_FIRST_ONLY && bounce == 0) ||
+           (directSunBounceMode == DIRECT_SUN_BOUNCE_FIRST_TWO && bounce <= 1);
+}
+
+float3 sampleEnvironmentNEE(float3 hitPos, float3 N, float3 V, float3 throughput, RayPayload payload, float diffuseSelectionProbability, int samplingMode, inout uint rngState)
+{
+    float2 xi = float2(randomFloat(rngState), randomFloat(rngState));
+    float3 envDir = (samplingMode == ENV_NEE_SAMPLING_SKY_BIASED)
+        ? sampleSkyBiasedEnvironmentDirection(xi)
+        : cosineSampleHemisphere(xi, N);
+    float envPdf = environmentSamplePdf(envDir, N, samplingMode);
+    float NdotEnv = max(dot(N, envDir), 0.0);
+    if (envPdf <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    if (NdotEnv <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    RayPayload envPayload = makeVisibilityPayload();
+    RayDesc envRay;
+    envRay.Origin    = hitPos + N * 0.002;
+    envRay.Direction = envDir;
+    envRay.TMin      = 0.001;
+    envRay.TMax      = 10000.0;
+    TraceRay(tlas,
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+        0xFF, 0, 0, 0, envRay, envPayload);
+
+    if (envPayload.hitT >= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float3 F = fresnelSchlick(max(dot(N, V), 0.0), payload.F0);
+    float3 kD = (float3(1.0, 1.0, 1.0) - F) * (1.0 - payload.metallic);
+    float3 diffuseBsdf = kD * payload.albedo / PI;
+    float bsdfPdf = bsdfPdfForEnvironmentDirection(envDir, N, diffuseSelectionProbability);
+    float misWeight = powerHeuristic(1.0, envPdf, 1.0, bsdfPdf);
+    return throughput * diffuseBsdf * envPayload.emission * NdotEnv * misWeight / max(envPdf, 0.0001);
+}
+
 [shader("raygeneration")]
 void main() {
     uint2  launchID   = DispatchRaysIndex().xy;
@@ -46,6 +172,20 @@ void main() {
     // ── Path tracing loop ──────────────────────────────────────────────────
     float3 radiance   = float3(0.0, 0.0, 0.0);
     float3 throughput = float3(1.0, 1.0, 1.0);
+    float  pendingSkyMissMisWeight = 1.0;
+    uint   packedPathTracerFlags = push.padding3;
+    bool   environmentNeeEnabled = (packedPathTracerFlags & PT_FLAGS_ENVIRONMENT_NEE_BIT) != 0;
+    int    environmentNeeSamplingMode = int((packedPathTracerFlags >> PT_FLAGS_ENVIRONMENT_SAMPLING_SHIFT) &
+                                            PT_FLAGS_ENVIRONMENT_SAMPLING_MASK);
+    int    environmentNeeBounceMode = int((packedPathTracerFlags >> PT_FLAGS_ENVIRONMENT_BOUNCE_SHIFT) &
+                                          PT_FLAGS_ENVIRONMENT_BOUNCE_MASK);
+    uint   packedPathTracerMaterialIndex = uint(push.materialIndex);
+    int    pathTracerMaxBounceCode = int((packedPathTracerMaterialIndex >> PT_MATERIAL_MAX_BOUNCE_SHIFT) &
+                                         PT_MATERIAL_MAX_BOUNCE_MASK);
+    int    pathTracerMaxBounces = (pathTracerMaxBounceCode == 0) ? 3 :
+                                  ((pathTracerMaxBounceCode == 1) ? 5 : 8);
+    int    directSunBounceMode = int((packedPathTracerMaterialIndex >> PT_MATERIAL_DIRECT_SUN_SHIFT) &
+                                     PT_MATERIAL_DIRECT_SUN_MASK);
 
     RayDesc ray;
     ray.Origin    = origin;
@@ -53,9 +193,11 @@ void main() {
     ray.TMin      = 0.001;
     ray.TMax      = 10000.0;
 
-    static const int MAX_BOUNCES = 3;
+    // Keep a higher hard cap for enclosed/interior transport; Russian roulette below
+    // keeps the average path length bounded for performance.
+    static const int RR_START_BOUNCE = 2;
 
-    for (int bounce = 0; bounce < MAX_BOUNCES; ++bounce)
+    for (int bounce = 0; bounce < pathTracerMaxBounces; ++bounce)
     {
         RayPayload payload;
         payload.hitT = -1.0;
@@ -64,7 +206,7 @@ void main() {
 
         // Sky miss: accumulate background emission and terminate.
         if (payload.hitT < 0.0) {
-            radiance += throughput * payload.emission;
+            radiance += throughput * payload.emission * pendingSkyMissMisWeight;
             // Write sentinel G-Buffer values so sky pixels don't leave stale/garbage data
             // that would confuse the denoiser's edge-stopping functions.
             if (bounce == 0) {
@@ -76,8 +218,8 @@ void main() {
         }
 
         // Accumulate emissive contribution from the surface.
-        radiance += throughput * payload.emission;
-
+        float3 emissiveContribution = throughput * payload.emission;
+        radiance += emissiveContribution;
         float3 N2 = payload.worldNormal;
         float3 V2 = -ray.Direction;
 
@@ -85,7 +227,7 @@ void main() {
         // ubo.lightDir points FROM the light TOWARD the scene, so negate for surface-to-light.
         float3 Ldir  = normalize(-ubo.lightDir.xyz);
         float  NdotL = max(dot(N2, Ldir), 0.0);
-        if (NdotL > 0.0)
+        if (directSunEnabledForBounce(bounce, directSunBounceMode) && NdotL > 0.0)
         {
             // Cheap occlusion ray: skip ClosestHit, terminate on first accepted hit.
             RayPayload shadowPayload;
@@ -106,7 +248,7 @@ void main() {
             shadowRay.TMin      = 0.001;
             shadowRay.TMax      = 10000.0;
             TraceRay(tlas,
-                RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+                RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
                 0xFF, 0, 0, 0, shadowRay, shadowPayload);
 
             // Binary hard-shadow visibility for the direct sun sample.
@@ -123,7 +265,8 @@ void main() {
             float3 specular = (D * Fs * G) / max(4.0 * NdotV * NdotL, 0.0001);
 
             float shadowVisibility = (shadowPayload.hitT < 0.0) ? 1.0 : 0.0;
-            radiance += throughput * (diffuse + specular) * NdotL * SUN_RADIANCE * shadowVisibility;
+            float3 directContribution = throughput * (diffuse + specular) * NdotL * SUN_RADIANCE * shadowVisibility;
+            radiance += directContribution;
         }
 
         // ── Primary-ray G-Buffer write (bounce 0 only) ─────────────────────
@@ -154,6 +297,15 @@ void main() {
         float3 F       = fresnelSchlick(max(dot(N, V), 0.0), payload.F0);
         float  fAvg    = (F.r + F.g + F.b) / 3.0;
         float  specProb = clamp(fAvg + payload.metallic * 0.5, 0.1, 0.9);
+        float  diffuseSelectionProbability = 1.0 - specProb;
+
+        bool useEnvironmentNeeOnThisBounce =
+            environmentNeeEnabled && environmentNeeEnabledForBounce(bounce, environmentNeeBounceMode);
+        if (useEnvironmentNeeOnThisBounce) {
+            float3 envNeeContribution = sampleEnvironmentNEE(payload.hitPos, N, V, throughput, payload,
+                                                             diffuseSelectionProbability, environmentNeeSamplingMode, rngState);
+            radiance += envNeeContribution;
+        }
 
         float3 newDir;
         float  pdf;
@@ -164,6 +316,7 @@ void main() {
             newDir = ggxSampleDirection(xi, N, V, payload.roughness);
             float NdotL = max(dot(N, newDir), 0.0);
             if (NdotL <= 0.0) break;
+            pendingSkyMissMisWeight = 1.0;
 
             float3 H    = normalize(V + newDir);
             float  G    = geometrySmith(N, V, newDir, payload.roughness);
@@ -177,18 +330,22 @@ void main() {
             // Diffuse (cosine hemisphere) lobe — cosine factor cancels with PDF.
             newDir = cosineSampleHemisphere(xi, N);
             if (max(dot(N, newDir), 0.0) <= 0.0) break;
+            float bsdfEnvPdf = bsdfPdfForEnvironmentDirection(newDir, N, diffuseSelectionProbability);
+            float envPdf = environmentSamplePdf(newDir, N, environmentNeeSamplingMode);
+            pendingSkyMissMisWeight = useEnvironmentNeeOnThisBounce ? powerHeuristic(1.0, bsdfEnvPdf, 1.0, envPdf) : 1.0;
 
             float3 kD  = (float3(1.0, 1.0, 1.0) - F) * (1.0 - payload.metallic);
             bsdfWeight = kD * payload.albedo;
-            pdf        = 1.0 - specProb;
+            pdf        = diffuseSelectionProbability;
         }
 
         throughput *= bsdfWeight / max(pdf, 0.0001);
 
-        // Russian roulette: stochastic early termination after first bounce.
-        if (bounce >= 1) {
+        // Russian roulette: allow a few guaranteed bounces so enclosed spaces can collect
+        // indirect light, then terminate stochastically based on path throughput.
+        if (bounce >= RR_START_BOUNCE) {
             float maxT  = max(throughput.r, max(throughput.g, throughput.b));
-            float rrProb = clamp(maxT, 0.01, 0.95); // clamp away from 0 to prevent 0/0 NaN
+            float rrProb = clamp(maxT, 0.05, 0.98); // clamp away from 0 to prevent 0/0 NaN
             if (randomFloat(rngState) > rrProb) break;
             throughput /= rrProb;
         }

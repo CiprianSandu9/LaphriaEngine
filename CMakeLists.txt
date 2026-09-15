@@ -33,6 +33,28 @@ set(SHADER_SOURCES
         "Raygen.slang|main"
         "Reprojection.slang|reprojectionMain"
         "Denoiser.slang|atrousMain"
+        "SurfelPathTracerSky.slang|main"
+        "SurfelPathTracerGBuffer.slang|main"
+        "SurfelPathTracerGBufferMiss.slang|main"
+        "SurfelPathTracerGBufferClosestHit.slang|main"
+        "SurfelPathTracerGBufferAnyHit.slang|main"
+        "SurfelPathTracerPrepare.slang|main"
+        "SurfelPathTracerUpdate.slang|main"
+        "SurfelPathTracerCellInfo.slang|main"
+        "SurfelPathTracerCellToSurfel.slang|main"
+        "SurfelPathTracerRaySchedule.slang|main"
+        "SurfelPathTracerRaygen.slang|main"
+        "SurfelPathTracerMiss.slang|main"
+        "SurfelPathTracerClosestHit.slang|main"
+        "SurfelPathTracerAnyHit.slang|main"
+        "SurfelPathTracerIntegrate.slang|main"
+        "SurfelPathTracerEvaluate.slang|main"
+        "SurfelPathTracerReflection.slang|main"
+        "SurfelPathTracerReference.slang|main"
+        "SurfelPathTracerReflectionFilter.slang|main"
+        "SurfelPathTracerBilateral.slang|main"
+        "SurfelPathTracerLightIntegrate.slang|main"
+        "SurfelPathTracerTaa.slang|main"
 )
 
 if (CMAKE_CONFIGURATION_TYPES)
@@ -41,6 +63,11 @@ else ()
     set(SHADERS_DIR "${CMAKE_BINARY_DIR}/LaphriaEngine/Shaders")
 endif ()
 set(GENERATED_SPV_FILES "")
+
+set(SHADER_INCLUDE_DEPS
+        "${SHADER_SOURCE_ROOT}/ShaderCommon.slang"
+        "${SHADER_SOURCE_ROOT}/SurfelPathTracerCommon.slang"
+)
 
 foreach (SHADER_ENTRY ${SHADER_SOURCES})
     string(REPLACE "|" ";" SHADER_PARTS "${SHADER_ENTRY}")
@@ -64,7 +91,7 @@ foreach (SHADER_ENTRY ${SHADER_SOURCES})
             -emit-spirv-directly ${ENTRY_POINTS}
             -o ${SHADER_OUTPUT} -fvk-use-entrypoint-name
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            DEPENDS ${SHADER_SOURCE}
+            DEPENDS ${SHADER_SOURCE} ${SHADER_INCLUDE_DEPS}
             COMMENT "Compiling Slang shader: ${SHADER_NAME}"
             VERBATIM
     )
@@ -97,6 +124,12 @@ set(LAPHRIA_ENGINE_SOURCES
         src/Core/ResourceManager.cpp
         src/Core/ResourceManager.h
         src/Core/StbImageImpl.cpp
+        src/Core/SurfelPathTracerPipelines.cpp
+        src/Core/SurfelPathTracerPipelines.h
+        src/Core/SurfelPathTracerPasses.cpp
+        src/Core/SurfelPathTracerPasses.h
+        src/Core/SurfelPathTracerResources.cpp
+        src/Core/SurfelPathTracerResources.h
         src/Core/SwapchainManager.cpp
         src/Core/SwapchainManager.h
         src/Core/UISystem.cpp
@@ -120,15 +153,6 @@ set(LAPHRIA_ENGINE_SOURCES
         src/SceneManagement/SceneNode.h
 )
 
-set(LAPHRIA_EDITOR_VALIDATION_SOURCES
-        src/Core/EditorValidation.cpp
-        src/Core/EditorValidation.h
-)
-
-add_library(LaphriaEditorValidation STATIC ${LAPHRIA_EDITOR_VALIDATION_SOURCES})
-set_target_properties(LaphriaEditorValidation PROPERTIES CXX_STANDARD 20)
-target_link_libraries(LaphriaEditorValidation PUBLIC nlohmann_json::nlohmann_json)
-
 add_library(LaphriaEngine STATIC ${LAPHRIA_ENGINE_SOURCES})
 set_target_properties(LaphriaEngine PROPERTIES CXX_STANDARD 20)
 
@@ -151,7 +175,6 @@ target_include_directories(LaphriaEngine PRIVATE
 )
 
 target_link_libraries(LaphriaEngine PUBLIC
-        LaphriaEditorValidation
         Vulkan::Vulkan
         glfw
         glm::glm
@@ -171,75 +194,11 @@ set_target_properties(LaphriaEditor PROPERTIES
 target_link_libraries(LaphriaEditor PRIVATE LaphriaEngine)
 add_dependencies(LaphriaEditor LaphriaEngine_shaders)
 
-add_executable(LaphriaValidationRunner src/LaphriaValidationRunnerMain.cpp)
-set_target_properties(LaphriaValidationRunner PROPERTIES
-        CXX_STANDARD 20
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/LaphriaTools
-)
-target_link_libraries(LaphriaValidationRunner PRIVATE LaphriaEditorValidation)
-
 if (WIN32 AND CMAKE_GENERATOR MATCHES "Visual Studio.*")
     set_target_properties(LaphriaEditor PROPERTIES
             VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:LaphriaEditor>"
     )
-    set_target_properties(LaphriaValidationRunner PROPERTIES
-            VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:LaphriaValidationRunner>"
-    )
 endif ()
-
-enable_testing()
-
-add_test(
-        NAME LaphriaValidationProjectValid
-        COMMAND LaphriaValidationRunner
-        --validate-project
-        --project "${CMAKE_SOURCE_DIR}/tests/fixtures/validation/valid_project.laphria_project.json"
-)
-
-add_test(
-        NAME LaphriaValidationSceneValid
-        COMMAND LaphriaValidationRunner
-        --validate-scene
-        --scene "${CMAKE_SOURCE_DIR}/tests/fixtures/validation/valid_scene.json"
-)
-
-add_test(
-        NAME LaphriaValidationProjectInvalid
-        COMMAND LaphriaValidationRunner
-        --validate-project
-        --project "${CMAKE_SOURCE_DIR}/tests/fixtures/validation/invalid_project.laphria_project.json"
-)
-set_tests_properties(LaphriaValidationProjectInvalid PROPERTIES WILL_FAIL TRUE)
-
-add_test(
-        NAME LaphriaValidationSceneInvalid
-        COMMAND LaphriaValidationRunner
-        --validate-scene
-        --scene "${CMAKE_SOURCE_DIR}/tests/fixtures/validation/invalid_scene.json"
-)
-set_tests_properties(LaphriaValidationSceneInvalid PROPERTIES WILL_FAIL TRUE)
-
-add_executable(LaphriaEngineUnitTests
-        tests/EngineUnitTestsMain.cpp
-        src/SceneManagement/SceneNode.cpp
-        src/Physics/Broadphase.cpp
-)
-set_target_properties(LaphriaEngineUnitTests PROPERTIES CXX_STANDARD 20)
-target_compile_definitions(LaphriaEngineUnitTests PRIVATE
-        GLM_FORCE_DEPTH_ZERO_TO_ONE
-        GLM_FORCE_RADIANS
-        GLM_ENABLE_EXPERIMENTAL
-        GLM_FORCE_CXX11
-)
-target_link_libraries(LaphriaEngineUnitTests PRIVATE
-        glm::glm
-        nlohmann_json::nlohmann_json
-)
-
-add_test(
-        NAME LaphriaEngineUnitTests
-        COMMAND LaphriaEngineUnitTests
-)
 
 if (Python3_Interpreter_FOUND)
     add_custom_target(docs-generate

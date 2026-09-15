@@ -9,6 +9,7 @@ struct RayPayload {
     float  roughness;
     float  metallic;
     float3 F0;
+    float  ao;
     float  hitT;
     uint   instanceID;
 };

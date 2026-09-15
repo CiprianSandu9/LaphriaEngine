@@ -28,6 +28,7 @@ public:
     vk::raii::Queue                  queue{nullptr};
 	// Ray Tracing hardware properties
 	vk::PhysicalDeviceRayTracingPipelinePropertiesKHR rayTracingProperties;
+	bool rayTracingPipelineTraceRaysIndirect = false;
 
     std::vector<const char *> requiredDeviceExtension = {
         vk::KHRSwapchainExtensionName,
@@ -40,6 +41,7 @@ public:
 
 private:
     void createInstance();
+    void createDebugMessenger();
     void createSurface(GLFWwindow *window);
     void pickPhysicalDevice();
     void createLogicalDevice();

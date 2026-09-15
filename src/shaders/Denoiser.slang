@@ -16,6 +16,9 @@ struct DenoisePushConstants {
     float phiNormal;   // normal edge-stopping exponent  (typical: 128.0)
     float exposureScale;
     int   useRawInput; // 1 if Reprojection was skipped
+    uint  renderWidth;
+    uint  renderHeight;
+    int   resetHistory;
 };
 [[vk::push_constant]] DenoisePushConstants push;
 
@@ -28,8 +31,7 @@ static const float kWeights[3] = { 3.0 / 8.0, 1.0 / 4.0, 1.0 / 16.0 };
 [numthreads(16, 16, 1)]
 void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
 {
-    uint2 dims;
-    atrousTempA.GetDimensions(dims.x, dims.y);
+    uint2 dims = uint2(push.renderWidth, push.renderHeight);
     uint2 pixel = dispatchID.xy;
     if (pixel.x >= dims.x || pixel.y >= dims.y) return;
 
@@ -46,8 +48,7 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
         // Pass-through mode: denoiser disabled, just apply tonemap.
         float3 color = (push.useRawInput != 0) ? noisyColor[pixel].rgb : atrousTempA[pixel].rgb;
         if (push.isLastPass != 0) {
-            float3 tonemapped = applyAcesTonemap(color, push.exposureScale);
-            finalOutput[pixel] = float4(tonemapped, 1.0);
+            finalOutput[pixel] = float4(applyAcesTonemap(color, push.exposureScale), 1.0);
         }
         return;
     }
@@ -123,12 +124,8 @@ void atrousMain(uint3 dispatchID : SV_DispatchThreadID)
     float3 filtered = colorSum / max(weightSum, 0.0001);
 
     if (push.isLastPass != 0) {
-        // Final iteration: apply tone mapping and write to the denoised output image.
-        // The swapchain is B8G8R8A8_SRGB, so the blit automatically applies the
-        // sRGB transfer function. Do NOT call linearToSRGB here — that would apply
-        // gamma twice and wash out all dark values to mid-grey.
-        float3 tonemapped = applyAcesTonemap(filtered, push.exposureScale);
-        finalOutput[pixel] = float4(tonemapped, 1.0);
+        float3 outColor = applyAcesTonemap(filtered, push.exposureScale);
+        finalOutput[pixel] = float4(outColor, 1.0);
     } else {
         // Intermediate iteration: write to the OTHER ping-pong buffer.
         if (readA)

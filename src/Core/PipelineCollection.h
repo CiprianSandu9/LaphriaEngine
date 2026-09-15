@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "EngineAuxiliary.h"
+#include "SurfelPathTracerPipelines.h"
 #include "VulkanDevice.h"
 #include "VulkanUtils.h"
 
@@ -27,6 +28,8 @@ class PipelineCollection
 	void createDenoiserPipelines(const VulkanDevice &dev);
 	void createClassicRTPipeline(const VulkanDevice &dev);
 	void createClassicRTShaderBindingTable(const VulkanDevice &dev);
+
+	Laphria::SurfelPathTracerPipelines surfelPathTracerPipelines;
 
 	// ── Descriptor Set Layouts ────────────────────────────────────────────
 	vk::raii::DescriptorSetLayout descriptorSetLayoutGlobal{nullptr};

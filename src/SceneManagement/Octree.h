@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <glm/glm.hpp>
 #include "SceneNode.h"
@@ -34,7 +35,8 @@ namespace Laphria {
     // Usage: insert all scene nodes after each frame update, then query with a view frustum AABB.
     class Octree {
     public:
-        Octree(const AABB &boundary, int capacity = 4) : boundary(boundary), capacity(capacity) {
+        Octree(const AABB &boundary, int capacity = 4, uint32_t depth = 0, uint32_t maxDepth = 12)
+            : boundary(boundary), capacity(capacity), depth(depth), maxDepth(maxDepth) {
         }
 
         // Inserts node if its world position falls within this node's boundary.
@@ -45,6 +47,11 @@ namespace Laphria {
             }
 
             if (nodes.size() < capacity && children[0] == nullptr) {
+                nodes.push_back(node);
+                return true;
+            }
+
+            if (depth >= maxDepth) {
                 nodes.push_back(node);
                 return true;
             }
@@ -97,6 +104,8 @@ namespace Laphria {
     private:
         AABB boundary;
         int capacity;
+        uint32_t depth;
+        uint32_t maxDepth;
         std::vector<SceneNode::Ptr> nodes;
         std::array<std::unique_ptr<Octree>, 8> children;
 
@@ -107,16 +116,16 @@ namespace Laphria {
 
             // Create 8 children
             // Bottom (Y min)
-            children[0] = std::make_unique<Octree>(AABB{min, center}, capacity);
-            children[1] = std::make_unique<Octree>(AABB{glm::vec3(center.x, min.y, min.z), glm::vec3(max.x, center.y, center.z)}, capacity);
-            children[2] = std::make_unique<Octree>(AABB{glm::vec3(min.x, min.y, center.z), glm::vec3(center.x, center.y, max.z)}, capacity);
-            children[3] = std::make_unique<Octree>(AABB{glm::vec3(center.x, min.y, center.z), glm::vec3(max.x, center.y, max.z)}, capacity);
+            children[0] = std::make_unique<Octree>(AABB{min, center}, capacity, depth + 1, maxDepth);
+            children[1] = std::make_unique<Octree>(AABB{glm::vec3(center.x, min.y, min.z), glm::vec3(max.x, center.y, center.z)}, capacity, depth + 1, maxDepth);
+            children[2] = std::make_unique<Octree>(AABB{glm::vec3(min.x, min.y, center.z), glm::vec3(center.x, center.y, max.z)}, capacity, depth + 1, maxDepth);
+            children[3] = std::make_unique<Octree>(AABB{glm::vec3(center.x, min.y, center.z), glm::vec3(max.x, center.y, max.z)}, capacity, depth + 1, maxDepth);
 
             // Top (Y max)
-            children[4] = std::make_unique<Octree>(AABB{glm::vec3(min.x, center.y, min.z), glm::vec3(center.x, max.y, center.z)}, capacity);
-            children[5] = std::make_unique<Octree>(AABB{glm::vec3(center.x, center.y, min.z), glm::vec3(max.x, max.y, center.z)}, capacity);
-            children[6] = std::make_unique<Octree>(AABB{glm::vec3(min.x, center.y, center.z), glm::vec3(center.x, max.y, max.z)}, capacity);
-            children[7] = std::make_unique<Octree>(AABB{center, max}, capacity);
+            children[4] = std::make_unique<Octree>(AABB{glm::vec3(min.x, center.y, min.z), glm::vec3(center.x, max.y, center.z)}, capacity, depth + 1, maxDepth);
+            children[5] = std::make_unique<Octree>(AABB{glm::vec3(center.x, center.y, min.z), glm::vec3(max.x, max.y, center.z)}, capacity, depth + 1, maxDepth);
+            children[6] = std::make_unique<Octree>(AABB{glm::vec3(min.x, center.y, center.z), glm::vec3(center.x, max.y, max.z)}, capacity, depth + 1, maxDepth);
+            children[7] = std::make_unique<Octree>(AABB{center, max}, capacity, depth + 1, maxDepth);
         }
     };
 } // namespace Laphria

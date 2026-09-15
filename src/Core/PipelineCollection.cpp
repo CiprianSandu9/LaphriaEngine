@@ -52,6 +52,7 @@ void PipelineCollection::createDescriptorSetLayouts(const VulkanDevice &dev)
 	createRayTracingDescriptorSetLayout(dev);
 	createPhysicsDescriptorSetLayout(dev);
 	createDenoiserDescriptorSetLayout(dev);
+	surfelPathTracerPipelines.createDescriptorSetLayouts(dev);
 }
 
 // ── Descriptor Set Layout Implementations ──────────────────────────────────
@@ -69,7 +70,7 @@ void PipelineCollection::createGlobalDescriptorSetLayout(const VulkanDevice &dev
 	        .descriptorCount = 1,
 	        .stageFlags      = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment |
 	                      vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR |
-	                      vk::ShaderStageFlagBits::eMissKHR},
+	                      vk::ShaderStageFlagBits::eMissKHR | vk::ShaderStageFlagBits::eCompute},
 	    vk::DescriptorSetLayoutBinding{
 	        .binding         = 1,
 	        .descriptorType  = vk::DescriptorType::eSampledImage,
@@ -170,14 +171,16 @@ void PipelineCollection::createSkinningDescriptorSetLayout(const VulkanDevice &d
 
 void PipelineCollection::createPhysicsDescriptorSetLayout(const VulkanDevice &dev)
 {
-	vk::DescriptorSetLayoutBinding ssboBinding{
-	    .binding         = 0,
-	    .descriptorType  = vk::DescriptorType::eStorageBuffer,
-	    .descriptorCount = 1,
-	    .stageFlags      = vk::ShaderStageFlagBits::eCompute};
+	std::array<vk::DescriptorSetLayoutBinding, 2> ssboBindings = {
+	    vk::DescriptorSetLayoutBinding{
+	        .binding = 0, .descriptorType = vk::DescriptorType::eStorageBuffer,
+	        .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+	    vk::DescriptorSetLayoutBinding{
+	        .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer,
+	        .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute}};
 	vk::DescriptorSetLayoutCreateInfo layoutInfo{
-	    .bindingCount = 1,
-	    .pBindings    = &ssboBinding};
+	    .bindingCount = static_cast<uint32_t>(ssboBindings.size()),
+	    .pBindings    = ssboBindings.data()};
 	physicsDescriptorSetLayout = vk::raii::DescriptorSetLayout(dev.logicalDevice, layoutInfo);
 }
 
@@ -185,7 +188,7 @@ void PipelineCollection::createRayTracingDescriptorSetLayout(const VulkanDevice 
 {
 	// Set 0 — RT pipeline bindings.
 	// Bindings 0-4: acceleration structure + storage images written by Raygen.
-	// Bindings 5-8: mesh data arrays read by ClosestHit (shifted from old 2-5 to make room).
+	// Bindings 5-8: mesh data arrays read by ClosestHit.
 	std::array<vk::DescriptorSetLayoutBinding, 9> bindings = {
 	    vk::DescriptorSetLayoutBinding{// 0: TLAS
 	                                   .binding         = 0,
@@ -241,7 +244,8 @@ void PipelineCollection::createRayTracingDescriptorSetLayout(const VulkanDevice 
 	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,  // 5
 	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,  // 6
 	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,  // 7
-	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind}; // 8
+	    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind // 8
+	};
 	vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlags{
 	    .bindingCount  = static_cast<uint32_t>(flags.size()),
 	    .pBindingFlags = flags.data()};
@@ -255,7 +259,7 @@ void PipelineCollection::createRayTracingDescriptorSetLayout(const VulkanDevice 
 
 void PipelineCollection::createDenoiserDescriptorSetLayout(const VulkanDevice &dev)
 {
-	// 13 storage image bindings covering all denoiser pass inputs and outputs.
+	// Image bindings covering all denoiser pass inputs and outputs.
 	// Both reprojection and A-Trous shaders share this single layout, selecting
 	// the relevant bindings via the shader source.
 	std::array<vk::DescriptorSetLayoutBinding, 13> bindings = {
@@ -468,9 +472,12 @@ void PipelineCollection::createShadowPipeline(VulkanDevice &dev)
 	    .pName  = "shadowFrag"};
 	std::array<vk::PipelineShaderStageCreateInfo, 2> shaderStages = {vertStage, fragStage};
 
-	// Use the same vertex input layout as the main pipeline so the same VBOs are compatible.
-	auto                                   bindingDesc = Vertex::getBindingDescription();
-	auto                                   attribDescs = Vertex::getAttributeDescriptions();
+	// Keep the full interleaved-vertex stride, but expose only the attributes the
+	// shadow shader consumes. Advertising optimized-out locations triggers validation.
+	auto bindingDesc = Vertex::getBindingDescription();
+	std::array<vk::VertexInputAttributeDescription, 2> attribDescs = {
+	    vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
+	    vk::VertexInputAttributeDescription(3, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord))};
 	vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
 	    .vertexBindingDescriptionCount   = 1,
 	    .pVertexBindingDescriptions      = &bindingDesc,

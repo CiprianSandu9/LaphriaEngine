@@ -1,12 +1,19 @@
+#if defined(_WIN32) && !defined(NOMINMAX)
+#	define NOMINMAX
+#endif
+
 #include "EngineCore.h"
-#include "VulkanUtils.h"
 #include "VmaContext.h"
+#include "VulkanUtils.h"
 
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cmath>
+#include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
@@ -18,6 +25,10 @@
 #include <unordered_map>
 #include <vector>
 
+#if defined(_WIN32)
+#	include <Windows.h>
+#endif
+
 #include "../SceneManagement/Scene.h"
 #include "EngineAuxiliary.h"
 #include "EngineConfig.h"
@@ -27,1843 +38,4050 @@ using namespace Laphria;
 
 namespace
 {
-constexpr uint32_t kPtTimestampQueryCountPerFrame = 8;
-constexpr double kWindowTitleUpdateIntervalSeconds = 0.5;
-enum PtTimestampSlot : uint32_t
+constexpr uint32_t    kPtTimestampQueryCountPerFrame         = 8;
+constexpr uint32_t    kSurfelTimestampQueryCountPerFrame     = 24;
+constexpr uint32_t    kSurfelTimestampQueryOffset            = kPtTimestampQueryCountPerFrame;
+constexpr uint32_t    kGpuTimestampQueryCountPerFrame        =
+    kPtTimestampQueryCountPerFrame + kSurfelTimestampQueryCountPerFrame;
+constexpr uint32_t    kPtMaterialMaxBounceShift              = 26u;
+constexpr uint32_t    kPtMaterialMaxBounceMask               = 0x3u;
+constexpr uint32_t    kPtMaterialDirectSunShift              = 28u;
+constexpr uint32_t    kPtMaterialDirectSunMask               = 0x3u;
+constexpr uint32_t    kPtFlagsEnvironmentNeeBit              = 1u << 0u;
+constexpr uint32_t    kPtFlagsBlackEnvironmentBit            = 1u << 1u;
+constexpr uint32_t    kPtFlagsEnvironmentSamplingShift       = 3u;
+constexpr uint32_t    kPtFlagsEnvironmentSamplingMask        = 0x3u;
+constexpr uint32_t    kPtFlagsEnvironmentBounceShift         = 21u;
+constexpr uint32_t    kPtFlagsEnvironmentBounceMask          = 0x3u;
+constexpr int         PATH_TRACER_BLACK_ENVIRONMENT_BIT      = static_cast<int>(kPtFlagsBlackEnvironmentBit);
+constexpr double      kWindowTitleUpdateIntervalSeconds      = 0.5;
+
+uint32_t packPathTracerBits(uint32_t value, uint32_t shift, uint32_t mask)
 {
-    kPtTS_TlasStart = 0,
-    kPtTS_TlasEnd = 1,
-    kPtTS_RayTraceStart = 2,
-    kPtTS_RayTraceEnd = 3,
-    kPtTS_ReprojectionStart = 4,
-    kPtTS_ReprojectionEnd = 5,
-    kPtTS_DenoiserStart = 6,
-    kPtTS_DenoiserEnd = 7
-};
+	return (value & mask) << shift;
 }
 
-EngineCore::EngineCore(EngineHostOptions optionsIn, EngineHostCallbacks callbacksIn)
-    : options(std::move(optionsIn)), callbacks(std::move(callbacksIn))
+uint32_t encodePathTracerMaxBounceCode(int maxBounces)
+{
+	if (maxBounces <= 3)
+	{
+		return 0u;
+	}
+	if (maxBounces <= 5)
+	{
+		return 1u;
+	}
+	return 2u;
+}
+
+uint32_t packPathTracerMaterialSettings(const UISystem::PathTracerSettings &settings)
+{
+	return packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.directSunBounceMode, 0, 2)),
+	                          kPtMaterialDirectSunShift,
+	                          kPtMaterialDirectSunMask) |
+	       packPathTracerBits(encodePathTracerMaxBounceCode(settings.pathTracerMaxBounces),
+	                          kPtMaterialMaxBounceShift,
+	                          kPtMaterialMaxBounceMask);
+}
+
+uint32_t packPathTracerFlags(const UISystem::PathTracerSettings &settings)
+{
+	return (settings.enableEnvironmentNEE ? kPtFlagsEnvironmentNeeBit : 0u) |
+	       (settings.blackEnvironment ? kPtFlagsBlackEnvironmentBit : 0u) |
+	       packPathTracerBits(static_cast<uint32_t>(settings.environmentNeeSamplingMode),
+	                          kPtFlagsEnvironmentSamplingShift,
+	                          kPtFlagsEnvironmentSamplingMask) |
+	       packPathTracerBits(static_cast<uint32_t>(std::clamp(settings.environmentNeeBounceMode, 0, 2)),
+	                          kPtFlagsEnvironmentBounceShift,
+	                          kPtFlagsEnvironmentBounceMask);
+}
+
+struct PercentileTriplet
+{
+	float p50 = 0.0f;
+	float p95 = 0.0f;
+	float p99 = 0.0f;
+};
+
+float nearestRankPercentile(const std::vector<float> &sortedValues, float percentile)
+{
+	if (sortedValues.empty())
+	{
+		return 0.0f;
+	}
+
+	const float  pct  = std::clamp(percentile, 0.0f, 100.0f);
+	const size_t rank = static_cast<size_t>(std::ceil((pct / 100.0f) * static_cast<float>(sortedValues.size())));
+	const size_t idx  = (rank == 0) ? 0 : std::min(rank - 1, sortedValues.size() - 1);
+	return sortedValues[idx];
+}
+
+PercentileTriplet computePercentiles(const std::vector<float> &samples)
+{
+	if (samples.empty())
+	{
+		return {};
+	}
+
+	std::vector<float> sortedValues = samples;
+	std::sort(sortedValues.begin(), sortedValues.end());
+	return PercentileTriplet{
+	    .p50 = nearestRankPercentile(sortedValues, 50.0f),
+	    .p95 = nearestRankPercentile(sortedValues, 95.0f),
+	    .p99 = nearestRankPercentile(sortedValues, 99.0f)};
+}
+
+bool isFiniteMat4(const glm::mat4 &matrix)
+{
+	for (int column = 0; column < 4; ++column)
+	{
+		for (int row = 0; row < 4; ++row)
+		{
+			if (!std::isfinite(matrix[column][row]))
+			{
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+bool tryFinalizeSurfelSourceTransform(Laphria::SurfelPathTracerSourceTransform &sourceTransform)
+{
+	constexpr float kMinAbsLinearDeterminant = 1e-8f;
+
+	if (!isFiniteMat4(sourceTransform.objectToWorld))
+	{
+		return false;
+	}
+
+	const float linearDeterminant = glm::determinant(glm::mat3(sourceTransform.objectToWorld));
+	if (!std::isfinite(linearDeterminant) || std::abs(linearDeterminant) <= kMinAbsLinearDeterminant)
+	{
+		return false;
+	}
+
+	const glm::mat4 worldToObject = glm::inverse(sourceTransform.objectToWorld);
+	if (!isFiniteMat4(worldToObject))
+	{
+		return false;
+	}
+
+	sourceTransform.worldToObject = worldToObject;
+	sourceTransform.flags = Laphria::SURFEL_PT_SOURCE_FLAG_VALID;
+	return true;
+}
+
+void debugBreakIfDebuggerAttached()
+{
+#if defined(_WIN32)
+	if (::IsDebuggerPresent() != 0)
+	{
+		::DebugBreak();
+	}
+#endif
+}
+
+vk::Result waitForFencesOrThrow(const vk::raii::Device         &device,
+                                vk::ArrayProxy<const vk::Fence> fences,
+                                const char                     *waitLabel)
+{
+	try
+	{
+		return device.waitForFences(fences, vk::True, UINT64_MAX);
+	}
+	catch (const vk::SystemError &error)
+	{
+		if (error.code().value() == static_cast<int>(vk::Result::eErrorDeviceLost))
+		{
+			LOGE("Vulkan device lost while waiting for %s: %s", waitLabel, error.what());
+		}
+		else
+		{
+			LOGE("Vulkan fence wait failed while waiting for %s: %s", waitLabel, error.what());
+		}
+		debugBreakIfDebuggerAttached();
+		throw;
+	}
+}
+
+vk::Result waitForFenceOrThrow(const vk::raii::Device &device, vk::Fence fence, const char *waitLabel)
+{
+	return waitForFencesOrThrow(device, std::array<vk::Fence, 1>{fence}, waitLabel);
+}
+
+enum PtTimestampSlot : uint32_t
+{
+	kPtTS_TlasStart         = 0,
+	kPtTS_TlasEnd           = 1,
+	kPtTS_RayTraceStart     = 2,
+	kPtTS_RayTraceEnd       = 3,
+	kPtTS_ReprojectionStart = 4,
+	kPtTS_ReprojectionEnd   = 5,
+	kPtTS_DenoiserStart     = 6,
+	kPtTS_DenoiserEnd       = 7
+};
+
+enum SurfelTimestampSlot : uint32_t
+{
+	kSurfelTS_GBufferStart       = 0,
+	kSurfelTS_GBufferEnd         = 1,
+	kSurfelTS_PrepareStart       = 2,
+	kSurfelTS_PrepareEnd         = 3,
+	kSurfelTS_GenerateStart      = 4,
+	kSurfelTS_GenerateEnd        = 5,
+	kSurfelTS_UpdateStart        = 6,
+	kSurfelTS_UpdateEnd          = 7,
+	kSurfelTS_CellInfoStart      = 8,
+	kSurfelTS_CellInfoEnd        = 9,
+	kSurfelTS_CellMapStart       = 10,
+	kSurfelTS_CellMapEnd         = 11,
+	kSurfelTS_RayScheduleStart   = 12,
+	kSurfelTS_RayScheduleEnd     = 13,
+	kSurfelTS_RayTraceStart      = 14,
+	kSurfelTS_RayTraceEnd        = 15,
+	kSurfelTS_IntegrateStart     = 16,
+	kSurfelTS_IntegrateEnd       = 17,
+	kSurfelTS_EvaluateStart      = 18,
+	kSurfelTS_EvaluateEnd        = 19,
+	kSurfelTS_ReflectionStart    = 20,
+	kSurfelTS_ReflectionEnd      = 21,
+	kSurfelTS_PostProcessStart   = 22,
+	kSurfelTS_PostProcessEnd     = 23
+};
+
+struct SponzaScenarioPreset
+{
+	const char *name;
+	glm::vec3   cameraPosition;
+	float       cameraPitch;
+	float       cameraYaw;
+	glm::vec3   lightDirection;
+};
+
+const std::array<SponzaScenarioPreset, 3> &sponzaScenarioPresets()
+{
+	static const std::array<SponzaScenarioPreset, 3> presets = {
+	    SponzaScenarioPreset{
+	        "Dark Courtyard",
+	        glm::vec3(0.0f, 1.2f, 0.0f),
+	        glm::radians(-8.0f),
+	        glm::radians(180.0f),
+	        glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f))},
+	    SponzaScenarioPreset{
+	        "Sunlit Courtyard Wall",
+	        glm::vec3(0.0f, 12.0f, -1.5f),
+	        glm::radians(-4.0f),
+	        glm::radians(180.0f),
+	        glm::normalize(glm::vec3(-0.45f, -1.0f, 0.65f))},
+	    SponzaScenarioPreset{
+	        "Mid-Depth Interior",
+	        glm::vec3(-1.0f, 6.5f, 3.0f),
+	        glm::radians(-8.0f),
+	        glm::radians(180.0f),
+	        glm::normalize(glm::vec3(-0.35f, -1.0f, 0.45f))}};
+	return presets;
+}
+
+SurfelPathTracerStaticSettingsSnapshot makeSurfelPathTracerStaticSettingsSnapshot(
+    const UISystem::SurfelPathTracerSettings &settings)
+{
+	return SurfelPathTracerStaticSettingsSnapshot{
+	    .cellSize = std::max(settings.cellSize, 0.0001f),
+	    .maxSurfels = std::max(settings.maxSurfels, 1u),
+	    .maxRaysPerFrame = std::max(settings.maxRaysPerFrame, 1u),
+	    .cellDimension = std::clamp(settings.cellDimension, 8u, 128u),
+	    .perCellSurfelLimit = std::clamp(settings.perCellSurfelLimit, 1u, 256u),
+	    .irradianceAtlasWidth = std::clamp(settings.irradianceAtlasWidth, 512u, 4096u),
+	    .irradianceAtlasHeight = std::clamp(settings.irradianceAtlasHeight, 512u, 4096u)};
+}
+
+bool surfelPathTracerStaticSettingsMatch(
+    const SurfelPathTracerStaticSettingsSnapshot &lhs,
+    const SurfelPathTracerStaticSettingsSnapshot &rhs)
+{
+	return lhs.cellSize == rhs.cellSize &&
+	       lhs.maxSurfels == rhs.maxSurfels &&
+	       lhs.maxRaysPerFrame == rhs.maxRaysPerFrame &&
+	       lhs.cellDimension == rhs.cellDimension &&
+	       lhs.perCellSurfelLimit == rhs.perCellSurfelLimit &&
+	       lhs.irradianceAtlasWidth == rhs.irradianceAtlasWidth &&
+	       lhs.irradianceAtlasHeight == rhs.irradianceAtlasHeight;
+}
+
+bool surfelPathTracerAtlasSettingsChanged(
+    const SurfelPathTracerStaticSettingsSnapshot &lhs,
+    const SurfelPathTracerStaticSettingsSnapshot &rhs)
+{
+	return lhs.irradianceAtlasWidth != rhs.irradianceAtlasWidth ||
+	       lhs.irradianceAtlasHeight != rhs.irradianceAtlasHeight;
+}
+}        // namespace
+
+EngineCore::EngineCore(EngineHostOptions optionsIn, EngineHostCallbacks callbacksIn) : options(std::move(optionsIn)), callbacks(std::move(callbacksIn))
 {
 }
 
 void EngineCore::run()
 {
-    try {
-        VulkanUtils::resetAllocationCounter();
-        initWindow();
-        initInput();
-        initVulkan();
-        initImgui();
-        invokeInitializeCallback();
-        // Game initialization may load models/maps after Vulkan init. Rebuild RT descriptor
-        // sets here so first-time RT/PT switching never uses stale pre-init bindings.
-        if (resourceManager) {
-            createRayTracingDescriptorSets();
-        }
-        mainLoop();
-        const auto vmaStats = Laphria::VmaContext::getStats();
-        LOGI("VMA stats: blocks=%u allocations=%u allocationBytes=%llu",
-             vmaStats.blockCount,
-             vmaStats.allocationCount,
-             static_cast<unsigned long long>(vmaStats.allocationBytes));
-        LOGI("Tracked Vulkan allocations: %llu", static_cast<unsigned long long>(VulkanUtils::getAllocationCounter()));
-        invokeShutdownCallback();
-        cleanup();
-    } catch (...) {
-        try {
-            if (vulkanInitialized) {
-                vulkan.logicalDevice.waitIdle();
-            }
-        } catch (...) {
-            // Best-effort cleanup path.
-        }
+	try
+	{
+		VulkanUtils::resetAllocationCounter();
+		initWindow();
+		initInput();
+		initVulkan();
+		initImgui();
+		invokeInitializeCallback();
+		// Game initialization may load models/maps after Vulkan init. Rebuild RT descriptor
+		// sets here so first-time RT/PT switching never uses stale pre-init bindings.
+		if (resourceManager)
+		{
+			createRayTracingDescriptorSets();
+			createSurfelPathTracerRtDescriptorSets();
+		}
+		mainLoop();
+		const auto vmaStats = Laphria::VmaContext::getStats();
+		LOGI("VMA stats: blocks=%u allocations=%u allocationBytes=%llu",
+		     vmaStats.blockCount,
+		     vmaStats.allocationCount,
+		     static_cast<unsigned long long>(vmaStats.allocationBytes));
+		LOGI("Tracked Vulkan allocations: %llu", static_cast<unsigned long long>(VulkanUtils::getAllocationCounter()));
+		invokeShutdownCallback();
+		cleanup();
+	}
+	catch (...)
+	{
+		try
+		{
+			if (vulkanInitialized)
+			{
+				vulkan.logicalDevice.waitIdle();
+			}
+		}
+		catch (...)
+		{
+			// Best-effort cleanup path.
+		}
 
-        try {
-            cleanup();
-        } catch (...) {
-            // Suppress cleanup exceptions while propagating the original failure.
-        }
+		try
+		{
+			cleanup();
+		}
+		catch (...)
+		{
+			// Suppress cleanup exceptions while propagating the original failure.
+		}
 
-        throw;
-    }
+		throw;
+	}
 }
 
 EngineServices EngineCore::buildServices()
 {
-    return EngineServices{
-        .window = window,
-        .camera = camera,
-        .scene = *scene,
-        .physics = *physicsSystem,
-        .resourceManager = *resourceManager,
-        .ui = ui,
-        .loadSceneAsset =
-            [this](const std::string &path) {
-                scene->loadScene(path, *resourceManager, *pipelines.descriptorSetLayoutMaterial);
-            },
-        .saveSceneAsset =
-            [this](const std::string &path) {
-                scene->saveScene(path, *resourceManager);
-            },
-        .loadModelAsset =
-            [this](const std::string &path, const SceneNode::Ptr &parent) {
-                scene->loadModel(path, *resourceManager, *pipelines.descriptorSetLayoutMaterial, parent);
-            },
-        .createCubePrimitive =
-            [this](float size) {
-                return resourceManager->createCubeModel(size, *pipelines.descriptorSetLayoutMaterial);
-            },
-        .createCubePrimitiveWithMaterial =
-            [this](float size, const Laphria::MaterialData &material) {
-                return resourceManager->createCubeModel(size, *pipelines.descriptorSetLayoutMaterial, material);
-            },
-        .createSpherePrimitive =
-            [this](float radius, int slices, int stacks) {
-                return resourceManager->createSphereModel(radius, slices, stacks, *pipelines.descriptorSetLayoutMaterial);
-            },
-        .createCylinderPrimitive =
-            [this](float radius, float height, int slices) {
-                return resourceManager->createCylinderModel(radius, height, slices, *pipelines.descriptorSetLayoutMaterial);
-            }
-    };
+	return EngineServices{
+	    .window          = window,
+	    .camera          = camera,
+	    .scene           = *scene,
+	    .physics         = *physicsSystem,
+	    .resourceManager = *resourceManager,
+	    .ui              = ui,
+	    .loadSceneAsset =
+	        [this](const std::string &path) {
+		        scene->loadScene(path, *resourceManager, *pipelines.descriptorSetLayoutMaterial);
+	        },
+	    .saveSceneAsset =
+	        [this](const std::string &path) {
+		        scene->saveScene(path, *resourceManager);
+	        },
+	    .loadModelAsset =
+	        [this](const std::string &path, const SceneNode::Ptr &parent) {
+		        scene->loadModel(path, *resourceManager, *pipelines.descriptorSetLayoutMaterial, parent);
+	        },
+	    .createCubePrimitive =
+	        [this](float size) {
+		        return resourceManager->createCubeModel(size, *pipelines.descriptorSetLayoutMaterial);
+	        },
+	    .createCubePrimitiveWithMaterial =
+	        [this](float size, const Laphria::MaterialData &material) {
+		        return resourceManager->createCubeModel(size, *pipelines.descriptorSetLayoutMaterial, material);
+	        },
+	    .createSpherePrimitive =
+	        [this](float radius, int slices, int stacks) {
+		        return resourceManager->createSphereModel(radius, slices, stacks, *pipelines.descriptorSetLayoutMaterial);
+	        },
+	    .createCylinderPrimitive =
+	        [this](float radius, float height, int slices) {
+		        return resourceManager->createCylinderModel(radius, height, slices, *pipelines.descriptorSetLayoutMaterial);
+	        }};
 }
 
 void EngineCore::invokeInitializeCallback()
 {
-    ui.showEditorPanels = options.showEditorPanels;
-    if (callbacks.initialize && scene && physicsSystem && resourceManager) {
-        auto services = buildServices();
-        callbacks.initialize(services);
-    }
+	ui.showEditorPanels = options.showEditorPanels;
+	if (callbacks.initialize && scene && physicsSystem && resourceManager)
+	{
+		auto services = buildServices();
+		callbacks.initialize(services);
+	}
 }
 
 void EngineCore::invokeShutdownCallback()
 {
-    if (callbacks.shutdown && scene && physicsSystem && resourceManager) {
-        auto services = buildServices();
-        callbacks.shutdown(services);
-    }
+	if (callbacks.shutdown && scene && physicsSystem && resourceManager)
+	{
+		auto services = buildServices();
+		callbacks.shutdown(services);
+	}
 }
 
-void EngineCore::initWindow() {
-    if (glfwInit() != GLFW_TRUE) {
-        throw std::runtime_error("failed to initialize GLFW");
-    }
-    windowInitialized = true;
+void EngineCore::initWindow()
+{
+	if (glfwInit() != GLFW_TRUE)
+	{
+		throw std::runtime_error("failed to initialize GLFW");
+	}
+	windowInitialized = true;
 
-    // GLFW_NO_API: we manage the Vulkan surface ourselves, not via an OpenGL context.
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+	// GLFW_NO_API: we manage the Vulkan surface ourselves, not via an OpenGL context.
+	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-    window = glfwCreateWindow(WIDTH, HEIGHT, options.windowTitle.c_str(), nullptr, nullptr);
-    if (!window) {
-        throw std::runtime_error("failed to create GLFW window");
-    }
-    lastFrameTime = std::chrono::high_resolution_clock::now();
+	window = glfwCreateWindow(WIDTH, HEIGHT, options.windowTitle.c_str(), nullptr, nullptr);
+	if (!window)
+	{
+		throw std::runtime_error("failed to create GLFW window");
+	}
+	lastFrameTime = std::chrono::high_resolution_clock::now();
 }
 
-void EngineCore::initInput() {
-    input.init(window, camera, swapchain.framebufferResized, options.enableDefaultCameraInput);
+void EngineCore::initInput()
+{
+	input.init(window, camera, swapchain.framebufferResized, options.enableDefaultCameraInput);
 }
 
-void EngineCore::initVulkan() {
-    // Ordering matters here:
-    //  1. vulkan → swapchain: surface must exist before swapchain creation.
-    //  2. frames → createDescriptorPool: commandPool must exist before ResourceManager.
-    //  3. ResourceManager receives a reference to descriptorPool, so the pool must be alive
-    //     for the entire lifetime of the ResourceManager.
-    //  4. Descriptor set layouts must precede pipeline creation.
-    //  5. Descriptor sets must be written after both pool and uniform buffers/images exist.
-    vulkan.init(window);
-    vulkanInitialized = true;
-    swapchain.init(vulkan, window);
-    imagesInFlight.assign(swapchain.images.size(), vk::Fence{});
-    frames.init(vulkan, swapchain);
-    createDescriptorPool();
+void EngineCore::initVulkan()
+{
+	// Ordering matters here:
+	//  1. vulkan → swapchain: surface must exist before swapchain creation.
+	//  2. frames → createDescriptorPool: commandPool must exist before ResourceManager.
+	//  3. ResourceManager receives a reference to descriptorPool, so the pool must be alive
+	//     for the entire lifetime of the ResourceManager.
+	//  4. Descriptor set layouts must precede pipeline creation.
+	//  5. Descriptor sets must be written after both pool and uniform buffers/images exist.
+	vulkan.init(window);
+	vulkanInitialized = true;
+	swapchain.init(vulkan, window);
+	imagesInFlight.assign(swapchain.images.size(), vk::Fence{});
+	frames.init(vulkan, swapchain);
+	createDescriptorPool();
 
-    resourceManager = std::make_unique<ResourceManager>(vulkan.logicalDevice, vulkan.physicalDevice, frames.commandPool, vulkan.queue,
-                                                        descriptorPool);
-    scene = std::make_unique<Scene>();
-    constexpr float bounds = Laphria::EngineConfig::kDefaultSceneBoundsExtent;
-    scene->init({{-bounds, -bounds, -bounds}, {bounds, bounds, bounds}});
+	resourceManager        = std::make_unique<ResourceManager>(vulkan.logicalDevice, vulkan.physicalDevice, frames.commandPool, vulkan.queue,
+	                                                           descriptorPool);
+	scene                  = std::make_unique<Scene>();
+	constexpr float bounds = Laphria::EngineConfig::kDefaultSceneBoundsExtent;
+	scene->init({{-bounds, -bounds, -bounds}, {bounds, bounds, bounds}});
 
-    physicsSystem = std::make_unique<PhysicsSystem>();
+	physicsSystem = std::make_unique<PhysicsSystem>();
 
-    pipelines.createDescriptorSetLayouts(vulkan);
+	pipelines.createDescriptorSetLayouts(vulkan);
+	pipelines.surfelPathTracerPipelines.createPipelineLayouts(vulkan, *pipelines.descriptorSetLayoutGlobal);
+	pipelines.surfelPathTracerPipelines.createComputePipelines(vulkan);
+	pipelines.surfelPathTracerPipelines.createGBufferRayTracingPipeline(vulkan);
+	pipelines.surfelPathTracerPipelines.createGBufferShaderBindingTable(vulkan);
+	pipelines.surfelPathTracerPipelines.createSurfelRayTracingPipeline(vulkan);
+	pipelines.surfelPathTracerPipelines.createSurfelShaderBindingTable(vulkan);
+	pipelines.surfelPathTracerPipelines.createReflectionRayTracingPipeline(vulkan);
+	pipelines.surfelPathTracerPipelines.createReflectionShaderBindingTable(vulkan);
+	pipelines.surfelPathTracerPipelines.createReferenceRayTracingPipeline(vulkan);
+	pipelines.surfelPathTracerPipelines.createReferenceShaderBindingTable(vulkan);
 
-    // Pipeline creation order matches dependency on the descriptor set layouts above.
-    pipelines.createGraphicsPipeline(vulkan, swapchain.surfaceFormat.format, vulkan.findDepthFormat());
-    pipelines.createShadowPipeline(vulkan);
-    pipelines.createComputePipeline(vulkan);
-    pipelines.createSkinningPipeline(vulkan);
-    pipelines.createPhysicsPipeline(vulkan);
-    pipelines.createRayTracingPipeline(vulkan);
-    pipelines.createShaderBindingTable(vulkan);
-    pipelines.createDenoiserPipelines(vulkan);
-    pipelines.createClassicRTPipeline(vulkan);
-    pipelines.createClassicRTShaderBindingTable(vulkan);
+	// Pipeline creation order matches dependency on the descriptor set layouts above.
+	pipelines.createGraphicsPipeline(vulkan, swapchain.surfaceFormat.format, vulkan.findDepthFormat());
+	pipelines.createShadowPipeline(vulkan);
+	pipelines.createComputePipeline(vulkan);
+	pipelines.createSkinningPipeline(vulkan);
+	pipelines.createPhysicsPipeline(vulkan);
+	pipelines.createRayTracingPipeline(vulkan);
+	pipelines.createShaderBindingTable(vulkan);
+	pipelines.createDenoiserPipelines(vulkan);
+	pipelines.createClassicRTPipeline(vulkan);
+	pipelines.createClassicRTShaderBindingTable(vulkan);
 
-    resourceManager->setSkinningDescriptorSetLayout(*pipelines.skinningDescriptorSetLayout);
+	resourceManager->setSkinningDescriptorSetLayout(*pipelines.skinningDescriptorSetLayout);
 
-    createDescriptorSets();
-    createComputeDescriptorSets();
-    createPhysicsDescriptorSets();
-    createRayTracingDescriptorSets();
-    createDenoiserDescriptorSets();
-    createTimestampQueryPool();
+	createDescriptorSets();
+	createComputeDescriptorSets();
+	createPhysicsDescriptorSets();
+	createRayTracingDescriptorSets();
+	createDenoiserDescriptorSets();
+	surfelPathTracerResources.init(vulkan, swapchain, ui.surfelPathTracerSettings);
+	surfelPathTracerStaticSettings =
+	    makeSurfelPathTracerStaticSettingsSnapshot(ui.surfelPathTracerSettings);
+	surfelPathTracerStaticSettingsInitialized = true;
+	surfelPathTracerPersistentImageLayoutsInitialized = false;
+	resetSurfelPathTracerTemporalHistory();
+	createSurfelPathTracerSkyDescriptorSets();
+	createSurfelPathTracerStorageDescriptorSets();
+	createSurfelPathTracerRtDescriptorSets();
+	createTimestampQueryPool();
+	createExposureProbeResources();
 }
 
-void EngineCore::initImgui() {
-    ui.init(vulkan, window, swapchain.surfaceFormat.format, vulkan.findDepthFormat());
-    imguiInitialized = true;
+void EngineCore::initImgui()
+{
+	ui.init(vulkan, window, swapchain.surfaceFormat.format, vulkan.findDepthFormat());
+	imguiInitialized = true;
 }
 
-void EngineCore::mainLoop() {
-    size_t prevModelCount = resourceManager->getModelCount();
+void EngineCore::mainLoop()
+{
+	size_t prevModelCount = resourceManager->getModelCount();
 
-    while (!glfwWindowShouldClose(window)) {
-        // Delta Time calculation
-        auto currentTime = std::chrono::high_resolution_clock::now();
-        float deltaTime = std::chrono::duration<float>(currentTime - lastFrameTime).count();
-        lastFrameTime = currentTime;
-        updatePerformanceWindowTitle(deltaTime);
+	while (!glfwWindowShouldClose(window))
+	{
+		// Delta Time calculation
+		auto  currentTime = std::chrono::high_resolution_clock::now();
+		float deltaTime   = std::chrono::duration<float>(currentTime - lastFrameTime).count();
+		lastFrameTime     = currentTime;
+		updatePerformanceWindowTitle(deltaTime);
+		lastDeltaTimeSeconds = deltaTime;
 
-        glfwPollEvents();
-        camera.update(deltaTime);
+		glfwPollEvents();
+		camera.update(deltaTime);
 
-        std::optional<EngineServices> services;
-        if (scene && physicsSystem && resourceManager) {
-            services.emplace(buildServices());
-        }
+		std::optional<EngineServices> services;
+		if (scene && physicsSystem && resourceManager)
+		{
+			services.emplace(buildServices());
+		}
 
-        if (callbacks.updateFrame && services.has_value()) {
-            auto &servicesRef = *services;
-            callbacks.updateFrame(servicesRef, deltaTime);
-        }
-        if (resourceManager) {
-            resourceManager->setTextureColorSpaceModel(ui.textureColorSpaceModel);
-        }
-        if (scene && resourceManager) {
-            scene->update(deltaTime, *resourceManager);
-        }
+		if (callbacks.updateFrame && services.has_value())
+		{
+			auto &servicesRef = *services;
+			callbacks.updateFrame(servicesRef, deltaTime);
+		}
+		if (resourceManager)
+		{
+			resourceManager->setTextureColorSpaceModel(ui.textureColorSpaceModel);
+		}
+		if (scene && resourceManager)
+		{
+			scene->update(deltaTime, *resourceManager);
+		}
 
-        // Physics Update
-        if (options.runPhysicsSimulation && ui.simulationRunning && physicsSystem) {
-            auto start = std::chrono::high_resolution_clock::now();
+		// Physics Update
+		if (options.runPhysicsSimulation && ui.simulationRunning && physicsSystem)
+		{
+			auto start = std::chrono::high_resolution_clock::now();
 
-            if (ui.useGPUPhysics) {
-                auto cmd = VulkanUtils::beginSingleTimeCommands(vulkan.logicalDevice, frames.commandPool);
-                physicsSystem->updateGPU(scene->getAllNodes(), deltaTime, cmd, pipelines.physicsPipelineLayout, pipelines.physicsPipeline, physicsDescriptorSet);
-                cmd.end();
+			if (ui.useGPUPhysics)
+			{
+				auto cmd = VulkanUtils::beginSingleTimeCommands(vulkan.logicalDevice, frames.commandPool);
+				physicsSystem->updateGPU(scene->getAllNodes(), deltaTime, cmd, pipelines.physicsPipelineLayout, pipelines.physicsPipeline, physicsDescriptorSet);
+				cmd.end();
 
-                vk::raii::Fence physicsFence(vulkan.logicalDevice, vk::FenceCreateInfo{});
-                vk::SubmitInfo submitInfo{};
-                submitInfo.commandBufferCount = 1;
-                submitInfo.pCommandBuffers = &*cmd;
-                vulkan.queue.submit(submitInfo, *physicsFence);
+				vk::raii::Fence physicsFence(vulkan.logicalDevice, vk::FenceCreateInfo{});
+				vk::SubmitInfo  submitInfo{};
+				submitInfo.commandBufferCount = 1;
+				submitInfo.pCommandBuffers    = &*cmd;
+				vulkan.queue.submit(submitInfo, *physicsFence);
 
-                const vk::Result waitResult = vulkan.logicalDevice.waitForFences(*physicsFence, vk::True, UINT64_MAX);
-                if (waitResult != vk::Result::eSuccess) {
-                    throw std::runtime_error("failed to wait for GPU physics fence");
-                }
+				const vk::Result waitResult = vulkan.logicalDevice.waitForFences(*physicsFence, vk::True, UINT64_MAX);
+				if (waitResult != vk::Result::eSuccess)
+				{
+					throw std::runtime_error("failed to wait for GPU physics fence");
+				}
 
-                // Readback immediately
-                physicsSystem->syncFromGPU(scene->getAllNodes());
-            } else {
-                physicsSystem->updateCPU(scene->getAllNodes(), deltaTime);
-            }
+				// Readback immediately
+				physicsSystem->syncFromGPU(scene->getAllNodes());
+			}
+			else
+			{
+				physicsSystem->updateCPU(scene->getAllNodes(), deltaTime);
+			}
 
-            auto end = std::chrono::high_resolution_clock::now();
-            ui.physicsTime = std::chrono::duration<float, std::milli>(end - start).count();
-        }
+			auto end       = std::chrono::high_resolution_clock::now();
+			ui.physicsTime = std::chrono::duration<float, std::milli>(end - start).count();
+		}
 
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
+		ImGui_ImplVulkan_NewFrame();
+		ImGui_ImplGlfw_NewFrame();
+		ImGui::NewFrame();
 
-        ui.draw(window, *scene, *physicsSystem, *resourceManager, *pipelines.descriptorSetLayoutMaterial, camera);
-        if (callbacks.drawUi && services.has_value()) {
-            auto &servicesRef = *services;
-            callbacks.drawUi(servicesRef);
-        }
+		ui.draw(window, *scene, *physicsSystem, *resourceManager, *pipelines.descriptorSetLayoutMaterial, camera);
+		if (callbacks.drawUi && services.has_value())
+		{
+			auto &servicesRef = *services;
+			callbacks.drawUi(servicesRef);
+		}
+		if (scene)
+		{
+			scene->syncSpatialIndex();
+		}
 
-        if (scene) {
-            scene->syncSpatialIndex();
-        }
+		// If models were loaded during the UI frame, the RT descriptor sets (bindings 5-8:
+		// vertex/index/material/texture arrays) must be rebuilt to include the new buffers.
+		// buildBLAS already called queue.waitIdle(), so the queue is idle here.
+		size_t currentModelCount = resourceManager->getModelCount();
+		if (currentModelCount != prevModelCount)
+		{
+			prevModelCount = currentModelCount;
+			createRayTracingDescriptorSets();
+			createSurfelPathTracerRtDescriptorSets();
+		}
 
-        // If models were loaded during the UI frame, the RT descriptor sets (bindings 5-8:
-        // vertex/index/material/texture arrays) must be rebuilt to include the new buffers.
-        // buildBLAS already called queue.waitIdle(), so the queue is idle here.
-        size_t currentModelCount = resourceManager->getModelCount();
-        if (currentModelCount != prevModelCount) {
-            prevModelCount = currentModelCount;
-            createRayTracingDescriptorSets();
-        }
+		ImGui::Render();
 
-        ImGui::Render();
+		drawFrame();
+	}
 
-        drawFrame();
-    }
-
-    vulkan.logicalDevice.waitIdle();
+	vulkan.logicalDevice.waitIdle();
 }
 
 void EngineCore::updatePerformanceWindowTitle(float deltaTimeSeconds)
 {
-    if (!window || deltaTimeSeconds <= 0.0f) {
-        return;
-    }
+	if (!window || deltaTimeSeconds <= 0.0f)
+	{
+		return;
+	}
 
-    titleStatsAccumSeconds += static_cast<double>(deltaTimeSeconds);
-    ++titleStatsFrameCount;
+	titleStatsAccumSeconds += static_cast<double>(deltaTimeSeconds);
+	++titleStatsFrameCount;
 
-    if (titleStatsAccumSeconds < kWindowTitleUpdateIntervalSeconds || titleStatsFrameCount == 0) {
-        return;
-    }
+	if (titleStatsAccumSeconds < kWindowTitleUpdateIntervalSeconds || titleStatsFrameCount == 0)
+	{
+		return;
+	}
 
-    const double averageFrameTimeSeconds = titleStatsAccumSeconds / static_cast<double>(titleStatsFrameCount);
-    const double fps = 1.0 / averageFrameTimeSeconds;
-    const double frameTimeMs = averageFrameTimeSeconds * 1000.0;
+	const double averageFrameTimeSeconds = titleStatsAccumSeconds / static_cast<double>(titleStatsFrameCount);
+	const double fps                     = 1.0 / averageFrameTimeSeconds;
+	const double frameTimeMs             = averageFrameTimeSeconds * 1000.0;
 
-    char titleBuffer[256];
-    std::snprintf(titleBuffer, sizeof(titleBuffer), "%s | %.1f FPS | %.2f ms",
-                  options.windowTitle.c_str(), fps, frameTimeMs);
-    glfwSetWindowTitle(window, titleBuffer);
+	char titleBuffer[256];
+	std::snprintf(titleBuffer, sizeof(titleBuffer), "%s | %.1f FPS | %.2f ms",
+	              options.windowTitle.c_str(), fps, frameTimeMs);
+	glfwSetWindowTitle(window, titleBuffer);
 
-    titleStatsAccumSeconds = 0.0;
-    titleStatsFrameCount = 0;
+	titleStatsAccumSeconds = 0.0;
+	titleStatsFrameCount   = 0;
 }
 
-void EngineCore::cleanupSwapChain() {
-    swapchain.cleanup();
-    frames.cleanupSwapChainDependents();
+void EngineCore::cleanupSwapChain()
+{
+	surfelPathTracerSkyDescriptorSets.clear();
+	surfelPathTracerSkyDescriptorPool = nullptr;
+	surfelPathTracerStorageDescriptorSets.clear();
+	surfelPathTracerStorageDescriptorPool = nullptr;
+	surfelPathTracerRtDescriptorSets.clear();
+	surfelPathTracerRtDescriptorPool = nullptr;
+	surfelPathTracerResources.cleanupSwapchainResources();
+	surfelPathTracerPersistentImageLayoutsInitialized = false;
+	resetSurfelPathTracerTemporalHistory();
+	swapchain.cleanup();
+	frames.cleanupSwapChainDependents();
 }
 
-void EngineCore::cleanup() {
-    if (imguiInitialized) {
-        ui.cleanup();
-        imguiInitialized = false;
-    }
+void EngineCore::cleanup()
+{
+	destroyExposureProbeResources();
+	for (size_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+	{
+		if (surfelSourceInstanceStagingMapped[frameIndex])
+		{
+			surfelSourceInstanceStagingBuffers[frameIndex].memory.unmapMemory();
+			surfelSourceInstanceStagingMapped[frameIndex] = nullptr;
+		}
+		if (surfelSourceTransformStagingMapped[frameIndex])
+		{
+			surfelSourceTransformStagingBuffers[frameIndex].memory.unmapMemory();
+			surfelSourceTransformStagingMapped[frameIndex] = nullptr;
+		}
+		surfelSourceInstanceStagingBuffers[frameIndex].reset();
+		surfelSourceTransformStagingBuffers[frameIndex].reset();
+		surfelSourceInstanceStagingSizes[frameIndex] = 0;
+		surfelSourceTransformStagingSizes[frameIndex] = 0;
+	}
 
-    if (windowInitialized && window) {
-        glfwDestroyWindow(window);
-        window = nullptr;
-    }
-    if (windowInitialized) {
-        glfwTerminate();
-        windowInitialized = false;
-    }
+	if (imguiInitialized)
+	{
+		ui.cleanup();
+		imguiInitialized = false;
+	}
+
+	if (windowInitialized && window)
+	{
+		glfwDestroyWindow(window);
+		window = nullptr;
+	}
+	if (windowInitialized)
+	{
+		glfwTerminate();
+		windowInitialized = false;
+	}
 }
 
-void EngineCore::recreateSwapChain() {
-    // A zero-sized framebuffer means the window is minimized; block here until it is restored.
-    int width = 0, height = 0;
-    glfwGetFramebufferSize(window, &width, &height);
-    while (width == 0 || height == 0) {
-        glfwGetFramebufferSize(window, &width, &height);
-        glfwWaitEvents();
-    }
+void EngineCore::recreateSwapChain()
+{
+	// A zero-sized framebuffer means the window is minimized; block here until it is restored.
+	int width = 0, height = 0;
+	glfwGetFramebufferSize(window, &width, &height);
+	while (width == 0 || height == 0)
+	{
+		glfwGetFramebufferSize(window, &width, &height);
+		glfwWaitEvents();
+	}
 
-    vulkan.logicalDevice.waitIdle();
+	vulkan.logicalDevice.waitIdle();
 
-    cleanupSwapChain();
-    swapchain.init(vulkan, window);
-    imagesInFlight.assign(swapchain.images.size(), vk::Fence{});
-    frames.recreate(vulkan, swapchain);
-    // Compute, RT, and denoiser descriptor sets reference images that are recreated above
-    // (storageImages, rayTracingOutputImages, and G-Buffer images are extent-dependent),
-    // so all three must be rewritten after frames.recreate().
-    createComputeDescriptorSets();
-    createRayTracingDescriptorSets();
-    createDenoiserDescriptorSets();
+	cleanupSwapChain();
+	swapchain.init(vulkan, window);
+	imagesInFlight.assign(swapchain.images.size(), vk::Fence{});
+	frames.recreate(vulkan, swapchain);
+	// Compute, RT, and denoiser descriptor sets reference images that are recreated above
+	// (storageImages, rayTracingOutputImages, and G-Buffer images are extent-dependent),
+	// so all three must be rewritten after frames.recreate().
+	createComputeDescriptorSets();
+	createRayTracingDescriptorSets();
+	createDenoiserDescriptorSets();
+	if (surfelPathTracerResources.initialized())
+	{
+		surfelPathTracerResources.recreateSwapchainResources(vulkan, swapchain);
+		surfelPathTracerPersistentImageLayoutsInitialized = false;
+		resetSurfelPathTracerTemporalHistory();
+		createSurfelPathTracerSkyDescriptorSets();
+		createSurfelPathTracerStorageDescriptorSets();
+		createSurfelPathTracerRtDescriptorSets();
+	}
+	ptForceHistoryReset = true;
 }
 
-void EngineCore::createPhysicsDescriptorSets() {
-    vk::DescriptorPoolSize poolSize{vk::DescriptorType::eStorageBuffer, 1};
-    vk::DescriptorPoolCreateInfo poolInfo{
-        .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-        .maxSets = 1,
-        .poolSizeCount = 1,
-        .pPoolSizes = &poolSize
-    };
-    physicsDescriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
+void EngineCore::createPhysicsDescriptorSets()
+{
+	vk::DescriptorPoolSize       poolSize{vk::DescriptorType::eStorageBuffer, 2};
+	vk::DescriptorPoolCreateInfo poolInfo{
+	    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+	    .maxSets       = 1,
+	    .poolSizeCount = 1,
+	    .pPoolSizes    = &poolSize};
+	physicsDescriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
 
-    vk::DescriptorSetAllocateInfo allocInfo{
-        .descriptorPool = *physicsDescriptorPool,
-        .descriptorSetCount = 1,
-        .pSetLayouts = &*pipelines.physicsDescriptorSetLayout
-    };
+	vk::DescriptorSetAllocateInfo allocInfo{
+	    .descriptorPool     = *physicsDescriptorPool,
+	    .descriptorSetCount = 1,
+	    .pSetLayouts        = &*pipelines.physicsDescriptorSetLayout};
 
-    physicsDescriptorSet = std::move(vulkan.logicalDevice.allocateDescriptorSets(allocInfo)[0]);
+	physicsDescriptorSet = std::move(vulkan.logicalDevice.allocateDescriptorSets(allocInfo)[0]);
 
-    // Create SSBO
-    constexpr size_t maxObjects = Laphria::EngineConfig::kMaxPhysicsObjects;
-    physicsSystem->createSSBO(vulkan.logicalDevice, vulkan.physicalDevice, maxObjects * sizeof(PhysicsObject));
+	// Create SSBO
+	constexpr size_t maxObjects = Laphria::EngineConfig::kMaxPhysicsObjects;
+	physicsSystem->createSSBO(vulkan.logicalDevice, vulkan.physicalDevice, maxObjects * sizeof(PhysicsObject));
 
-    // Bind SSBO to Set
-    vk::DescriptorBufferInfo bufferInfo{
-        .buffer = *physicsSystem->getSSBOBuffer(),
-        .offset = 0,
-        .range = maxObjects * sizeof(PhysicsObject)
-    };
-
-    vk::WriteDescriptorSet writeDescriptorSet{
-        .dstSet = *physicsDescriptorSet,
-        .dstBinding = 0,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eStorageBuffer,
-        .pBufferInfo = &bufferInfo
-    };
-
-    vulkan.logicalDevice.updateDescriptorSets(writeDescriptorSet, nullptr);
+	// Bind SSBO to Set
+	std::array<vk::DescriptorBufferInfo, 2> bufferInfos = {
+	    vk::DescriptorBufferInfo{.buffer = *physicsSystem->getSSBOBuffer(), .offset = 0,
+	                             .range = maxObjects * sizeof(PhysicsObject)},
+	    vk::DescriptorBufferInfo{.buffer = *physicsSystem->getCollisionOutputSSBOBuffer(), .offset = 0,
+	                             .range = maxObjects * sizeof(PhysicsObject)}};
+	std::array<vk::WriteDescriptorSet, 2> writes = {
+	    vk::WriteDescriptorSet{.dstSet = *physicsDescriptorSet, .dstBinding = 0,
+	                           .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer,
+	                           .pBufferInfo = &bufferInfos[0]},
+	    vk::WriteDescriptorSet{.dstSet = *physicsDescriptorSet, .dstBinding = 1,
+	                           .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer,
+	                           .pBufferInfo = &bufferInfos[1]}};
+	vulkan.logicalDevice.updateDescriptorSets(writes, nullptr);
 }
 
-void EngineCore::createComputeDescriptorSets() {
-    // One set per Frame In Flight (matching storage images)
-    std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *pipelines.computeDescriptorSetLayout);
+void EngineCore::createComputeDescriptorSets()
+{
+	// One set per Frame In Flight (matching storage images)
+	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *pipelines.computeDescriptorSetLayout);
 
-    vk::DescriptorSetAllocateInfo allocInfo{
-        .descriptorPool = *descriptorPool, // Use the same global pool
-        .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
-        .pSetLayouts = layouts.data()
-    };
+	vk::DescriptorSetAllocateInfo allocInfo{
+	    .descriptorPool     = *descriptorPool,        // Use the same global pool
+	    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+	    .pSetLayouts        = layouts.data()};
 
-    computeDescriptorSets.clear();
-    computeDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
+	computeDescriptorSets.clear();
+	computeDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vk::DescriptorImageInfo imageInfo{
-            .imageView = *frames.storageImageViews[i],
-            .imageLayout = vk::ImageLayout::eGeneral // Compute shader writes to General layout
-        };
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		vk::DescriptorImageInfo imageInfo{
+		    .imageView   = *frames.storageImageViews[i],
+		    .imageLayout = vk::ImageLayout::eGeneral        // Compute shader writes to General layout
+		};
 
-        vk::WriteDescriptorSet storageImageWrite{
-            .dstSet = *computeDescriptorSets[i],
-            .dstBinding = 0,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = vk::DescriptorType::eStorageImage,
-            .pImageInfo = &imageInfo
-        };
+		vk::WriteDescriptorSet storageImageWrite{
+		    .dstSet          = *computeDescriptorSets[i],
+		    .dstBinding      = 0,
+		    .dstArrayElement = 0,
+		    .descriptorCount = 1,
+		    .descriptorType  = vk::DescriptorType::eStorageImage,
+		    .pImageInfo      = &imageInfo};
 
-        vulkan.logicalDevice.updateDescriptorSets(storageImageWrite, {});
-    }
+		vulkan.logicalDevice.updateDescriptorSets(storageImageWrite, {});
+	}
 }
 
-void EngineCore::createRayTracingDescriptorSets() {
-    // One set per frame in flight; bindings shifted to accommodate the new G-Buffer images.
-    // RT set bindings: 0 = TLAS, 1 = noisy colour, 2 = normals, 3 = depth, 4 = motion vectors,
-    //                  5 = vertex arrays, 6 = index arrays, 7 = material arrays, 8 = texture array.
-    std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *pipelines.rayTracingDescriptorSetLayout);
+void EngineCore::createRayTracingDescriptorSets()
+{
+	// One set per frame in flight; bindings shifted to accommodate the new G-Buffer images.
+	// RT set bindings: 0 = TLAS, 1 = noisy colour, 2 = normals, 3 = depth, 4 = motion vectors,
+	//                  5 = vertex arrays, 6 = index arrays, 7 = material arrays, 8 = texture array.
+	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *pipelines.rayTracingDescriptorSetLayout);
 
-    std::vector<uint32_t> variableDescCounts(MAX_FRAMES_IN_FLIGHT, Laphria::EngineConfig::kBindlessModelCapacity);
-    vk::DescriptorSetVariableDescriptorCountAllocateInfo variableDescCountInfo{
-        .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
-        .pDescriptorCounts = variableDescCounts.data()
-    };
+	std::vector<uint32_t>                                variableDescCounts(MAX_FRAMES_IN_FLIGHT, Laphria::EngineConfig::kBindlessModelCapacity);
+	vk::DescriptorSetVariableDescriptorCountAllocateInfo variableDescCountInfo{
+	    .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+	    .pDescriptorCounts  = variableDescCounts.data()};
 
-    vk::DescriptorSetAllocateInfo allocInfo{
-        .pNext = &variableDescCountInfo,
-        .descriptorPool = *descriptorPool,
-        .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
-        .pSetLayouts = layouts.data()
-    };
+	vk::DescriptorSetAllocateInfo allocInfo{
+	    .pNext              = &variableDescCountInfo,
+	    .descriptorPool     = *descriptorPool,
+	    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+	    .pSetLayouts        = layouts.data()};
 
-    rtDescriptorSets.clear();
-    rtDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
+	rtDescriptorSets.clear();
+	rtDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        // Binding 0 — TLAS.
-        // The TLAS write requires a WriteDescriptorSetAccelerationStructureKHR in pNext;
-        // it cannot use pBufferInfo or pImageInfo like every other descriptor type.
-        vk::WriteDescriptorSetAccelerationStructureKHR tlasInfo{
-            .accelerationStructureCount = 1,
-            .pAccelerationStructures = &*frames.tlas[i]
-        };
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		// Binding 0 — TLAS.
+		// The TLAS write requires a WriteDescriptorSetAccelerationStructureKHR in pNext;
+		// it cannot use pBufferInfo or pImageInfo like every other descriptor type.
+		vk::WriteDescriptorSetAccelerationStructureKHR tlasInfo{
+		    .accelerationStructureCount = 1,
+		    .pAccelerationStructures    = &*frames.tlas[i]};
 
-        vk::WriteDescriptorSet tlasWrite{
-            .pNext = &tlasInfo,
-            .dstSet = *rtDescriptorSets[i],
-            .dstBinding = 0,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = vk::DescriptorType::eAccelerationStructureKHR
-        };
+		vk::WriteDescriptorSet tlasWrite{
+		    .pNext           = &tlasInfo,
+		    .dstSet          = *rtDescriptorSets[i],
+		    .dstBinding      = 0,
+		    .dstArrayElement = 0,
+		    .descriptorCount = 1,
+		    .descriptorType  = vk::DescriptorType::eAccelerationStructureKHR};
 
-        // Binding 1 — noisy colour output (written by the raygen shader in General layout).
-        vk::DescriptorImageInfo rtOutputImageInfo{
-            .imageView = *frames.rayTracingOutputImageViews[i],
-            .imageLayout = vk::ImageLayout::eGeneral
-        };
-        vk::WriteDescriptorSet rtOutputWrite{
-            .dstSet = *rtDescriptorSets[i], .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &rtOutputImageInfo
-        };
+		// Binding 1 — noisy colour output (written by the raygen shader in General layout).
+		vk::DescriptorImageInfo rtOutputImageInfo{
+		    .imageView   = *frames.rayTracingOutputImageViews[i],
+		    .imageLayout = vk::ImageLayout::eGeneral};
+		vk::WriteDescriptorSet rtOutputWrite{
+		    .dstSet = *rtDescriptorSets[i], .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &rtOutputImageInfo};
 
-        // Binding 2 — G-Buffer world normals.
-        vk::DescriptorImageInfo normalsInfo{.imageView = *frames.rtGBufferNormalsViews[i], .imageLayout = vk::ImageLayout::eGeneral};
-        vk::WriteDescriptorSet normalsWrite{
-            .dstSet = *rtDescriptorSets[i], .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &normalsInfo
-        };
+		// Binding 2 — G-Buffer world normals.
+		vk::DescriptorImageInfo normalsInfo{.imageView = *frames.rtGBufferNormalsViews[i], .imageLayout = vk::ImageLayout::eGeneral};
+		vk::WriteDescriptorSet  normalsWrite{
+		     .dstSet = *rtDescriptorSets[i], .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &normalsInfo};
 
-        // Binding 3 — G-Buffer linear depth.
-        vk::DescriptorImageInfo depthInfo{.imageView = *frames.rtGBufferDepthViews[i], .imageLayout = vk::ImageLayout::eGeneral};
-        vk::WriteDescriptorSet depthWrite{
-            .dstSet = *rtDescriptorSets[i], .dstBinding = 3, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &depthInfo
-        };
+		// Binding 3 — G-Buffer linear depth.
+		vk::DescriptorImageInfo depthInfo{.imageView = *frames.rtGBufferDepthViews[i], .imageLayout = vk::ImageLayout::eGeneral};
+		vk::WriteDescriptorSet  depthWrite{
+		     .dstSet = *rtDescriptorSets[i], .dstBinding = 3, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &depthInfo};
 
-        // Binding 4 — motion vectors.
-        vk::DescriptorImageInfo mvInfo{.imageView = *frames.rtMotionVectorsViews[i], .imageLayout = vk::ImageLayout::eGeneral};
-        vk::WriteDescriptorSet mvWrite{
-            .dstSet = *rtDescriptorSets[i], .dstBinding = 4, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &mvInfo
-        };
+		// Binding 4 — motion vectors.
+		vk::DescriptorImageInfo mvInfo{.imageView = *frames.rtMotionVectorsViews[i], .imageLayout = vk::ImageLayout::eGeneral};
+		vk::WriteDescriptorSet  mvWrite{
+		     .dstSet = *rtDescriptorSets[i], .dstBinding = 4, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &mvInfo};
+		std::vector<vk::WriteDescriptorSet> descriptorWrites;
+		descriptorWrites.push_back(tlasWrite);
+		descriptorWrites.push_back(rtOutputWrite);
+		descriptorWrites.push_back(normalsWrite);
+		descriptorWrites.push_back(depthWrite);
+		descriptorWrites.push_back(mvWrite);
 
-        std::vector<vk::WriteDescriptorSet> descriptorWrites;
-        descriptorWrites.push_back(tlasWrite);
-        descriptorWrites.push_back(rtOutputWrite);
-        descriptorWrites.push_back(normalsWrite);
-        descriptorWrites.push_back(depthWrite);
-        descriptorWrites.push_back(mvWrite);
+		// Now we extract ALL global vertices, indices, materials, and textures
+		// across all Scene Nodes that have been uploaded into VRAM by ResourceManager
+		std::vector<vk::DescriptorBufferInfo> vertexInfos;
+		std::vector<vk::DescriptorBufferInfo> indexInfos;
+		std::vector<vk::DescriptorBufferInfo> materialInfos;
+		std::vector<vk::DescriptorImageInfo>  textureInfos;
 
-        // Now we extract ALL global vertices, indices, materials, and textures
-        // across all Scene Nodes that have been uploaded into VRAM by ResourceManager
-        std::vector<vk::DescriptorBufferInfo> vertexInfos;
-        std::vector<vk::DescriptorBufferInfo> indexInfos;
-        std::vector<vk::DescriptorBufferInfo> materialInfos;
-        std::vector<vk::DescriptorImageInfo> textureInfos;
+		// Since our ResourceManager stores ModelResource objects linearly in ID...
+		// In a production engine, this would be an iterative flat map or array
+		constexpr int totalModels = static_cast<int>(Laphria::EngineConfig::kBindlessModelCapacity);
+		for (int modelId = 0; modelId < totalModels; ++modelId)
+		{
+			if (ModelResource *model = resourceManager->getModelResource(modelId))
+			{
+				// Writing a null VkBuffer into a descriptor is invalid even with ePartiallyBound.
+				if (!*model->vertexBuffer || !*model->indexBuffer || !*model->materialBuffer)
+					throw std::runtime_error("RT descriptor: model " + std::to_string(modelId) + " has null buffer(s)");
 
-        // Since our ResourceManager stores ModelResource objects linearly in ID...
-        // In a production engine, this would be an iterative flat map or array
-        constexpr int totalModels = static_cast<int>(Laphria::EngineConfig::kBindlessModelCapacity);
-        for (int modelId = 0; modelId < totalModels; ++modelId) {
-            if (ModelResource *model = resourceManager->getModelResource(modelId)) {
-                // Writing a null VkBuffer into a descriptor is invalid even with ePartiallyBound.
-                if (!*model->vertexBuffer || !*model->indexBuffer || !*model->materialBuffer)
-                    throw std::runtime_error("RT descriptor: model " + std::to_string(modelId) + " has null buffer(s)");
+				// 1. Accumulate Vertex Buffers (use skinned stream for RT/PT when available)
+				const vk::Buffer rtVertexBuffer = (model->hasRuntimeSkinning && *model->skinnedVertexBuffer) ? *model->skinnedVertexBuffer : *model->vertexBuffer;
+				vertexInfos.push_back({rtVertexBuffer, 0, VK_WHOLE_SIZE});
 
-                // 1. Accumulate Vertex Buffers (use skinned stream for RT/PT when available)
-                const vk::Buffer rtVertexBuffer = (model->hasRuntimeSkinning && *model->skinnedVertexBuffer) ? *model->skinnedVertexBuffer : *model->vertexBuffer;
-                vertexInfos.push_back({rtVertexBuffer, 0, VK_WHOLE_SIZE});
+				// 2. Accumulate Index Buffers
+				indexInfos.push_back({*model->indexBuffer, 0, VK_WHOLE_SIZE});
 
-                // 2. Accumulate Index Buffers
-                indexInfos.push_back({*model->indexBuffer, 0, VK_WHOLE_SIZE});
+				// 3. Accumulate Material Buffers
+				materialInfos.push_back({*model->materialBuffer, 0, VK_WHOLE_SIZE});
 
-                // 3. Accumulate Material Buffers
-                materialInfos.push_back({*model->materialBuffer, 0, VK_WHOLE_SIZE});
+				// 4. Accumulate Textures — pair each view with its own sampler.
+				for (size_t texIdx = 0; texIdx < model->textureImageViews.size(); ++texIdx)
+				{
+					textureInfos.push_back({*model->textureSamplers[texIdx], *model->textureImageViews[texIdx], vk::ImageLayout::eShaderReadOnlyOptimal});
+				}
+			}
+			else
+			{
+				break;        // Stop at the first empty ID
+			}
+		}
 
-                // 4. Accumulate Textures — pair each view with its own sampler.
-                for (size_t texIdx = 0; texIdx < model->textureImageViews.size(); ++texIdx) {
-                    textureInfos.push_back({*model->textureSamplers[texIdx], *model->textureImageViews[texIdx], vk::ImageLayout::eShaderReadOnlyOptimal});
-                }
-            } else {
-                break; // Stop at the first empty ID
-            }
-        }
+		if (!vertexInfos.empty())
+		{
+			descriptorWrites.push_back(vk::WriteDescriptorSet{
+			    .dstSet          = *rtDescriptorSets[i],
+			    .dstBinding      = 5,
+			    .dstArrayElement = 0,
+			    .descriptorCount = static_cast<uint32_t>(vertexInfos.size()),
+			    .descriptorType  = vk::DescriptorType::eStorageBuffer,
+			    .pBufferInfo     = vertexInfos.data()});
+		}
 
-        if (!vertexInfos.empty()) {
-            descriptorWrites.push_back(vk::WriteDescriptorSet{
-                .dstSet = *rtDescriptorSets[i],
-                .dstBinding = 5,
-                .dstArrayElement = 0,
-                .descriptorCount = static_cast<uint32_t>(vertexInfos.size()),
-                .descriptorType = vk::DescriptorType::eStorageBuffer,
-                .pBufferInfo = vertexInfos.data()
-            });
-        }
+		if (!indexInfos.empty())
+		{
+			descriptorWrites.push_back(vk::WriteDescriptorSet{
+			    .dstSet          = *rtDescriptorSets[i],
+			    .dstBinding      = 6,
+			    .dstArrayElement = 0,
+			    .descriptorCount = static_cast<uint32_t>(indexInfos.size()),
+			    .descriptorType  = vk::DescriptorType::eStorageBuffer,
+			    .pBufferInfo     = indexInfos.data()});
+		}
 
-        if (!indexInfos.empty()) {
-            descriptorWrites.push_back(vk::WriteDescriptorSet{
-                .dstSet = *rtDescriptorSets[i],
-                .dstBinding = 6,
-                .dstArrayElement = 0,
-                .descriptorCount = static_cast<uint32_t>(indexInfos.size()),
-                .descriptorType = vk::DescriptorType::eStorageBuffer,
-                .pBufferInfo = indexInfos.data()
-            });
-        }
+		if (!materialInfos.empty())
+		{
+			descriptorWrites.push_back(vk::WriteDescriptorSet{
+			    .dstSet          = *rtDescriptorSets[i],
+			    .dstBinding      = 7,
+			    .dstArrayElement = 0,
+			    .descriptorCount = static_cast<uint32_t>(materialInfos.size()),
+			    .descriptorType  = vk::DescriptorType::eStorageBuffer,
+			    .pBufferInfo     = materialInfos.data()});
+		}
 
-        if (!materialInfos.empty()) {
-            descriptorWrites.push_back(vk::WriteDescriptorSet{
-                .dstSet = *rtDescriptorSets[i],
-                .dstBinding = 7,
-                .dstArrayElement = 0,
-                .descriptorCount = static_cast<uint32_t>(materialInfos.size()),
-                .descriptorType = vk::DescriptorType::eStorageBuffer,
-                .pBufferInfo = materialInfos.data()
-            });
-        }
+		if (!textureInfos.empty())
+		{
+			descriptorWrites.push_back(vk::WriteDescriptorSet{
+			    .dstSet          = *rtDescriptorSets[i],
+			    .dstBinding      = 8,
+			    .dstArrayElement = 0,
+			    .descriptorCount = static_cast<uint32_t>(textureInfos.size()),
+			    .descriptorType  = vk::DescriptorType::eCombinedImageSampler,
+			    .pImageInfo      = textureInfos.data()});
+		}
 
-        if (!textureInfos.empty()) {
-            descriptorWrites.push_back(vk::WriteDescriptorSet{
-                .dstSet = *rtDescriptorSets[i],
-                .dstBinding = 8,
-                .dstArrayElement = 0,
-                .descriptorCount = static_cast<uint32_t>(textureInfos.size()),
-                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-                .pImageInfo = textureInfos.data()
-            });
-        }
-
-        vulkan.logicalDevice.updateDescriptorSets(descriptorWrites, {});
-    }
+		vulkan.logicalDevice.updateDescriptorSets(descriptorWrites, {});
+	}
 }
 
-void EngineCore::createDenoiserDescriptorSets() {
-    // One set per frame in flight. All 13 bindings are storage images.
-    // Free old sets before replacing the pool; each RAII DescriptorSet stores its parent pool handle.
-    denoiserDescriptorSets.clear();
-    if (*denoiserDescriptorPool) {
-        denoiserDescriptorPool = nullptr;
-    }
+void EngineCore::createSurfelPathTracerSkyDescriptorSets()
+{
+	surfelPathTracerSkyDescriptorSets.clear();
+	if (*surfelPathTracerSkyDescriptorPool)
+	{
+		surfelPathTracerSkyDescriptorPool = nullptr;
+	}
 
-    std::vector<vk::DescriptorPoolSize> poolSizes = {
-        {vk::DescriptorType::eStorageImage, 13 * MAX_FRAMES_IN_FLIGHT}
-    };
-    vk::DescriptorPoolCreateInfo poolInfo{
-        .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-        .maxSets = MAX_FRAMES_IN_FLIGHT,
-        .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
-        .pPoolSizes = poolSizes.data()
-    };
-    denoiserDescriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
+	if (!surfelPathTracerResources.initialized())
+	{
+		return;
+	}
+	if (surfelPathTracerResources.outputImageViews.size() < MAX_FRAMES_IN_FLIGHT)
+	{
+		throw std::runtime_error("Surfel path tracer sky descriptors require one output image view per frame");
+	}
 
-    std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *pipelines.denoiserDescriptorSetLayout);
-    vk::DescriptorSetAllocateInfo allocInfo{
-        .descriptorPool = *denoiserDescriptorPool,
-        .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
-        .pSetLayouts = layouts.data()
-    };
-    denoiserDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
+	vk::DescriptorPoolSize poolSize{vk::DescriptorType::eStorageImage, MAX_FRAMES_IN_FLIGHT};
+	vk::DescriptorPoolCreateInfo poolInfo{
+	    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+	    .maxSets       = MAX_FRAMES_IN_FLIGHT,
+	    .poolSizeCount = 1,
+	    .pPoolSizes    = &poolSize};
+	surfelPathTracerSkyDescriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        size_t prevSlot = (i - 1 + MAX_FRAMES_IN_FLIGHT) % MAX_FRAMES_IN_FLIGHT;
-        const size_t atrousBase = i * 2;
+	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
+	                                             *pipelines.surfelPathTracerPipelines.skyDescriptorSetLayout);
+	vk::DescriptorSetAllocateInfo allocInfo{
+	    .descriptorPool     = *surfelPathTracerSkyDescriptorPool,
+	    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+	    .pSetLayouts        = layouts.data()};
+	surfelPathTracerSkyDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
 
-        // Build the 13 image info structs in binding order.
-        vk::DescriptorImageInfo infos[13] = {
-            {.imageView = *frames.rayTracingOutputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 0: noisy colour
-            {.imageView = *frames.rtGBufferNormalsViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 1: current normals
-            {.imageView = *frames.rtGBufferDepthViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 2: current depth
-            {.imageView = *frames.rtMotionVectorsViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 3: motion vectors
-            {.imageView = *frames.historyColorViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral}, // 4: history colour read
-            {.imageView = *frames.historyColorViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 5: history colour write
-            {.imageView = *frames.historyMomentsViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral}, // 6: history moments read
-            {.imageView = *frames.historyMomentsViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 7: history moments write
-            {.imageView = *frames.atrousTempViews[atrousBase + 0], .imageLayout = vk::ImageLayout::eGeneral}, // 8: A-Trous buffer A
-            {.imageView = *frames.atrousTempViews[atrousBase + 1], .imageLayout = vk::ImageLayout::eGeneral}, // 9: A-Trous buffer B
-            {.imageView = *frames.rayTracingOutputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral}, // 10: final denoised output (reuses slot 0 image)
-            {.imageView = *frames.rtGBufferNormalsViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral}, // 11: previous-frame normals
-            {.imageView = *frames.rtGBufferDepthViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral}, // 12: previous-frame depth
-        };
-
-        std::vector<vk::WriteDescriptorSet> writes;
-        writes.reserve(13);
-        for (uint32_t b = 0; b < 13; ++b) {
-            writes.push_back(vk::WriteDescriptorSet{
-                .dstSet = *denoiserDescriptorSets[i],
-                .dstBinding = b,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk::DescriptorType::eStorageImage,
-                .pImageInfo = &infos[b]
-            });
-        }
-        vulkan.logicalDevice.updateDescriptorSets(writes, {});
-    }
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+	{
+		vk::DescriptorImageInfo outputInfo{
+		    .imageView   = *surfelPathTracerResources.outputImageViews[i],
+		    .imageLayout = vk::ImageLayout::eGeneral};
+		vk::WriteDescriptorSet outputWrite{
+		    .dstSet          = *surfelPathTracerSkyDescriptorSets[i],
+		    .dstBinding      = 0,
+		    .dstArrayElement = 0,
+		    .descriptorCount = 1,
+		    .descriptorType  = vk::DescriptorType::eStorageImage,
+		    .pImageInfo      = &outputInfo};
+		vulkan.logicalDevice.updateDescriptorSets(outputWrite, {});
+	}
 }
 
-void EngineCore::recordComputeCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const {
-    // 1. Execution Barrier — General Layout for Compute Write
-    // eGeneral→eGeneral: no content discard; waits for the previous frame's TRANSFER_SRC→eGeneral
-    // restore (or the one-time creation pre-transition) before the compute shader writes.
-    transition_image_layout(
-        *frames.storageImages[frames.frameIndex],
-        vk::ImageLayout::eGeneral,
-        vk::ImageLayout::eGeneral,
-        {},
-        vk::AccessFlagBits2::eShaderWrite,
-        vk::PipelineStageFlagBits2::eTransfer, // Wait for the previous frame's restore
-        vk::PipelineStageFlagBits2::eComputeShader,
-        vk::ImageAspectFlagBits::eColor);
+void EngineCore::createSurfelPathTracerStorageDescriptorSets()
+{
+	surfelPathTracerStorageDescriptorSets.clear();
+	if (*surfelPathTracerStorageDescriptorPool)
+	{
+		surfelPathTracerStorageDescriptorPool = nullptr;
+	}
 
-    // 2. Compute Dispatch
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.computePipeline);
+	std::array<vk::DescriptorPoolSize, 2> poolSizes = {
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 17 * MAX_FRAMES_IN_FLIGHT},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 14 * MAX_FRAMES_IN_FLIGHT}};
+	vk::DescriptorPoolCreateInfo poolInfo{
+	    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+	    .maxSets = MAX_FRAMES_IN_FLIGHT,
+	    .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+	    .pPoolSizes = poolSizes.data()};
+	surfelPathTracerStorageDescriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
 
-    // Bind Set 0 (storage image) — the simplified layout only exposes this one set.
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelines.computePipelineLayout, 0,
-                                     *computeDescriptorSets[frames.frameIndex], nullptr);
+	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
+	                                             *pipelines.surfelPathTracerPipelines.storageDescriptorSetLayout);
+	vk::DescriptorSetAllocateInfo allocInfo{
+	    .descriptorPool = *surfelPathTracerStorageDescriptorPool,
+	    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+	    .pSetLayouts = layouts.data()};
+	surfelPathTracerStorageDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
 
-    Laphria::ScenePushConstants push{};
-    push.skyData = glm::vec4(0.01f, 0.03f, 0.1f, 0.99f);
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+	{
+		const std::array<vk::DescriptorImageInfo, 12> imageInfos = {
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.outputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferNormalViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferDepthViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferMotionMaterialViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.irradianceAtlasViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.reflectionViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.filteredReflectionViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.lightingViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferAlbedoViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferMaterialViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.gBufferEmissiveViews[i], .imageLayout = vk::ImageLayout::eGeneral},
+		    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.referenceViews[i], .imageLayout = vk::ImageLayout::eGeneral}};
+		const std::array<uint32_t, 12> imageBindings = {0, 1, 2, 3, 14, 16, 17, 18, 20, 21, 22, 27};
 
-    commandBuffer.pushConstants<Laphria::ScenePushConstants>(*pipelines.computePipelineLayout,
-                                                             vk::ShaderStageFlagBits::eCompute,
-                                                             0, push);
+		vk::DescriptorBufferInfo gBufferSourceInfo{
+		    .buffer = *surfelPathTracerResources.gBufferSourceBuffers[i],
+		    .offset = 0,
+		    .range = VK_WHOLE_SIZE,
+		};
 
-    // Dispatch
-    // Workgroup size is 16x16.
-    uint32_t groupCountX = (swapchain.extent.width + 15) / 16;
-    uint32_t groupCountY = (swapchain.extent.height + 15) / 16;
-    commandBuffer.dispatch(groupCountX, groupCountY, 1);
+		vk::DescriptorBufferInfo surfelSourceInfo{
+		    .buffer = *surfelPathTracerResources.surfelSourceBuffer,
+		    .offset = 0,
+		    .range = VK_WHOLE_SIZE,
+		};
 
-    // 3. Blit Storage Image -> SwapChain Image
+		vk::DescriptorBufferInfo sourceInstanceInfo{
+		    .buffer = *surfelPathTracerResources.sourceInstanceBuffer,
+		    .offset = 0,
+		    .range = VK_WHOLE_SIZE,
+		};
 
-    // Transition Storage Image: General -> TransferSrc
-    transition_image_layout(
-        *frames.storageImages[frames.frameIndex],
-        vk::ImageLayout::eGeneral,
-        vk::ImageLayout::eTransferSrcOptimal,
-        vk::AccessFlagBits2::eShaderWrite,
-        vk::AccessFlagBits2::eTransferRead,
-        vk::PipelineStageFlagBits2::eComputeShader,
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::ImageAspectFlagBits::eColor);
+		vk::DescriptorBufferInfo sourceTransformInfo{
+		    .buffer = *surfelPathTracerResources.sourceTransformBuffer,
+		    .offset = 0,
+		    .range = VK_WHOLE_SIZE,
+		};
 
-    // Transition SwapChain Image: Undefined -> TransferDst
-    transition_image_layout(
-        swapchain.images[imageIndex],
-        vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eTransferDstOptimal,
-        {},
-        vk::AccessFlagBits2::eTransferWrite,
-        vk::PipelineStageFlagBits2::eTopOfPipe,
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::ImageAspectFlagBits::eColor);
+		const std::array<vk::DescriptorBufferInfo, 11> bufferInfos = {
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.countersBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.surfelBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.deadBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.rayBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.cellInfoBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.cellCounterBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    vk::DescriptorBufferInfo{.buffer = *surfelPathTracerResources.cellToSurfelBuffer, .offset = 0, .range = VK_WHOLE_SIZE},
+		    gBufferSourceInfo,
+		    surfelSourceInfo,
+		    sourceInstanceInfo,
+		    sourceTransformInfo,
+		};
 
-    // Blit
-    vk::ImageBlit blitRegion{
-        .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-        .srcOffsets = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}},
-        .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-        .dstOffsets = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}}
-    };
+		const std::array<uint32_t, 11> bufferBindings = {4, 5, 7, 10, 11, 12, 13, 28, 29, 30, 31};
 
-    commandBuffer.blitImage(*frames.storageImages[frames.frameIndex], vk::ImageLayout::eTransferSrcOptimal,
-                            swapchain.images[imageIndex], vk::ImageLayout::eTransferDstOptimal,
-                            blitRegion, vk::Filter::eLinear);
+		std::vector<vk::WriteDescriptorSet> writes;
+		writes.reserve(27);
+		for (size_t imageIndex = 0; imageIndex < imageInfos.size(); ++imageIndex)
+		{
+			writes.push_back(vk::WriteDescriptorSet{
+			    .dstSet = *surfelPathTracerStorageDescriptorSets[i],
+			    .dstBinding = imageBindings[imageIndex],
+			    .dstArrayElement = 0,
+			    .descriptorCount = 1,
+			    .descriptorType = vk::DescriptorType::eStorageImage,
+			    .pImageInfo = &imageInfos[imageIndex]});
+		}
+		for (size_t bufferIndex = 0; bufferIndex < bufferInfos.size(); ++bufferIndex)
+		{
+			writes.push_back(vk::WriteDescriptorSet{
+			    .dstSet = *surfelPathTracerStorageDescriptorSets[i],
+			    .dstBinding = bufferBindings[bufferIndex],
+			    .dstArrayElement = 0,
+			    .descriptorCount = 1,
+			    .descriptorType = vk::DescriptorType::eStorageBuffer,
+			    .pBufferInfo = &bufferInfos[bufferIndex]});
+		}
 
-    // 3b. Restore storage image to eGeneral so it always matches the layout declared in
-    // computeDescriptorSets. This prevents VUID-vkCmdDraw-None-09600 when the rasterizer's
-    // draw commands follow in the same command buffer.
-    transition_image_layout(
-        *frames.storageImages[frames.frameIndex],
-        vk::ImageLayout::eTransferSrcOptimal,
-        vk::ImageLayout::eGeneral,
-        vk::AccessFlagBits2::eTransferRead,
-        {},
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::PipelineStageFlagBits2::eBottomOfPipe,
-        vk::ImageAspectFlagBits::eColor);
-
-    // 4. Transition SwapChain to Color Attachment for Rendering
-    transition_image_layout(
-        swapchain.images[imageIndex],
-        vk::ImageLayout::eTransferDstOptimal,
-        vk::ImageLayout::eColorAttachmentOptimal,
-        vk::AccessFlagBits2::eTransferWrite,
-        vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::ImageAspectFlagBits::eColor);
+		vulkan.logicalDevice.updateDescriptorSets(writes, {});
+		updateSurfelPathTracerHistoryDescriptors(static_cast<uint32_t>(i));
+	}
 }
 
-void EngineCore::recordSkinningPass(const vk::raii::CommandBuffer &commandBuffer) const {
-    std::unordered_map<int, const SceneNode *> instanceRootsByModel;
-    for (const auto &node: scene->getAllNodes()) {
-        if (!node || node->modelId < 0) {
-            continue;
-        }
-        ModelResource *modelRes = resourceManager->getModelResource(node->modelId);
-        if (!modelRes || !modelRes->hasRuntimeSkinning || !*modelRes->skinningDescriptorSet || !modelRes->skinningJointMatricesMapped) {
-            continue;
-        }
-        const SceneNode *parent = node->getParent();
-        const bool isInstanceRoot = (parent == nullptr || parent->modelId != node->modelId);
-        if (isInstanceRoot && !instanceRootsByModel.contains(node->modelId)) {
-            instanceRootsByModel.emplace(node->modelId, node.get());
-        }
-    }
-
-    if (instanceRootsByModel.empty()) {
-        return;
-    }
-
-    vk::MemoryBarrier2 hostToComputeBarrier{
-        .srcStageMask = vk::PipelineStageFlagBits2::eHost,
-        .srcAccessMask = vk::AccessFlagBits2::eHostWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderRead};
-    vk::DependencyInfo hostToComputeDependency{
-        .memoryBarrierCount = 1,
-        .pMemoryBarriers = &hostToComputeBarrier};
-    commandBuffer.pipelineBarrier2(hostToComputeDependency);
-
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.skinningPipeline);
-
-    for (const auto &[modelId, rootNode] : instanceRootsByModel) {
-        ModelResource *modelRes = resourceManager->getModelResource(modelId);
-        if (!modelRes || modelRes->skinningJointMatrixCount == 0 || modelRes->skinningVertexCount == 0) {
-            continue;
-        }
-
-        std::unordered_map<int, const SceneNode *> nodesBySourceIndex;
-        std::vector<const SceneNode *> stack{rootNode};
-        while (!stack.empty()) {
-            const SceneNode *current = stack.back();
-            stack.pop_back();
-            if (!current || current->modelId != modelId) {
-                continue;
-            }
-            if (current->sourceNodeIndex >= 0 && !nodesBySourceIndex.contains(current->sourceNodeIndex)) {
-                nodesBySourceIndex.emplace(current->sourceNodeIndex, current);
-            }
-            for (const auto &child : current->getChildren()) {
-                if (child) {
-                    stack.push_back(child.get());
-                }
-            }
-        }
-
-        std::vector<glm::mat4> jointPalette(modelRes->skinningJointMatrixCount, glm::mat4(1.0f));
-        for (const auto &skin : modelRes->skins) {
-            for (size_t jointIndex = 0; jointIndex < skin.jointSourceNodeIndices.size(); ++jointIndex) {
-                const uint32_t paletteIndex = skin.jointMatrixOffset + static_cast<uint32_t>(jointIndex);
-                if (paletteIndex >= jointPalette.size()) {
-                    continue;
-                }
-                const auto nodeIt = nodesBySourceIndex.find(skin.jointSourceNodeIndices[jointIndex]);
-                if (nodeIt == nodesBySourceIndex.end() || !nodeIt->second) {
-                    continue;
-                }
-                jointPalette[paletteIndex] = nodeIt->second->getWorldTransform() * skin.inverseBindMatrices[jointIndex];
-            }
-        }
-
-        memcpy(modelRes->skinningJointMatricesMapped, jointPalette.data(), sizeof(glm::mat4) * jointPalette.size());
-
-        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelines.skinningPipelineLayout, 0, {*modelRes->skinningDescriptorSet}, nullptr);
-
-        Laphria::SkinningPushConstants push{};
-        push.vertexCount = modelRes->skinningVertexCount;
-        push.jointMatrixOffset = 0;
-        push.jointCount = modelRes->skinningJointMatrixCount;
-        commandBuffer.pushConstants<Laphria::SkinningPushConstants>(*pipelines.skinningPipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, push);
-
-        const uint32_t groupCountX = (modelRes->skinningVertexCount + 63u) / 64u;
-        commandBuffer.dispatch(groupCountX, 1, 1);
-    }
-
-    vk::MemoryBarrier2 skinningToConsumerBarrier{
-        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eVertexInput | vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-        .dstAccessMask = vk::AccessFlagBits2::eVertexAttributeRead | vk::AccessFlagBits2::eAccelerationStructureReadKHR};
-    vk::DependencyInfo skinningToConsumerDependency{
-        .memoryBarrierCount = 1,
-        .pMemoryBarriers = &skinningToConsumerBarrier};
-    commandBuffer.pipelineBarrier2(skinningToConsumerDependency);
-
-    if (ui.renderMode != RenderMode::Rasterizer) {
-        resourceManager->recordSkinnedBLASRefit(commandBuffer);
-    }
+void EngineCore::resetSurfelPathTracerTemporalHistory() const
+{
+	surfelPathTracerPreviousHistoryFrameIndex = 0;
+	surfelPathTracerTemporalHistoryValid = false;
 }
 
-void EngineCore::recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const {
-    const uint32_t fi = frames.frameIndex;
+void EngineCore::updateSurfelPathTracerHistoryDescriptors(uint32_t frameIndex) const
+{
+	if (frameIndex >= surfelPathTracerStorageDescriptorSets.size())
+	{
+		throw std::runtime_error("Surfel path tracer history descriptors require a storage set for the frame");
+	}
+	constexpr uint32_t historyBank = 0;
+	const uint32_t previousFrameIndex = surfelPathTracerTemporalHistoryValid
+	                                        ? surfelPathTracerPreviousHistoryFrameIndex
+	                                        : frameIndex;
+	if (surfelPathTracerTemporalHistoryValid && previousFrameIndex == frameIndex)
+	{
+		throw std::runtime_error("Surfel path tracer valid temporal history requires distinct frame slots");
+	}
+	if (previousFrameIndex >= surfelPathTracerResources.filteredReflectionHistoryViews[historyBank].size() ||
+	    frameIndex >= surfelPathTracerResources.filteredReflectionHistoryViews[historyBank].size() ||
+	    previousFrameIndex >= surfelPathTracerResources.taaHistoryViews[historyBank].size() ||
+	    frameIndex >= surfelPathTracerResources.taaHistoryViews[historyBank].size())
+	{
+		throw std::runtime_error("Surfel path tracer history image views are incomplete");
+	}
 
-    // 1. Transition RT Output Image to General Layout for Writing
-    transition_image_layout(
-        *frames.rayTracingOutputImages[fi],
-        vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eGeneral,
-        {},
-        vk::AccessFlagBits2::eShaderWrite,
-        vk::PipelineStageFlagBits2::eTopOfPipe,
-        vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-        vk::ImageAspectFlagBits::eColor);
+	const std::array<vk::DescriptorImageInfo, 5> imageInfos = {
+	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.taaHistoryViews[historyBank][frameIndex], .imageLayout = vk::ImageLayout::eGeneral},
+	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.filteredReflectionHistoryViews[historyBank][previousFrameIndex], .imageLayout = vk::ImageLayout::eGeneral},
+	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.filteredReflectionHistoryViews[historyBank][frameIndex], .imageLayout = vk::ImageLayout::eGeneral},
+	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.taaHistoryViews[historyBank][previousFrameIndex], .imageLayout = vk::ImageLayout::eGeneral},
+	    vk::DescriptorImageInfo{.imageView = *surfelPathTracerResources.taaHistoryViews[historyBank][frameIndex], .imageLayout = vk::ImageLayout::eGeneral}};
+	const std::array<uint32_t, 5> imageBindings = {19, 23, 24, 25, 26};
 
-    // 2. Bind Classic RT Pipeline and Descriptor Sets
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.classicRTPipeline);
-    commandBuffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eRayTracingKHR,
-        *pipelines.rayTracingPipelineLayout,
-        0,
-        {*rtDescriptorSets[fi], *descriptorSets[fi]},
-        nullptr);
-
-    ScenePushConstants pushConstants{};
-    pushConstants.modelMatrix = glm::mat4(1.0f);
-    commandBuffer.pushConstants<ScenePushConstants>(
-        *pipelines.rayTracingPipelineLayout,
-        vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
-        0,
-        pushConstants);
-
-    // 3. Dispatch Rays
-    vk::StridedDeviceAddressRegionKHR callableRegion{};
-    commandBuffer.traceRaysKHR(
-        pipelines.classicRTRaygenRegion,
-        pipelines.classicRTMissRegion,
-        pipelines.classicRTHitRegion,
-        callableRegion,
-        swapchain.extent.width,
-        swapchain.extent.height,
-        1);
-
-    // 4. Transition RT Output Image for Blit (General → TransferSrcOptimal)
-    transition_image_layout(
-        *frames.rayTracingOutputImages[fi],
-        vk::ImageLayout::eGeneral,
-        vk::ImageLayout::eTransferSrcOptimal,
-        vk::AccessFlagBits2::eShaderWrite,
-        vk::AccessFlagBits2::eTransferRead,
-        vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::ImageAspectFlagBits::eColor);
-
-    // 5. Transition SwapChain Image for Blit
-    transition_image_layout(
-        swapchain.images[imageIndex],
-        vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eTransferDstOptimal,
-        {},
-        vk::AccessFlagBits2::eTransferWrite,
-        vk::PipelineStageFlagBits2::eTopOfPipe,
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::ImageAspectFlagBits::eColor);
-
-    // 6. Blit RT Output to SwapChain Image
-    vk::ImageBlit blitRegion{
-        .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-        .srcOffsets = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}},
-        .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-        .dstOffsets = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}}
-    };
-    commandBuffer.blitImage(
-        *frames.rayTracingOutputImages[fi], vk::ImageLayout::eTransferSrcOptimal,
-        swapchain.images[imageIndex], vk::ImageLayout::eTransferDstOptimal,
-        blitRegion, vk::Filter::eLinear);
-
-    // 6b. Restore RT output image to eGeneral so it always matches the layout declared in
-    // rtDescriptorSets and denoiserDescriptorSets (prevents VUID-vkCmdDraw-None-09600 if
-    // the render mode is switched back to Rasterizer in a subsequent frame).
-    transition_image_layout(
-        *frames.rayTracingOutputImages[fi],
-        vk::ImageLayout::eTransferSrcOptimal,
-        vk::ImageLayout::eGeneral,
-        vk::AccessFlagBits2::eTransferRead,
-        {},
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::PipelineStageFlagBits2::eBottomOfPipe,
-        vk::ImageAspectFlagBits::eColor);
-
-    // 7. Transition SwapChain to Color Attachment for UI Rendering
-    transition_image_layout(
-        swapchain.images[imageIndex],
-        vk::ImageLayout::eTransferDstOptimal,
-        vk::ImageLayout::eColorAttachmentOptimal,
-        vk::AccessFlagBits2::eTransferWrite,
-        vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::ImageAspectFlagBits::eColor);
+	std::array<vk::WriteDescriptorSet, 5> writes{};
+	for (size_t i = 0; i < writes.size(); ++i)
+	{
+		writes[i] = vk::WriteDescriptorSet{
+		    .dstSet = *surfelPathTracerStorageDescriptorSets[frameIndex],
+		    .dstBinding = imageBindings[i],
+		    .dstArrayElement = 0,
+		    .descriptorCount = 1,
+		    .descriptorType = vk::DescriptorType::eStorageImage,
+		    .pImageInfo = &imageInfos[i]};
+	}
+	vulkan.logicalDevice.updateDescriptorSets(writes, {});
 }
 
-void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const {
-    const uint32_t fi = frames.frameIndex;
-    const uint32_t queryBase = getPathTracerQueryBase(fi);
-    const size_t atrousBase = static_cast<size_t>(fi) * 2;
-    const size_t atrousA = atrousBase + 0;
-    const size_t atrousB = atrousBase + 1;
+void EngineCore::createSurfelPathTracerRtDescriptorSets()
+{
+	surfelPathTracerRtDescriptorSets.clear();
+	if (*surfelPathTracerRtDescriptorPool)
+	{
+		surfelPathTracerRtDescriptorPool = nullptr;
+	}
 
-    const float clampedScale = std::clamp(ui.pathTracerSettings.resolutionScale, 0.5f, 1.0f);
-    const float secondaryScale = ui.pathTracerSettings.reduceSecondaryEffects ? 0.90f : 1.0f;
-    const float effectiveScale = std::clamp(clampedScale * secondaryScale, 0.5f, 1.0f);
-    const uint32_t rtWidth = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.width) * effectiveScale));
-    const uint32_t rtHeight = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.height) * effectiveScale));
-    const uint32_t gx = (rtWidth + 15) / 16;
-    const uint32_t gy = (rtHeight + 15) / 16;
+	constexpr uint32_t bindlessCapacity = Laphria::EngineConfig::kBindlessModelCapacity;
+	std::array<vk::DescriptorPoolSize, 3> poolSizes = {
+	    vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 3 * bindlessCapacity * MAX_FRAMES_IN_FLIGHT},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, bindlessCapacity * MAX_FRAMES_IN_FLIGHT}};
+	vk::DescriptorPoolCreateInfo poolInfo{
+	    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet |
+	             vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind,
+	    .maxSets = MAX_FRAMES_IN_FLIGHT,
+	    .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+	    .pPoolSizes = poolSizes.data()};
+	surfelPathTracerRtDescriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
 
-    // 1. Transition all PT images to general layout for writing.
-    auto transitionToGeneral = [&](vk::Image img) {
-        transition_image_layout(img, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
-                                {}, vk::AccessFlagBits2::eShaderWrite,
-                                vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-                                vk::ImageAspectFlagBits::eColor);
-    };
-    transitionToGeneral(*frames.rayTracingOutputImages[fi]);
-    transitionToGeneral(*frames.rtGBufferNormals[fi]);
-    transitionToGeneral(*frames.rtGBufferDepth[fi]);
-    transitionToGeneral(*frames.rtMotionVectors[fi]);
-    transitionToGeneral(*frames.atrousTemp[atrousA]);
-    transitionToGeneral(*frames.atrousTemp[atrousB]);
+	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
+	                                             *pipelines.surfelPathTracerPipelines.rayTracingDescriptorSetLayout);
+	vk::DescriptorSetAllocateInfo allocInfo{
+	    .descriptorPool = *surfelPathTracerRtDescriptorPool,
+	    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+	    .pSetLayouts = layouts.data()};
+	surfelPathTracerRtDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
 
-    // 2. Ray tracing dispatch.
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.rayTracingPipeline);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR,
-                                     *pipelines.rayTracingPipelineLayout, 0,
-                                     {*rtDescriptorSets[fi], *descriptorSets[fi]}, nullptr);
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+	{
+		vk::WriteDescriptorSetAccelerationStructureKHR tlasInfo{
+		    .accelerationStructureCount = 1,
+		    .pAccelerationStructures = &*frames.tlas[i]};
+		vk::WriteDescriptorSet tlasWrite{
+		    .pNext = &tlasInfo,
+		    .dstSet = *surfelPathTracerRtDescriptorSets[i],
+		    .dstBinding = 0,
+		    .dstArrayElement = 0,
+		    .descriptorCount = 1,
+		    .descriptorType = vk::DescriptorType::eAccelerationStructureKHR};
 
-    ScenePushConstants rtPush{};
-    rtPush.modelMatrix = glm::mat4(1.0f);
-    commandBuffer.pushConstants<ScenePushConstants>(*pipelines.rayTracingPipelineLayout,
-                                                    vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
-                                                    0, rtPush);
+		std::vector<vk::WriteDescriptorSet> descriptorWrites;
+		descriptorWrites.push_back(tlasWrite);
 
-    if (*ptTimestampQueryPool) {
-        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eRayTracingShaderKHR, *ptTimestampQueryPool, queryBase + kPtTS_RayTraceStart);
-    }
-    vk::StridedDeviceAddressRegionKHR callableRegion{};
-    commandBuffer.traceRaysKHR(pipelines.raygenRegion, pipelines.missRegion, pipelines.hitRegion,
-                               callableRegion, rtWidth, rtHeight, 1);
-    if (*ptTimestampQueryPool) {
-        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eRayTracingShaderKHR, *ptTimestampQueryPool, queryBase + kPtTS_RayTraceEnd);
-    }
+		std::vector<vk::DescriptorBufferInfo> vertexInfos;
+		std::vector<vk::DescriptorBufferInfo> indexInfos;
+		std::vector<vk::DescriptorBufferInfo> materialInfos;
+		std::vector<vk::DescriptorImageInfo> textureInfos;
 
-    // 3. Barrier: RT writes -> compute reads.
-    auto barrierRTtoCompute = [&](vk::Image img) {
-        transition_image_layout(img, vk::ImageLayout::eGeneral, vk::ImageLayout::eGeneral,
-                                vk::AccessFlagBits2::eShaderWrite, vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
-                                vk::PipelineStageFlagBits2::eRayTracingShaderKHR, vk::PipelineStageFlagBits2::eComputeShader,
-                                vk::ImageAspectFlagBits::eColor);
-    };
-    barrierRTtoCompute(*frames.rayTracingOutputImages[fi]);
-    barrierRTtoCompute(*frames.rtGBufferNormals[fi]);
-    barrierRTtoCompute(*frames.rtGBufferDepth[fi]);
-    barrierRTtoCompute(*frames.rtMotionVectors[fi]);
+		for (int modelId = 0; modelId < static_cast<int>(bindlessCapacity); ++modelId)
+		{
+			ModelResource *model = resourceManager ? resourceManager->getModelResource(modelId) : nullptr;
+			if (!model)
+			{
+				break;
+			}
+			if (!*model->vertexBuffer || !*model->indexBuffer || !*model->materialBuffer)
+			{
+				throw std::runtime_error("Surfel GBuffer RT descriptor: model " + std::to_string(modelId) + " has null buffer(s)");
+			}
 
-    // 4. Reprojection pass.
-    if (ui.pathTracerSettings.enableReprojection) {
-        commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.reprojectionPipeline);
-        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-                                         *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
+			const vk::Buffer rtVertexBuffer =
+			    (model->hasRuntimeSkinning && *model->skinnedVertexBuffer) ? *model->skinnedVertexBuffer : *model->vertexBuffer;
+			vertexInfos.push_back({rtVertexBuffer, 0, VK_WHOLE_SIZE});
+			indexInfos.push_back({*model->indexBuffer, 0, VK_WHOLE_SIZE});
+			materialInfos.push_back({*model->materialBuffer, 0, VK_WHOLE_SIZE});
 
-        float historyAlpha = ptCameraMoved ? 1.0f : 0.1f;
-        DenoisePushConstants reproPush{
-            .stepSize = 0,
-            .isLastPass = 0,
-            .phiColor = historyAlpha,
-            .phiNormal = 128.0f,
-            .exposureScale = ui.exposure,
-            .useRawInput = 0};
-        commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
-                                                          vk::ShaderStageFlagBits::eCompute, 0, reproPush);
-        if (*ptTimestampQueryPool) {
-            commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_ReprojectionStart);
-        }
-        commandBuffer.dispatch(gx, gy, 1);
-        if (*ptTimestampQueryPool) {
-            commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_ReprojectionEnd);
-        }
-    }
+			for (size_t texIdx = 0; texIdx < model->textureImageViews.size(); ++texIdx)
+			{
+				textureInfos.push_back({*model->textureSamplers[texIdx],
+				                        *model->textureImageViews[texIdx],
+				                        vk::ImageLayout::eShaderReadOnlyOptimal});
+			}
+		}
 
-    auto barrierCompute = [&](vk::Image img) {
-        transition_image_layout(img, vk::ImageLayout::eGeneral, vk::ImageLayout::eGeneral,
-                                vk::AccessFlagBits2::eShaderWrite, vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
-                                vk::PipelineStageFlagBits2::eComputeShader, vk::PipelineStageFlagBits2::eComputeShader,
-                                vk::ImageAspectFlagBits::eColor);
-    };
-    barrierCompute(*frames.atrousTemp[atrousA]);
-    barrierCompute(*frames.historyMoments[fi]);
+		if (!vertexInfos.empty())
+		{
+			descriptorWrites.push_back(vk::WriteDescriptorSet{
+			    .dstSet = *surfelPathTracerRtDescriptorSets[i],
+			    .dstBinding = 5,
+			    .dstArrayElement = 0,
+			    .descriptorCount = static_cast<uint32_t>(vertexInfos.size()),
+			    .descriptorType = vk::DescriptorType::eStorageBuffer,
+			    .pBufferInfo = vertexInfos.data()});
+		}
+		if (!indexInfos.empty())
+		{
+			descriptorWrites.push_back(vk::WriteDescriptorSet{
+			    .dstSet = *surfelPathTracerRtDescriptorSets[i],
+			    .dstBinding = 6,
+			    .dstArrayElement = 0,
+			    .descriptorCount = static_cast<uint32_t>(indexInfos.size()),
+			    .descriptorType = vk::DescriptorType::eStorageBuffer,
+			    .pBufferInfo = indexInfos.data()});
+		}
+		if (!materialInfos.empty())
+		{
+			descriptorWrites.push_back(vk::WriteDescriptorSet{
+			    .dstSet = *surfelPathTracerRtDescriptorSets[i],
+			    .dstBinding = 7,
+			    .dstArrayElement = 0,
+			    .descriptorCount = static_cast<uint32_t>(materialInfos.size()),
+			    .descriptorType = vk::DescriptorType::eStorageBuffer,
+			    .pBufferInfo = materialInfos.data()});
+		}
+		if (!textureInfos.empty())
+		{
+			descriptorWrites.push_back(vk::WriteDescriptorSet{
+			    .dstSet = *surfelPathTracerRtDescriptorSets[i],
+			    .dstBinding = 8,
+			    .dstArrayElement = 0,
+			    .descriptorCount = static_cast<uint32_t>(textureInfos.size()),
+			    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+			    .pImageInfo = textureInfos.data()});
+		}
 
-    // 5. A-Trous denoiser.
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.atrousPipeline);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-                                     *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
-
-    const int atrousIterations = ui.pathTracerSettings.enableDenoiser ? std::clamp(ui.pathTracerSettings.denoiserIterations, 1, 5) : 0;
-    const int useRawInput = ui.pathTracerSettings.enableReprojection ? 0 : 1;
-    
-    if (*ptTimestampQueryPool) {
-        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_DenoiserStart);
-    }
-    
-    if (atrousIterations == 0) {
-        // Pass-through tonemapping
-        DenoisePushConstants atrousPush{
-            .stepSize = 0,
-            .isLastPass = 1,
-            .phiColor = 1.0f,
-            .phiNormal = 128.0f,
-            .exposureScale = ui.exposure,
-            .useRawInput = useRawInput};
-        commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
-                                                          vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
-        commandBuffer.dispatch(gx, gy, 1);
-    } else {
-        for (int iter = 0; iter < atrousIterations; ++iter) {
-            const int32_t stepSize = 1 << iter;
-            const int32_t isLastPass = (iter == atrousIterations - 1) ? 1 : 0;
-            DenoisePushConstants atrousPush{
-                .stepSize = stepSize,
-                .isLastPass = isLastPass,
-                .phiColor = 1.0f,
-                .phiNormal = 128.0f,
-                .exposureScale = ui.exposure,
-                .useRawInput = useRawInput};
-            commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
-                                                              vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
-            commandBuffer.dispatch(gx, gy, 1);
-
-            if (!isLastPass) {
-                const int writeBuf = iter % 2;
-                barrierCompute(*frames.atrousTemp[(writeBuf == 0) ? atrousB : atrousA]);
-            }
-        }
-    }
-    
-    if (*ptTimestampQueryPool) {
-        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *ptTimestampQueryPool, queryBase + kPtTS_DenoiserEnd);
-    }
-
-    // 6. Blit denoised image to swapchain.
-    transition_image_layout(*frames.rayTracingOutputImages[fi],
-                            vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal,
-                            vk::AccessFlagBits2::eShaderWrite, vk::AccessFlagBits2::eTransferRead,
-                            vk::PipelineStageFlagBits2::eComputeShader, vk::PipelineStageFlagBits2::eTransfer,
-                            vk::ImageAspectFlagBits::eColor);
-
-    transition_image_layout(swapchain.images[imageIndex],
-                            vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
-                            {}, vk::AccessFlagBits2::eTransferWrite,
-                            vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eTransfer,
-                            vk::ImageAspectFlagBits::eColor);
-
-    vk::ImageBlit blitRegion{
-        .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-        .srcOffsets = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(rtWidth), static_cast<int32_t>(rtHeight), 1}}},
-        .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-        .dstOffsets = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}}
-    };
-    commandBuffer.blitImage(*frames.rayTracingOutputImages[fi], vk::ImageLayout::eTransferSrcOptimal,
-                            swapchain.images[imageIndex], vk::ImageLayout::eTransferDstOptimal, blitRegion, vk::Filter::eLinear);
-
-    transition_image_layout(*frames.rayTracingOutputImages[fi],
-                            vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eGeneral,
-                            vk::AccessFlagBits2::eTransferRead, {},
-                            vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eBottomOfPipe,
-                            vk::ImageAspectFlagBits::eColor);
-
-    transition_image_layout(swapchain.images[imageIndex],
-                            vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eColorAttachmentOptimal,
-                            vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
-                            vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                            vk::ImageAspectFlagBits::eColor);
+		vulkan.logicalDevice.updateDescriptorSets(descriptorWrites, {});
+	}
 }
 
-void EngineCore::createDescriptorPool() {
-    // Generous pool sizes to accommodate an arbitrary number of loaded models.
-    // eSampledImage / eSampler are separate because the shadow map binding uses them
-    // as distinct descriptor types (binding 1 and 2 in the global layout).
-    constexpr uint32_t poolScale = Laphria::EngineConfig::kDescriptorPoolScale;
-    std::array<vk::DescriptorPoolSize, 7> poolSizes = {
-        vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, poolScale},
-        // 1000 per loaded model (material textures) + 2×1000 for the two RT descriptor sets.
-        vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, 5 * poolScale},
-        vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, poolScale},
-        vk::DescriptorPoolSize{vk::DescriptorType::eSampler, poolScale},
-        // 1000 for materials + vertex and index buffers * MAX_FRAMES
-        vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 15 * poolScale},
-        vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, poolScale},
-        vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT}
-    };
+void EngineCore::createDenoiserDescriptorSets()
+{
+	// One set per frame in flight. All bindings are storage images.
+	// Free old sets before replacing the pool; each RAII DescriptorSet stores its parent pool handle.
+	denoiserDescriptorSets.clear();
+	if (*denoiserDescriptorPool)
+	{
+		denoiserDescriptorPool = nullptr;
+	}
 
-    vk::DescriptorPoolCreateInfo poolInfo{
-        // eFreeDescriptorSet: allows individual sets to be freed (needed by ResourceManager).
-        // eUpdateAfterBind: required for bindless descriptor indexing (VK_EXT_descriptor_indexing).
-        .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet |
-                 vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind,
-        .maxSets = poolScale * MAX_FRAMES_IN_FLIGHT,
-        .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
-        .pPoolSizes = poolSizes.data()
-    };
-    descriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
+	std::vector<vk::DescriptorPoolSize> poolSizes = {
+	    {vk::DescriptorType::eStorageImage, 13 * MAX_FRAMES_IN_FLIGHT}};
+	vk::DescriptorPoolCreateInfo poolInfo{
+	    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+	    .maxSets       = MAX_FRAMES_IN_FLIGHT,
+	    .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+	    .pPoolSizes    = poolSizes.data()};
+	denoiserDescriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
+
+	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *pipelines.denoiserDescriptorSetLayout);
+	vk::DescriptorSetAllocateInfo        allocInfo{
+	           .descriptorPool     = *denoiserDescriptorPool,
+	           .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+	           .pSetLayouts        = layouts.data()};
+	denoiserDescriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
+
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		size_t       prevSlot   = (i - 1 + MAX_FRAMES_IN_FLIGHT) % MAX_FRAMES_IN_FLIGHT;
+		const size_t atrousBase = i * 2;
+
+		// Build image infos in binding order.
+		vk::DescriptorImageInfo infos[13] = {
+		    {.imageView = *frames.rayTracingOutputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral},          // 0: noisy colour
+		    {.imageView = *frames.rtGBufferNormalsViews[i], .imageLayout = vk::ImageLayout::eGeneral},               // 1: current normals
+		    {.imageView = *frames.rtGBufferDepthViews[i], .imageLayout = vk::ImageLayout::eGeneral},                 // 2: current depth
+		    {.imageView = *frames.rtMotionVectorsViews[i], .imageLayout = vk::ImageLayout::eGeneral},                // 3: motion vectors
+		    {.imageView = *frames.historyColorViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral},            // 4: history colour read
+		    {.imageView = *frames.historyColorViews[i], .imageLayout = vk::ImageLayout::eGeneral},                   // 5: history colour write
+		    {.imageView = *frames.historyMomentsViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral},          // 6: history moments read
+		    {.imageView = *frames.historyMomentsViews[i], .imageLayout = vk::ImageLayout::eGeneral},                 // 7: history moments write
+		    {.imageView = *frames.atrousTempViews[atrousBase + 0], .imageLayout = vk::ImageLayout::eGeneral},        // 8: A-Trous buffer A
+		    {.imageView = *frames.atrousTempViews[atrousBase + 1], .imageLayout = vk::ImageLayout::eGeneral},        // 9: A-Trous buffer B
+		    {.imageView = *frames.rayTracingOutputImageViews[i], .imageLayout = vk::ImageLayout::eGeneral},          // 10: final denoised output (reuses slot 0 image)
+		    {.imageView = *frames.rtGBufferNormalsViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral},        // 11: previous-frame normals
+		    {.imageView = *frames.rtGBufferDepthViews[prevSlot], .imageLayout = vk::ImageLayout::eGeneral},          // 12: previous-frame depth
+		};
+
+		std::vector<vk::WriteDescriptorSet> writes;
+		writes.reserve(13);
+		for (uint32_t b = 0; b < 13; ++b)
+		{
+			writes.push_back(vk::WriteDescriptorSet{
+			    .dstSet          = *denoiserDescriptorSets[i],
+			    .dstBinding      = b,
+			    .dstArrayElement = 0,
+			    .descriptorCount = 1,
+			    .descriptorType  = vk::DescriptorType::eStorageImage,
+			    .pImageInfo      = &infos[b]});
+		}
+		vulkan.logicalDevice.updateDescriptorSets(writes, {});
+	}
 }
 
-void EngineCore::createDescriptorSets() {
-    std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *pipelines.descriptorSetLayoutGlobal);
+void EngineCore::recordSkinningPass(const vk::raii::CommandBuffer &commandBuffer) const
+{
+	std::unordered_map<int, const SceneNode *> instanceRootsByModel;
+	for (const auto &node : scene->getAllNodes())
+	{
+		if (!node || node->modelId < 0)
+		{
+			continue;
+		}
+		ModelResource *modelRes = resourceManager->getModelResource(node->modelId);
+		if (!modelRes || !modelRes->hasRuntimeSkinning || !*modelRes->skinningDescriptorSet || !modelRes->skinningJointMatricesMapped)
+		{
+			continue;
+		}
+		const SceneNode *parent         = node->getParent();
+		const bool       isInstanceRoot = (parent == nullptr || parent->modelId != node->modelId);
+		if (isInstanceRoot && !instanceRootsByModel.contains(node->modelId))
+		{
+			instanceRootsByModel.emplace(node->modelId, node.get());
+		}
+	}
 
-    vk::DescriptorSetAllocateInfo allocInfo{
-        .descriptorPool = *descriptorPool,
-        .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
-        .pSetLayouts = layouts.data()
-    };
+	if (instanceRootsByModel.empty())
+	{
+		return;
+	}
 
-    descriptorSets.clear();
-    descriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
+	vk::MemoryBarrier2 hostToComputeBarrier{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eHost,
+	    .srcAccessMask = vk::AccessFlagBits2::eHostWrite,
+	    .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderRead};
+	vk::DependencyInfo hostToComputeDependency{
+	    .memoryBarrierCount = 1,
+	    .pMemoryBarriers    = &hostToComputeBarrier};
+	commandBuffer.pipelineBarrier2(hostToComputeDependency);
 
-    // Global descriptor set layout (Set 0):
-    //   binding 0 → UniformBufferObject  (view/proj/light/cascade matrices, camera pos)
-    //   binding 1 → shadow depth array   (sampled, ShaderReadOnlyOptimal)
-    //   binding 2 → shadow PCF sampler   (comparison sampler)
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vk::DescriptorBufferInfo bufferInfo{
-            .buffer = *frames.uniformBuffers[i],
-            .offset = 0,
-            .range = sizeof(Laphria::UniformBufferObject)
-        };
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.skinningPipeline);
 
-        vk::WriteDescriptorSet uboWrite{
-            .dstSet = *descriptorSets[i],
-            .dstBinding = 0,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = vk::DescriptorType::eUniformBuffer,
-            .pBufferInfo = &bufferInfo
-        };
+	for (const auto &[modelId, rootNode] : instanceRootsByModel)
+	{
+		ModelResource *modelRes = resourceManager->getModelResource(modelId);
+		if (!modelRes || modelRes->skinningJointMatrixCount == 0 || modelRes->skinningVertexCount == 0)
+		{
+			continue;
+		}
 
-        // The shadow array image starts in eUndefined; we use eShaderReadOnlyOptimal
-        // as the declared layout here because the first frame's shadow pass will
-        // transition it via eUndefined → eDepthAttachmentOptimal → eShaderReadOnlyOptimal
-        // before the main pass samples it.
-        vk::DescriptorImageInfo shadowImageInfo{
-            .imageView = *frames.shadowArrayViews[i],
-            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
-        };
+		std::unordered_map<int, const SceneNode *> nodesBySourceIndex;
+		std::vector<const SceneNode *>             stack{rootNode};
+		while (!stack.empty())
+		{
+			const SceneNode *current = stack.back();
+			stack.pop_back();
+			if (!current || current->modelId != modelId)
+			{
+				continue;
+			}
+			if (current->sourceNodeIndex >= 0 && !nodesBySourceIndex.contains(current->sourceNodeIndex))
+			{
+				nodesBySourceIndex.emplace(current->sourceNodeIndex, current);
+			}
+			for (const auto &child : current->getChildren())
+			{
+				if (child)
+				{
+					stack.push_back(child.get());
+				}
+			}
+		}
 
-        vk::WriteDescriptorSet shadowImageWrite{
-            .dstSet = *descriptorSets[i],
-            .dstBinding = 1,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = vk::DescriptorType::eSampledImage,
-            .pImageInfo = &shadowImageInfo
-        };
+		std::vector<glm::mat4> jointPalette(modelRes->skinningJointMatrixCount, glm::mat4(1.0f));
+		for (const auto &skin : modelRes->skins)
+		{
+			for (size_t jointIndex = 0; jointIndex < skin.jointSourceNodeIndices.size(); ++jointIndex)
+			{
+				const uint32_t paletteIndex = skin.jointMatrixOffset + static_cast<uint32_t>(jointIndex);
+				if (paletteIndex >= jointPalette.size())
+				{
+					continue;
+				}
+				const auto nodeIt = nodesBySourceIndex.find(skin.jointSourceNodeIndices[jointIndex]);
+				if (nodeIt == nodesBySourceIndex.end() || !nodeIt->second)
+				{
+					continue;
+				}
+				jointPalette[paletteIndex] = nodeIt->second->getWorldTransform() * skin.inverseBindMatrices[jointIndex];
+			}
+		}
 
-        vk::DescriptorImageInfo shadowSamplerInfo{
-            .sampler = *frames.shadowSampler
-        };
+		memcpy(modelRes->skinningJointMatricesMapped, jointPalette.data(), sizeof(glm::mat4) * jointPalette.size());
 
-        vk::WriteDescriptorSet shadowSamplerWrite{
-            .dstSet = *descriptorSets[i],
-            .dstBinding = 2,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = vk::DescriptorType::eSampler,
-            .pImageInfo = &shadowSamplerInfo
-        };
+		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelines.skinningPipelineLayout, 0, {*modelRes->skinningDescriptorSet}, nullptr);
 
-        std::array<vk::WriteDescriptorSet, 3> writes = {uboWrite, shadowImageWrite, shadowSamplerWrite};
-        vulkan.logicalDevice.updateDescriptorSets(writes, {});
-    }
+		Laphria::SkinningPushConstants push{};
+		push.vertexCount       = modelRes->skinningVertexCount;
+		push.jointMatrixOffset = 0;
+		push.jointCount        = modelRes->skinningJointMatrixCount;
+		commandBuffer.pushConstants<Laphria::SkinningPushConstants>(*pipelines.skinningPipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, push);
+
+		const uint32_t groupCountX = (modelRes->skinningVertexCount + 63u) / 64u;
+		commandBuffer.dispatch(groupCountX, 1, 1);
+	}
+
+	vk::MemoryBarrier2 skinningToConsumerBarrier{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+	    .dstStageMask  = vk::PipelineStageFlagBits2::eVertexInput | vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+	    .dstAccessMask = vk::AccessFlagBits2::eVertexAttributeRead | vk::AccessFlagBits2::eAccelerationStructureReadKHR};
+	vk::DependencyInfo skinningToConsumerDependency{
+	    .memoryBarrierCount = 1,
+	    .pMemoryBarriers    = &skinningToConsumerBarrier};
+	commandBuffer.pipelineBarrier2(skinningToConsumerDependency);
+
+	if (ui.renderMode != RenderMode::Rasterizer)
+	{
+		resourceManager->recordSkinnedBLASRefit(commandBuffer);
+	}
 }
 
-void EngineCore::createTimestampQueryPool() {
-    vk::QueryPoolCreateInfo queryPoolInfo{
-        .queryType = vk::QueryType::eTimestamp,
-        .queryCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * kPtTimestampQueryCountPerFrame};
-    ptTimestampQueryPool = vk::raii::QueryPool(vulkan.logicalDevice, queryPoolInfo);
-    timestampPeriodNs = vulkan.physicalDevice.getProperties().limits.timestampPeriod;
+void EngineCore::recordClassicRTCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
+{
+	const uint32_t fi = frames.frameIndex;
+
+	// 1. Transition RT Output Image to General Layout for Writing
+	transition_image_layout(
+	    *frames.rayTracingOutputImages[fi],
+	    vk::ImageLayout::eUndefined,
+	    vk::ImageLayout::eGeneral,
+	    {},
+	    vk::AccessFlagBits2::eShaderWrite,
+	    vk::PipelineStageFlagBits2::eTopOfPipe,
+	    vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    vk::ImageAspectFlagBits::eColor);
+
+	// 2. Bind Classic RT Pipeline and Descriptor Sets
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.classicRTPipeline);
+	commandBuffer.bindDescriptorSets(
+	    vk::PipelineBindPoint::eRayTracingKHR,
+	    *pipelines.rayTracingPipelineLayout,
+	    0,
+	    {*rtDescriptorSets[fi], *descriptorSets[fi]},
+	    nullptr);
+
+	ScenePushConstants pushConstants{};
+	pushConstants.modelMatrix = glm::mat4(1.0f);
+	commandBuffer.pushConstants<ScenePushConstants>(
+	    *pipelines.rayTracingPipelineLayout,
+	    vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
+	    0,
+	    pushConstants);
+
+	// 3. Dispatch Rays
+	vk::StridedDeviceAddressRegionKHR callableRegion{};
+	commandBuffer.traceRaysKHR(
+	    pipelines.classicRTRaygenRegion,
+	    pipelines.classicRTMissRegion,
+	    pipelines.classicRTHitRegion,
+	    callableRegion,
+	    swapchain.extent.width,
+	    swapchain.extent.height,
+	    1);
+
+	// 4. Transition RT Output Image for Blit (General → TransferSrcOptimal)
+	transition_image_layout(
+	    *frames.rayTracingOutputImages[fi],
+	    vk::ImageLayout::eGeneral,
+	    vk::ImageLayout::eTransferSrcOptimal,
+	    vk::AccessFlagBits2::eShaderWrite,
+	    vk::AccessFlagBits2::eTransferRead,
+	    vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    vk::PipelineStageFlagBits2::eTransfer,
+	    vk::ImageAspectFlagBits::eColor);
+
+	// 5. Transition SwapChain Image for Blit
+	transition_image_layout(
+	    swapchain.images[imageIndex],
+	    vk::ImageLayout::eUndefined,
+	    vk::ImageLayout::eTransferDstOptimal,
+	    {},
+	    vk::AccessFlagBits2::eTransferWrite,
+	    vk::PipelineStageFlagBits2::eTopOfPipe,
+	    vk::PipelineStageFlagBits2::eTransfer,
+	    vk::ImageAspectFlagBits::eColor);
+
+	// 6. Blit RT Output to SwapChain Image
+	vk::ImageBlit blitRegion{
+	    .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .srcOffsets     = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}},
+	    .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .dstOffsets     = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}}};
+	commandBuffer.blitImage(
+	    *frames.rayTracingOutputImages[fi], vk::ImageLayout::eTransferSrcOptimal,
+	    swapchain.images[imageIndex], vk::ImageLayout::eTransferDstOptimal,
+	    blitRegion, vk::Filter::eLinear);
+
+	// 6b. Restore RT output image to eGeneral so it always matches the layout declared in
+	// rtDescriptorSets and denoiserDescriptorSets (prevents VUID-vkCmdDraw-None-09600 if
+	// the render mode is switched back to Rasterizer in a subsequent frame).
+	transition_image_layout(
+	    *frames.rayTracingOutputImages[fi],
+	    vk::ImageLayout::eTransferSrcOptimal,
+	    vk::ImageLayout::eGeneral,
+	    vk::AccessFlagBits2::eTransferRead,
+	    {},
+	    vk::PipelineStageFlagBits2::eTransfer,
+	    vk::PipelineStageFlagBits2::eBottomOfPipe,
+	    vk::ImageAspectFlagBits::eColor);
+
+	// 7. Transition SwapChain to Color Attachment for UI Rendering
+	transition_image_layout(
+	    swapchain.images[imageIndex],
+	    vk::ImageLayout::eTransferDstOptimal,
+	    vk::ImageLayout::eColorAttachmentOptimal,
+	    vk::AccessFlagBits2::eTransferWrite,
+	    vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
+	    vk::PipelineStageFlagBits2::eTransfer,
+	    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+	    vk::ImageAspectFlagBits::eColor);
 }
 
-uint32_t EngineCore::getPathTracerQueryBase(uint32_t frameSlot) const {
-    return frameSlot * kPtTimestampQueryCountPerFrame;
+void EngineCore::recordRayTracingCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
+{
+	const uint32_t fi         = frames.frameIndex;
+	const uint32_t queryBase  = getGpuTimestampQueryBase(fi);
+	const size_t   atrousBase = static_cast<size_t>(fi) * 2;
+	const size_t   atrousA    = atrousBase + 0;
+	const size_t   atrousB    = atrousBase + 1;
+
+	const float    clampedScale         = std::clamp(ui.pathTracerSettings.resolutionScale, 0.5f, 1.0f);
+	const float    secondaryScale       = ui.pathTracerSettings.reduceSecondaryEffects ? 0.90f : 1.0f;
+	const float    effectiveScale       = std::clamp(clampedScale * secondaryScale, 0.5f, 1.0f);
+	const uint32_t rtWidth              = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.width) * effectiveScale));
+	const uint32_t rtHeight             = std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.height) * effectiveScale));
+	const uint32_t gx                   = (rtWidth + 15) / 16;
+	const uint32_t gy                   = (rtHeight + 15) / 16;
+
+	// 1. Transition all PT images to general layout for writing.
+	auto transitionToGeneral = [&](vk::Image img) {
+		transition_image_layout(img, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
+		                        {}, vk::AccessFlagBits2::eShaderWrite,
+		                        vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+		                        vk::ImageAspectFlagBits::eColor);
+	};
+	transitionToGeneral(*frames.rayTracingOutputImages[fi]);
+	transitionToGeneral(*frames.rtGBufferNormals[fi]);
+	transitionToGeneral(*frames.rtGBufferDepth[fi]);
+	transitionToGeneral(*frames.rtMotionVectors[fi]);
+	transitionToGeneral(*frames.atrousTemp[atrousA]);
+	transitionToGeneral(*frames.atrousTemp[atrousB]);
+
+	// 2. Ray tracing dispatch.
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipelines.rayTracingPipeline);
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR,
+	                                 *pipelines.rayTracingPipelineLayout, 0,
+	                                 {*rtDescriptorSets[fi], *descriptorSets[fi]}, nullptr);
+
+	ScenePushConstants rtPush{};
+	rtPush.modelMatrix                       = glm::mat4(1.0f);
+	rtPush.cascadeIndex                      = -1;
+	const uint32_t packedPathTracerMaterialIndex = packPathTracerMaterialSettings(ui.pathTracerSettings);
+	rtPush.materialIndex = static_cast<int>(packedPathTracerMaterialIndex);
+	const uint32_t pathTracerFlags = packPathTracerFlags(ui.pathTracerSettings);
+	rtPush.padding3 = pathTracerFlags;
+	commandBuffer.pushConstants<ScenePushConstants>(*pipelines.rayTracingPipelineLayout,
+	                                                vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR,
+	                                                0, rtPush);
+
+	if (*gpuTimestampQueryPool)
+	{
+		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eRayTracingShaderKHR, *gpuTimestampQueryPool, queryBase + kPtTS_RayTraceStart);
+	}
+	vk::StridedDeviceAddressRegionKHR callableRegion{};
+	commandBuffer.traceRaysKHR(pipelines.raygenRegion, pipelines.missRegion, pipelines.hitRegion,
+	                           callableRegion, rtWidth, rtHeight, 1);
+	if (*gpuTimestampQueryPool)
+	{
+		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eRayTracingShaderKHR, *gpuTimestampQueryPool, queryBase + kPtTS_RayTraceEnd);
+	}
+
+	// 3. Make both this dispatch and earlier same-queue PT submissions visible to
+	// reprojection. The compute source scope is required for previous-slot history;
+	// the ray-tracing source scope covers current and previous G-buffer writes.
+	vk::MemoryBarrier2 ptToDenoiserBarrier{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eRayTracingShaderKHR |
+	                     vk::PipelineStageFlagBits2::eComputeShader,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+	    .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderRead |
+	                     vk::AccessFlagBits2::eShaderWrite};
+	vk::DependencyInfo ptToDenoiserDependency{
+	    .memoryBarrierCount = 1,
+	    .pMemoryBarriers    = &ptToDenoiserBarrier};
+	commandBuffer.pipelineBarrier2(ptToDenoiserDependency);
+
+	// 4. Reprojection pass.
+	if (ui.pathTracerSettings.enableReprojection)
+	{
+		commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.reprojectionPipeline);
+		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+		                                 *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
+
+		constexpr float kStaticAlpha = 0.08f;
+		float           historyAlpha = kStaticAlpha;
+		if (ui.pathTracerSettings.enableMotionAwareAccumulation)
+		{
+			const float motionAlphaMin = std::clamp(ui.pathTracerSettings.motionAlphaMin, 0.05f, 0.40f);
+			const float motionAlphaMax = std::clamp(ui.pathTracerSettings.motionAlphaMax, 0.20f, 1.00f);
+			const float minAlpha       = std::min(motionAlphaMin, motionAlphaMax);
+			const float maxAlpha       = std::max(motionAlphaMin, motionAlphaMax);
+
+			if (ptForceHistoryReset)
+			{
+				historyAlpha = 1.0f;
+			}
+			else if (ptCameraMoved)
+			{
+				historyAlpha = glm::mix(minAlpha, maxAlpha, std::clamp(ptSmoothedMotion, 0.0f, 1.0f));
+			}
+		}
+		else
+		{
+			historyAlpha = ptCameraMoved ? 1.0f : 0.1f;
+		}
+
+		DenoisePushConstants reproPush{
+		    .stepSize             = 0,
+		    .isLastPass           = 0,
+		    .phiColor             = historyAlpha,
+		    .phiNormal            = 128.0f,
+		    .exposureScale        = ui.exposure,
+		    .useRawInput          = 0,
+		    .renderWidth           = rtWidth,
+		    .renderHeight          = rtHeight,
+		    .resetHistory          = ptForceHistoryReset ? 1 : 0};
+		commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
+		                                                  vk::ShaderStageFlagBits::eCompute, 0, reproPush);
+		if (*gpuTimestampQueryPool)
+		{
+			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *gpuTimestampQueryPool, queryBase + kPtTS_ReprojectionStart);
+		}
+		commandBuffer.dispatch(gx, gy, 1);
+		if (*gpuTimestampQueryPool)
+		{
+			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *gpuTimestampQueryPool, queryBase + kPtTS_ReprojectionEnd);
+		}
+	}
+
+	auto barrierCompute = [&](vk::Image img) {
+		transition_image_layout(img, vk::ImageLayout::eGeneral, vk::ImageLayout::eGeneral,
+		                        vk::AccessFlagBits2::eShaderWrite, vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+		                        vk::PipelineStageFlagBits2::eComputeShader, vk::PipelineStageFlagBits2::eComputeShader,
+		                        vk::ImageAspectFlagBits::eColor);
+	};
+	barrierCompute(*frames.atrousTemp[atrousA]);
+	barrierCompute(*frames.historyMoments[fi]);
+
+	// 5. A-Trous denoiser.
+	commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipelines.atrousPipeline);
+	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+	                                 *pipelines.denoiserPipelineLayout, 0, *denoiserDescriptorSets[fi], nullptr);
+
+	int atrousIterations = ui.pathTracerSettings.enableDenoiser ? std::clamp(ui.pathTracerSettings.denoiserIterations, 1, 5) : 0;
+	if (ui.pathTracerSettings.enableMotionAwareAccumulation && atrousIterations > 0 &&
+	    std::clamp(ptSmoothedMotion, 0.0f, 1.0f) > 0.35f)
+	{
+		atrousIterations = std::min(5, atrousIterations + 1);
+	}
+	const int useRawInput = ui.pathTracerSettings.enableReprojection ? 0 : 1;
+
+	if (*gpuTimestampQueryPool)
+	{
+		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *gpuTimestampQueryPool, queryBase + kPtTS_DenoiserStart);
+	}
+
+	if (atrousIterations == 0)
+	{
+		// Pass-through tonemapping
+		DenoisePushConstants atrousPush{
+		    .stepSize             = 0,
+		    .isLastPass           = 1,
+		    .phiColor             = 1.0f,
+		    .phiNormal            = 128.0f,
+		    .exposureScale        = ui.exposure,
+		    .useRawInput          = useRawInput,
+		    .renderWidth           = rtWidth,
+		    .renderHeight          = rtHeight,
+		    .resetHistory          = ptForceHistoryReset ? 1 : 0};
+		commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
+		                                                  vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
+		commandBuffer.dispatch(gx, gy, 1);
+	}
+	else
+	{
+		for (int iter = 0; iter < atrousIterations; ++iter)
+		{
+			const int32_t        stepSize   = 1 << iter;
+			const int32_t        isLastPass = (iter == atrousIterations - 1) ? 1 : 0;
+			DenoisePushConstants atrousPush{
+			    .stepSize             = stepSize,
+			    .isLastPass           = isLastPass,
+			    .phiColor             = 1.0f,
+			    .phiNormal            = 128.0f,
+			    .exposureScale        = ui.exposure,
+			    .useRawInput          = useRawInput,
+			    .renderWidth           = rtWidth,
+			    .renderHeight          = rtHeight,
+			    .resetHistory          = ptForceHistoryReset ? 1 : 0};
+			commandBuffer.pushConstants<DenoisePushConstants>(*pipelines.denoiserPipelineLayout,
+			                                                  vk::ShaderStageFlagBits::eCompute, 0, atrousPush);
+			commandBuffer.dispatch(gx, gy, 1);
+
+			if (!isLastPass)
+			{
+				const int writeBuf = iter % 2;
+				barrierCompute(*frames.atrousTemp[(writeBuf == 0) ? atrousB : atrousA]);
+			}
+		}
+	}
+
+	if (*gpuTimestampQueryPool)
+	{
+		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *gpuTimestampQueryPool, queryBase + kPtTS_DenoiserEnd);
+	}
+
+	// Auto-exposure measurement on the reprojected HDR colour (before tonemapping).
+	if (fi < frames.historyColor.size())
+	{
+		recordLuminanceProbe(commandBuffer, *frames.historyColor[fi], vk::Extent2D{rtWidth, rtHeight}, fi);
+	}
+
+	// 6. Blit denoised image to swapchain.
+	transition_image_layout(*frames.rayTracingOutputImages[fi],
+	                        vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal,
+	                        vk::AccessFlagBits2::eShaderWrite, vk::AccessFlagBits2::eTransferRead,
+	                        vk::PipelineStageFlagBits2::eComputeShader, vk::PipelineStageFlagBits2::eTransfer,
+	                        vk::ImageAspectFlagBits::eColor);
+
+	transition_image_layout(swapchain.images[imageIndex],
+	                        vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+	                        {}, vk::AccessFlagBits2::eTransferWrite,
+	                        vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eTransfer,
+	                        vk::ImageAspectFlagBits::eColor);
+
+	vk::ImageBlit blitRegion{
+	    .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .srcOffsets     = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(rtWidth), static_cast<int32_t>(rtHeight), 1}}},
+	    .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .dstOffsets     = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<int32_t>(swapchain.extent.width), static_cast<int32_t>(swapchain.extent.height), 1}}}};
+	commandBuffer.blitImage(*frames.rayTracingOutputImages[fi], vk::ImageLayout::eTransferSrcOptimal,
+	                        swapchain.images[imageIndex], vk::ImageLayout::eTransferDstOptimal, blitRegion, vk::Filter::eLinear);
+
+	transition_image_layout(*frames.rayTracingOutputImages[fi],
+	                        vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eGeneral,
+	                        vk::AccessFlagBits2::eTransferRead, {},
+	                        vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eBottomOfPipe,
+	                        vk::ImageAspectFlagBits::eColor);
+
+	transition_image_layout(swapchain.images[imageIndex],
+	                        vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eColorAttachmentOptimal,
+	                        vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
+	                        vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+	                        vk::ImageAspectFlagBits::eColor);
 }
 
-void EngineCore::collectPathTracerTimings(uint32_t frameSlot) {
-    if (!*ptTimestampQueryPool || !ptTimestampsValid[frameSlot]) {
-        return;
-    }
+void EngineCore::transitionPersistentSurfelImagesToGeneral(uint32_t frameIndex) const
+{
+	(void)frameIndex;
 
-    std::array<uint64_t, kPtTimestampQueryCountPerFrame> timestamps{};
-    const VkResult queryResult = vkGetQueryPoolResults(
+	auto transitionImageSet = [&](const std::vector<VulkanUtils::VmaImage> &images) {
+		for (const auto &image : images)
+		{
+			transition_image_layout(*image,
+			                        vk::ImageLayout::eUndefined,
+			                        vk::ImageLayout::eGeneral,
+			                        {},
+			                        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+			                        vk::PipelineStageFlagBits2::eTopOfPipe,
+			                        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+			                        vk::ImageAspectFlagBits::eColor);
+		}
+	};
+
+	transitionImageSet(surfelPathTracerResources.gBufferNormalImages);
+	transitionImageSet(surfelPathTracerResources.gBufferDepthImages);
+	transitionImageSet(surfelPathTracerResources.gBufferMotionMaterialImages);
+	transitionImageSet(surfelPathTracerResources.gBufferAlbedoImages);
+	transitionImageSet(surfelPathTracerResources.gBufferMaterialImages);
+	transitionImageSet(surfelPathTracerResources.gBufferEmissiveImages);
+	transitionImageSet(surfelPathTracerResources.reflectionImages);
+	transitionImageSet(surfelPathTracerResources.filteredReflectionImages);
+	for (const auto &historyImages : surfelPathTracerResources.filteredReflectionHistoryImages)
+	{
+		transitionImageSet(historyImages);
+	}
+	transitionImageSet(surfelPathTracerResources.lightingImages);
+	transitionImageSet(surfelPathTracerResources.referenceImages);
+	for (const auto &historyImages : surfelPathTracerResources.taaHistoryImages)
+	{
+		transitionImageSet(historyImages);
+	}
+	transitionImageSet(surfelPathTracerResources.irradianceAtlasImages);
+}
+
+void EngineCore::recordSurfelPathTracerCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, uint32_t imageIndex) const
+{
+	const uint32_t fi = frames.frameIndex;
+	const uint32_t queryBase = getGpuTimestampQueryBase(fi);
+	auto writeSurfelTimestamp = [&](SurfelTimestampSlot slot) {
+		if (*gpuTimestampQueryPool)
+		{
+			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eAllCommands,
+			                              *gpuTimestampQueryPool,
+			                              queryBase + kSurfelTimestampQueryOffset + static_cast<uint32_t>(slot));
+		}
+	};
+	if (!surfelPathTracerResources.initialized())
+	{
+		throw std::runtime_error("Surfel path tracer resources are not initialized");
+	}
+	auto &mutableUi = const_cast<UISystem &>(ui);
+	auto &mutableSurfelPathTracerResources =
+	    const_cast<Laphria::SurfelPathTracerResources &>(surfelPathTracerResources);
+
+	if (fi >= surfelPathTracerResources.outputImages.size() ||
+	    fi >= surfelPathTracerResources.referenceImages.size() ||
+	    fi >= surfelPathTracerSkyDescriptorSets.size() ||
+	    fi >= descriptorSets.size())
+	{
+		throw std::runtime_error("Surfel path tracer frame resources are incomplete");
+	}
+
+	if (!surfelPathTracerPersistentImageLayoutsInitialized)
+	{
+		transitionPersistentSurfelImagesToGeneral(fi);
+		surfelPathTracerPersistentImageLayoutsInitialized = true;
+	}
+
+	transition_image_layout(*surfelPathTracerResources.outputImages[fi],
+	                        vk::ImageLayout::eUndefined,
+	                        vk::ImageLayout::eGeneral,
+	                        {},
+	                        vk::AccessFlagBits2::eShaderWrite,
+	                        vk::PipelineStageFlagBits2::eTopOfPipe,
+	                        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	                        vk::ImageAspectFlagBits::eColor);
+
+	auto transitionSurfelOutputForBlit = [&]() {
+		transition_image_layout(*surfelPathTracerResources.outputImages[fi],
+		                        vk::ImageLayout::eGeneral,
+		                        vk::ImageLayout::eTransferSrcOptimal,
+		                        vk::AccessFlagBits2::eShaderWrite,
+		                        vk::AccessFlagBits2::eTransferRead,
+		                        vk::PipelineStageFlagBits2::eComputeShader,
+		                        vk::PipelineStageFlagBits2::eTransfer,
+		                        vk::ImageAspectFlagBits::eColor);
+	};
+	auto transitionSwapchainForBlit = [&]() {
+		transition_image_layout(swapchain.images[imageIndex],
+		                        vk::ImageLayout::eUndefined,
+		                        vk::ImageLayout::eTransferDstOptimal,
+		                        {},
+		                        vk::AccessFlagBits2::eTransferWrite,
+		                        vk::PipelineStageFlagBits2::eTopOfPipe,
+		                        vk::PipelineStageFlagBits2::eTransfer,
+		                        vk::ImageAspectFlagBits::eColor);
+	};
+	auto recordSurfelFinalBlit = [&]() {
+		surfelPathTracerPasses.recordFinalBlit(commandBuffer,
+		                                       surfelPathTracerResources,
+		                                       swapchain.images[imageIndex],
+		                                       fi,
+		                                       swapchain.extent);
+	};
+	auto transitionSwapchainForUi = [&]() {
+		transition_image_layout(swapchain.images[imageIndex],
+		                        vk::ImageLayout::eTransferDstOptimal,
+		                        vk::ImageLayout::eColorAttachmentOptimal,
+		                        vk::AccessFlagBits2::eTransferWrite,
+		                        vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
+		                        vk::PipelineStageFlagBits2::eTransfer,
+		                        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		                        vk::ImageAspectFlagBits::eColor);
+	};
+	auto recordSurfelPathTracerNoSceneFallback = [&]() {
+		surfelPathTracerPasses.recordSkyPass(commandBuffer,
+		                                     pipelines.surfelPathTracerPipelines,
+		                                     surfelPathTracerResources,
+		                                     *surfelPathTracerSkyDescriptorSets[fi],
+		                                     *descriptorSets[fi],
+		                                     fi,
+		                                     swapchain.extent);
+		transitionSurfelOutputForBlit();
+		transitionSwapchainForBlit();
+		recordSurfelFinalBlit();
+		transitionSwapchainForUi();
+		surfelPathTracerTemporalHistoryValid = false;
+	};
+
+	const auto &surfelSettings = mutableUi.surfelPathTracerSettings;
+	if (!surfelSettings.enabled)
+	{
+		recordSurfelPathTracerNoSceneFallback();
+		return;
+	}
+
+	if (!resourceManager || resourceManager->getModelCount() == 0)
+	{
+		recordSurfelPathTracerNoSceneFallback();
+		return;
+	}
+
+	if (fi >= surfelPathTracerResources.gBufferNormalImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferDepthImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferMotionMaterialImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferAlbedoImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferMaterialImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferEmissiveImages.size() ||
+	    fi >= surfelPathTracerResources.gBufferSourceBuffers.size() ||
+	    fi >= surfelPathTracerStorageDescriptorSets.size() ||
+	    fi >= surfelPathTracerRtDescriptorSets.size())
+	{
+		throw std::runtime_error("Surfel path tracer scene frame resources are incomplete");
+	}
+
+	const bool resetPersistent = surfelSettings.resetSurfels ||
+	                             surfelPathTracerResources.needsPersistentReset();
+	const bool renderingFinalColor =
+	    surfelSettings.debugView == UISystem::SurfelPathTracerDebugView::FinalColor;
+	if (ptForceHistoryReset || resetPersistent || !renderingFinalColor)
+	{
+		surfelPathTracerTemporalHistoryValid = false;
+	}
+	const bool historyReady = !ptForceHistoryReset &&
+	                          surfelPathTracerTemporalHistoryValid &&
+	                          surfelPathTracerPreviousHistoryFrameIndex != fi;
+	updateSurfelPathTracerHistoryDescriptors(fi);
+
+	writeSurfelTimestamp(kSurfelTS_GBufferStart);
+	auto transitionSurfelGBufferToRtWrite = [&](vk::Image image) {
+		transition_image_layout(image,
+		                        vk::ImageLayout::eGeneral,
+		                        vk::ImageLayout::eGeneral,
+		                        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+		                        vk::AccessFlagBits2::eShaderWrite,
+		                        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+		                        vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+		                        vk::ImageAspectFlagBits::eColor);
+	};
+	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferNormalImages[fi]);
+	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferDepthImages[fi]);
+	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferMotionMaterialImages[fi]);
+	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferAlbedoImages[fi]);
+	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferMaterialImages[fi]);
+	transitionSurfelGBufferToRtWrite(*surfelPathTracerResources.gBufferEmissiveImages[fi]);
+
+	std::vector<vk::BufferMemoryBarrier2> sourceClearBarriers;
+	if (resetPersistent)
+	{
+		commandBuffer.fillBuffer(*surfelPathTracerResources.surfelSourceBuffer, 0, VK_WHOLE_SIZE, 0u);
+		sourceClearBarriers.push_back(vk::BufferMemoryBarrier2{
+		    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+		    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+		    .dstStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR |
+		                    vk::PipelineStageFlagBits2::eComputeShader,
+		    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+		                     vk::AccessFlagBits2::eShaderStorageWrite,
+		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		    .buffer = *surfelPathTracerResources.surfelSourceBuffer,
+		    .offset = 0,
+		    .size = VK_WHOLE_SIZE});
+	}
+	if (!sourceClearBarriers.empty())
+	{
+		const vk::DependencyInfo sourceClearDependency{
+		    .bufferMemoryBarrierCount = static_cast<uint32_t>(sourceClearBarriers.size()),
+		    .pBufferMemoryBarriers = sourceClearBarriers.data()};
+		commandBuffer.pipelineBarrier2(sourceClearDependency);
+	}
+
+	surfelPathTracerPasses.recordGBufferPass(commandBuffer,
+	                                         pipelines.surfelPathTracerPipelines,
+	                                         *surfelPathTracerRtDescriptorSets[fi],
+	                                         *surfelPathTracerStorageDescriptorSets[fi],
+	                                         *descriptorSets[fi],
+	                                         swapchain.extent);
+	surfelPathTracerPasses.recordImageBarrierGBufferToCompute(commandBuffer, surfelPathTracerResources, fi);
+	writeSurfelTimestamp(kSurfelTS_GBufferEnd);
+
+	// A frozen cache still needs a camera-relative spatial map rebuilt every
+	// frame. Only lifecycle, sampling, and radiance integration are frozen.
+	const bool updateCacheContents = !surfelSettings.lockSurfels || resetPersistent;
+	writeSurfelTimestamp(kSurfelTS_PrepareStart);
+	// Deterministic overflow retention requires empty compact-map slots every
+	// frame. The map is persistent and shared by frame slots, so order the clear
+	// after all earlier shader consumers and before this frame's compute rebuild.
+	const vk::BufferMemoryBarrier2 cellMapBeforeClear{
+	    .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+	                     vk::AccessFlagBits2::eShaderStorageWrite,
+	    .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+	    .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .buffer = *surfelPathTracerResources.cellToSurfelBuffer,
+	    .offset = 0,
+	    .size = VK_WHOLE_SIZE};
+	const vk::DependencyInfo cellMapBeforeClearDependency{
+	    .bufferMemoryBarrierCount = 1,
+	    .pBufferMemoryBarriers = &cellMapBeforeClear};
+	commandBuffer.pipelineBarrier2(cellMapBeforeClearDependency);
+	commandBuffer.fillBuffer(*surfelPathTracerResources.cellToSurfelBuffer,
+	                         0,
+	                         VK_WHOLE_SIZE,
+	                         UINT32_MAX);
+	const vk::BufferMemoryBarrier2 cellMapAfterClear{
+	    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+	    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+	                     vk::AccessFlagBits2::eShaderStorageWrite,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .buffer = *surfelPathTracerResources.cellToSurfelBuffer,
+	    .offset = 0,
+	    .size = VK_WHOLE_SIZE};
+	const vk::DependencyInfo cellMapAfterClearDependency{
+	    .bufferMemoryBarrierCount = 1,
+	    .pBufferMemoryBarriers = &cellMapAfterClear};
+	commandBuffer.pipelineBarrier2(cellMapAfterClearDependency);
+	surfelPathTracerPasses.recordPreparePass(commandBuffer,
+	                                         pipelines.surfelPathTracerPipelines,
+	                                         *surfelPathTracerStorageDescriptorSets[fi],
+	                                         surfelPathTracerResources.maxSurfelsCapacity(),
+	                                         resetPersistent,
+	                                         surfelPathTracerResources.cellCount(),
+	                                         surfelPathTracerResources.perCellSurfelLimitCapacity());
+	mutableSurfelPathTracerResources.markPersistentResetConsumed();
+	mutableUi.surfelPathTracerSettings.resetSurfels = false;
+	writeSurfelTimestamp(kSurfelTS_PrepareEnd);
+
+	writeSurfelTimestamp(kSurfelTS_UpdateStart);
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	surfelPathTracerPasses.recordUpdatePass(commandBuffer,
+	                                        pipelines.surfelPathTracerPipelines,
+	                                        *surfelPathTracerStorageDescriptorSets[fi],
+	                                        *descriptorSets[fi],
+	                                        surfelPathTracerResources.maxSurfelsCapacity(),
+	                                        surfelPathTracerResources.maxRaysPerFrameCapacity(),
+	                                        surfelSettings.cellSize,
+	                                        surfelPathTracerResources.cellDimensionCapacity(),
+	                                        currentSurfelSourceTransformCount,
+	                                        surfelSettings.minRaysPerSurfel,
+	                                        surfelSettings.maxRaysPerSurfel,
+	                                        surfelSettings.varianceSensitivity,
+	                                        surfelSettings.lockSurfels,
+	                                        surfelPathTracerResources.perCellSurfelLimitCapacity());
+	writeSurfelTimestamp(kSurfelTS_UpdateEnd);
+
+	writeSurfelTimestamp(kSurfelTS_CellInfoStart);
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	surfelPathTracerPasses.recordCellInfoPass(commandBuffer,
+	                                          pipelines.surfelPathTracerPipelines,
+	                                          *surfelPathTracerStorageDescriptorSets[fi],
+	                                          surfelPathTracerResources.cellCount(),
+	                                          surfelPathTracerResources.perCellSurfelLimitCapacity(),
+	                                          surfelPathTracerResources.cellToSurfelCapacity());
+	writeSurfelTimestamp(kSurfelTS_CellInfoEnd);
+
+	writeSurfelTimestamp(kSurfelTS_CellMapStart);
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	surfelPathTracerPasses.recordCellToSurfelPass(commandBuffer,
+	                                              pipelines.surfelPathTracerPipelines,
+	                                              *surfelPathTracerStorageDescriptorSets[fi],
+	                                              *descriptorSets[fi],
+	                                              surfelPathTracerResources.maxSurfelsCapacity(),
+	                                              surfelSettings.cellSize,
+	                                              surfelPathTracerResources.cellDimensionCapacity(),
+	                                              surfelPathTracerResources.perCellSurfelLimitCapacity());
+	writeSurfelTimestamp(kSurfelTS_CellMapEnd);
+
+	// Placement and removal must query the map built for this frame's snapped
+	// camera cell. Newly allocated surfels intentionally become visible through
+	// the compact map on the following frame; this avoids a second full rebuild.
+	writeSurfelTimestamp(kSurfelTS_GenerateStart);
+	if (updateCacheContents &&
+	    (surfelSettings.enableSurfelPlacement || surfelSettings.enableSurfelRemoval))
+	{
+		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		surfelPathTracerPasses.recordEvaluatePass(commandBuffer,
+		                                          pipelines.surfelPathTracerPipelines,
+		                                          *surfelPathTracerStorageDescriptorSets[fi],
+		                                          *descriptorSets[fi],
+		                                          Laphria::SurfelPathTracerEvaluateMode::Generate,
+		                                          surfelSettings.cellSize,
+		                                          surfelSettings.surfelSupportRadius,
+		                                          surfelPathTracerResources.cellDimensionCapacity(),
+		                                          surfelPathTracerResources.maxSurfelsCapacity(),
+		                                          surfelSettings.placementThreshold,
+		                                          surfelSettings.removalThreshold,
+		                                          surfelSettings.surfelTargetArea,
+		                                          surfelSettings.surfelMinRadius,
+		                                          surfelSettings.surfelMaxRadiusScale,
+		                                          fi,
+		                                          surfelSettings.lockSurfels,
+		                                          surfelSettings.enableSurfelPlacement,
+		                                          surfelSettings.enableSurfelRemoval,
+		                                          surfelSettings.maxSurfelSamplesPerQuery,
+		                                          surfelPathTracerResources.perCellSurfelLimitCapacity(),
+		                                          swapchain.extent,
+		                                          surfelSettings.unorientedFoliageGi);
+	}
+	writeSurfelTimestamp(kSurfelTS_GenerateEnd);
+
+	writeSurfelTimestamp(kSurfelTS_RayScheduleStart);
+	if (updateCacheContents)
+	{
+		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		surfelPathTracerPasses.recordRaySchedulePass(commandBuffer,
+		                                            pipelines.surfelPathTracerPipelines,
+		                                            *surfelPathTracerStorageDescriptorSets[fi],
+		                                            *descriptorSets[fi],
+		                                            surfelPathTracerResources.cellCount(),
+		                                            surfelPathTracerResources.maxSurfelsCapacity(),
+		                                            surfelPathTracerResources.maxRaysPerFrameCapacity(),
+		                                            surfelSettings.minRaysPerSurfel,
+		                                            surfelSettings.maxRaysPerSurfel,
+		                                            surfelSettings.varianceSensitivity,
+		                                            surfelSettings.offscreenRayInterval,
+		                                            surfelSettings.surfelSupportRadius);
+		writeSurfelTimestamp(kSurfelTS_RayScheduleEnd);
+		writeSurfelTimestamp(kSurfelTS_RayTraceStart);
+		surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
+		surfelPathTracerPasses.recordSurfelRayTracePass(commandBuffer,
+		                                                pipelines.surfelPathTracerPipelines,
+		                                                surfelPathTracerResources,
+		                                                *surfelPathTracerRtDescriptorSets[fi],
+		                                                *surfelPathTracerStorageDescriptorSets[fi],
+		                                                *descriptorSets[fi],
+		                                                surfelPathTracerResources.maxRaysPerFrameCapacity(),
+		                                                vulkan.rayTracingPipelineTraceRaysIndirect,
+		                                                surfelSettings.enableGuidedSampling,
+		                                                surfelSettings.irradianceAtlasWidth,
+		                                                surfelSettings.activeMaxDepth,
+		                                                surfelSettings.sleepingMaxDepth,
+		                                                surfelSettings.enableSurfelTermination,
+		                                                surfelSettings.useOriginalStyleGiNormalization,
+		                                                surfelSettings.maxSurfelSamplesPerQuery,
+		                                                surfelSettings.cellSize,
+		                                                surfelSettings.surfelSupportRadius,
+		                                                surfelPathTracerResources.cellDimensionCapacity());
+		writeSurfelTimestamp(kSurfelTS_RayTraceEnd);
+		writeSurfelTimestamp(kSurfelTS_IntegrateStart);
+		surfelPathTracerPasses.recordStorageBarrierRtToCompute(commandBuffer);
+		surfelPathTracerPasses.recordIntegratePass(commandBuffer,
+		                                           pipelines.surfelPathTracerPipelines,
+		                                           *surfelPathTracerStorageDescriptorSets[fi],
+		                                           *descriptorSets[fi],
+		                                           surfelPathTracerResources.maxSurfelsCapacity(),
+		                                           surfelSettings.enableRadianceSharing,
+		                                           surfelSettings.maxRadianceSharingSamples,
+		                                           surfelPathTracerResources.cellDimensionCapacity(),
+		                                           surfelSettings.cellSize,
+		                                           surfelSettings.surfelSupportRadius,
+		                                           surfelSettings.enableGuidedSampling);
+		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		writeSurfelTimestamp(kSurfelTS_IntegrateEnd);
+	}
+	else
+	{
+		writeSurfelTimestamp(kSurfelTS_RayScheduleEnd);
+		writeSurfelTimestamp(kSurfelTS_RayTraceStart);
+		writeSurfelTimestamp(kSurfelTS_RayTraceEnd);
+		writeSurfelTimestamp(kSurfelTS_IntegrateStart);
+		surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+		writeSurfelTimestamp(kSurfelTS_IntegrateEnd);
+	}
+	writeSurfelTimestamp(kSurfelTS_EvaluateStart);
+	surfelPathTracerPasses.recordEvaluatePass(commandBuffer,
+	                                          pipelines.surfelPathTracerPipelines,
+	                                          *surfelPathTracerStorageDescriptorSets[fi],
+	                                          *descriptorSets[fi],
+	                                          Laphria::SurfelPathTracerEvaluateMode::Resolve,
+	                                          surfelSettings.cellSize,
+	                                          surfelSettings.surfelSupportRadius,
+	                                          surfelPathTracerResources.cellDimensionCapacity(),
+	                                          surfelPathTracerResources.maxSurfelsCapacity(),
+	                                          surfelSettings.placementThreshold,
+	                                          surfelSettings.removalThreshold,
+	                                          surfelSettings.surfelTargetArea,
+	                                          surfelSettings.surfelMinRadius,
+	                                          surfelSettings.surfelMaxRadiusScale,
+	                                          fi,
+	                                          surfelSettings.lockSurfels,
+	                                          false,
+	                                          false,
+	                                          surfelSettings.maxSurfelSamplesPerQuery,
+	                                          surfelPathTracerResources.perCellSurfelLimitCapacity(),
+	                                          swapchain.extent,
+	                                          surfelSettings.unorientedFoliageGi);
+	writeSurfelTimestamp(kSurfelTS_EvaluateEnd);
+
+	writeSurfelTimestamp(kSurfelTS_ReflectionStart);
+	if (surfelSettings.enableReflections)
+	{
+		surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
+		surfelPathTracerPasses.recordReflectionPass(commandBuffer,
+		                                            pipelines.surfelPathTracerPipelines,
+		                                            surfelPathTracerResources,
+		                                            *surfelPathTracerRtDescriptorSets[fi],
+		                                            *surfelPathTracerStorageDescriptorSets[fi],
+		                                            *descriptorSets[fi],
+		                                            true,
+		                                            surfelSettings.cellSize,
+		                                            surfelSettings.surfelSupportRadius,
+		                                            surfelPathTracerResources.cellDimensionCapacity(),
+		                                            swapchain.extent,
+		                                            fi,
+		                                            surfelSettings.enableSurfelTermination,
+		                                            surfelSettings.useOriginalStyleGiNormalization,
+		                                            surfelSettings.maxSurfelSamplesPerQuery,
+		                                            surfelSettings.roughReflectionStart,
+		                                            surfelSettings.roughReflectionEnd);
+	}
+	else
+	{
+		transition_image_layout(*surfelPathTracerResources.reflectionImages[fi],
+		                        vk::ImageLayout::eGeneral,
+		                        vk::ImageLayout::eGeneral,
+		                        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+		                        vk::AccessFlagBits2::eTransferWrite,
+		                        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+		                        vk::PipelineStageFlagBits2::eTransfer,
+		                        vk::ImageAspectFlagBits::eColor);
+		const vk::ClearColorValue reflectionClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+		const vk::ImageSubresourceRange reflectionSubresourceRange{
+		    vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		commandBuffer.clearColorImage(*surfelPathTracerResources.reflectionImages[fi],
+		                              vk::ImageLayout::eGeneral,
+		                              reflectionClearColor,
+		                              reflectionSubresourceRange);
+		transition_image_layout(*surfelPathTracerResources.reflectionImages[fi],
+		                        vk::ImageLayout::eGeneral,
+		                        vk::ImageLayout::eGeneral,
+		                        vk::AccessFlagBits2::eTransferWrite,
+		                        vk::AccessFlagBits2::eShaderRead,
+		                        vk::PipelineStageFlagBits2::eTransfer,
+		                        vk::PipelineStageFlagBits2::eComputeShader,
+		                        vk::ImageAspectFlagBits::eColor);
+	}
+	writeSurfelTimestamp(kSurfelTS_ReflectionEnd);
+	writeSurfelTimestamp(kSurfelTS_PostProcessStart);
+	if (surfelSettings.enableReflections)
+	{
+		surfelPathTracerPasses.recordStorageBarrierRtToCompute(commandBuffer);
+	}
+	surfelPathTracerPasses.recordReflectionFilterPass(commandBuffer,
+	                                                  pipelines.surfelPathTracerPipelines,
+	                                                  *surfelPathTracerStorageDescriptorSets[fi],
+	                                                  surfelSettings.enableReflections && surfelSettings.enableReflectionFilter,
+	                                                  !historyReady,
+	                                                  swapchain.extent,
+	                                                  fi);
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	const bool preserveReflectionDebug =
+	    surfelSettings.debugView == UISystem::SurfelPathTracerDebugView::ReflectionRaw ||
+	    surfelSettings.debugView == UISystem::SurfelPathTracerDebugView::ReflectionFiltered;
+	const bool useBilateralReflection =
+	    surfelSettings.enableReflections &&
+	    surfelSettings.enableBilateralCleanup &&
+	    !preserveReflectionDebug;
+	surfelPathTracerPasses.recordBilateralPass(commandBuffer,
+	                                           pipelines.surfelPathTracerPipelines,
+	                                           *surfelPathTracerStorageDescriptorSets[fi],
+	                                           useBilateralReflection,
+	                                           swapchain.extent);
+	// Bilateral writes the reflection image that LightIntegrate reads. Without
+	// reference validation the only barriers in between were image barriers
+	// scoped to the reference image, which order execution but do not make the
+	// reflection writes visible.
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	if (surfelSettings.enableReferenceValidation)
+	{
+		surfelPathTracerPasses.recordStorageBarrierComputeToRt(commandBuffer);
+		surfelPathTracerPasses.recordReferencePass(commandBuffer,
+		                                           pipelines.surfelPathTracerPipelines,
+		                                           *surfelPathTracerRtDescriptorSets[fi],
+		                                           *surfelPathTracerStorageDescriptorSets[fi],
+		                                           *descriptorSets[fi],
+		                                           surfelSettings.enableReferenceValidation,
+		                                           surfelSettings.activeMaxDepth,
+		                                           swapchain.extent);
+		surfelPathTracerPasses.recordStorageBarrierRtToCompute(commandBuffer);
+	}
+	else
+	{
+		transition_image_layout(*surfelPathTracerResources.referenceImages[fi],
+		                        vk::ImageLayout::eGeneral,
+		                        vk::ImageLayout::eGeneral,
+		                        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+		                        vk::AccessFlagBits2::eTransferWrite,
+		                        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+		                        vk::PipelineStageFlagBits2::eTransfer,
+		                        vk::ImageAspectFlagBits::eColor);
+		const vk::ClearColorValue referenceClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+		const vk::ImageSubresourceRange referenceSubresourceRange{
+		    vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		commandBuffer.clearColorImage(*surfelPathTracerResources.referenceImages[fi],
+		                              vk::ImageLayout::eGeneral,
+		                              referenceClearColor,
+		                              referenceSubresourceRange);
+		transition_image_layout(*surfelPathTracerResources.referenceImages[fi],
+		                        vk::ImageLayout::eGeneral,
+		                        vk::ImageLayout::eGeneral,
+		                        vk::AccessFlagBits2::eTransferWrite,
+		                        vk::AccessFlagBits2::eShaderRead,
+		                        vk::PipelineStageFlagBits2::eTransfer,
+		                        vk::PipelineStageFlagBits2::eComputeShader,
+		                        vk::ImageAspectFlagBits::eColor);
+	}
+	surfelPathTracerPasses.recordLightIntegratePass(commandBuffer,
+	                                                pipelines.surfelPathTracerPipelines,
+	                                                *surfelPathTracerStorageDescriptorSets[fi],
+	                                                *descriptorSets[fi],
+	                                                surfelSettings.enableDiffuseGi,
+	                                                surfelSettings.enableReflections,
+	                                                useBilateralReflection,
+	                                                surfelSettings.useOriginalStyleGiNormalization,
+	                                                surfelSettings.cellSize,
+	                                                surfelSettings.surfelMaxRadiusScale,
+	                                                surfelPathTracerResources.cellDimensionCapacity(),
+	                                                surfelPathTracerResources.perCellSurfelLimitCapacity(),
+	                                                static_cast<uint32_t>(surfelSettings.debugView),
+	                                                swapchain.extent,
+	                                                surfelSettings.roughReflectionStart,
+	                                                surfelSettings.roughReflectionEnd,
+	                                                surfelSettings.surfelSupportRadius);
+	surfelPathTracerPasses.recordStorageBarrierComputeToCompute(commandBuffer);
+	// Auto-exposure measurement on the linear composite (final colour only: debug views write
+	// other data into the lighting image) and the pixel probe, both before TAA overwrites outputImage.
+	if (renderingFinalColor && fi < surfelPathTracerResources.lightingImages.size())
+	{
+		recordLuminanceProbe(commandBuffer, *surfelPathTracerResources.lightingImages[fi], swapchain.extent, fi);
+	}
+	if (ui.pixelProbe.enabled)
+	{
+		recordSurfelPixelProbe(commandBuffer, fi);
+	}
+	const bool taaPassEnabled = surfelSettings.enableTaa && renderingFinalColor;
+	const bool taaHistoryEnabled =
+	    historyReady &&
+	    taaPassEnabled;
+	surfelPathTracerPasses.recordTaaPass(commandBuffer,
+	                                     pipelines.surfelPathTracerPipelines,
+	                                     *surfelPathTracerStorageDescriptorSets[fi],
+	                                     *descriptorSets[fi],
+	                                     taaPassEnabled,
+	                                     !historyReady,
+	                                     swapchain.extent,
+	                                     fi);
+	constexpr uint32_t historyBank = 0;
+	transition_image_layout(*surfelPathTracerResources.filteredReflectionHistoryImages[historyBank][fi],
+	                        vk::ImageLayout::eGeneral,
+	                        vk::ImageLayout::eGeneral,
+	                        vk::AccessFlagBits2::eShaderWrite,
+	                        vk::AccessFlagBits2::eShaderRead,
+	                        vk::PipelineStageFlagBits2::eComputeShader,
+	                        vk::PipelineStageFlagBits2::eComputeShader,
+	                        vk::ImageAspectFlagBits::eColor);
+	transition_image_layout(*surfelPathTracerResources.taaHistoryImages[historyBank][fi],
+	                        vk::ImageLayout::eGeneral,
+	                        vk::ImageLayout::eGeneral,
+	                        vk::AccessFlagBits2::eShaderWrite,
+	                        vk::AccessFlagBits2::eShaderRead,
+	                        vk::PipelineStageFlagBits2::eComputeShader,
+	                        vk::PipelineStageFlagBits2::eComputeShader,
+	                        vk::ImageAspectFlagBits::eColor);
+	writeSurfelTimestamp(kSurfelTS_PostProcessEnd);
+	auto advanceSurfelPathTracerTemporalHistory = [&]() {
+		surfelPathTracerPreviousHistoryFrameIndex = fi;
+		surfelPathTracerTemporalHistoryValid = true;
+	};
+	if (taaHistoryEnabled)
+	{
+		advanceSurfelPathTracerTemporalHistory();
+	}
+	else if (taaPassEnabled)
+	{
+		advanceSurfelPathTracerTemporalHistory();
+	}
+	else
+	{
+		surfelPathTracerTemporalHistoryValid = false;
+	}
+	surfelPathTracerResources.recordStatsReadback(commandBuffer, fi);
+
+	transitionSurfelOutputForBlit();
+	transitionSwapchainForBlit();
+	recordSurfelFinalBlit();
+	transitionSwapchainForUi();
+}
+
+void EngineCore::createDescriptorPool()
+{
+	// Shared engine sets only. Each model owns a right-sized material pool, so
+	// model count and texture count no longer consume this fixed global budget.
+	// eSampledImage / eSampler are separate because the shadow map binding uses them
+	// as distinct descriptor types (binding 1 and 2 in the global layout).
+	constexpr uint32_t                    poolScale = Laphria::EngineConfig::kDescriptorPoolScale;
+	std::array<vk::DescriptorPoolSize, 7> poolSizes = {
+	    vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, poolScale},
+	    // One bindless texture array per RT frame set.
+	    vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * poolScale},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, poolScale},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eSampler, poolScale},
+	    // Vertex/index arrays, skinning sets, and PT analysis counter buffers.
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 16 * poolScale},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, poolScale},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT}};
+
+	vk::DescriptorPoolCreateInfo poolInfo{
+	    // eFreeDescriptorSet: allows individual sets to be freed (needed by ResourceManager).
+	    // eUpdateAfterBind: required for bindless descriptor indexing (VK_EXT_descriptor_indexing).
+	    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet |
+	             vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind,
+	    .maxSets       = poolScale * MAX_FRAMES_IN_FLIGHT,
+	    .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+	    .pPoolSizes    = poolSizes.data()};
+	descriptorPool = vk::raii::DescriptorPool(vulkan.logicalDevice, poolInfo);
+}
+
+void EngineCore::createDescriptorSets()
+{
+	std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *pipelines.descriptorSetLayoutGlobal);
+
+	vk::DescriptorSetAllocateInfo allocInfo{
+	    .descriptorPool     = *descriptorPool,
+	    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+	    .pSetLayouts        = layouts.data()};
+
+	descriptorSets.clear();
+	descriptorSets = vulkan.logicalDevice.allocateDescriptorSets(allocInfo);
+
+	// Global descriptor set layout (Set 0):
+	//   binding 0 → UniformBufferObject  (view/proj/light/cascade matrices, camera pos)
+	//   binding 1 → shadow depth array   (sampled, ShaderReadOnlyOptimal)
+	//   binding 2 → shadow PCF sampler   (comparison sampler)
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		vk::DescriptorBufferInfo bufferInfo{
+		    .buffer = *frames.uniformBuffers[i],
+		    .offset = 0,
+		    .range  = sizeof(Laphria::UniformBufferObject)};
+
+		vk::WriteDescriptorSet uboWrite{
+		    .dstSet          = *descriptorSets[i],
+		    .dstBinding      = 0,
+		    .dstArrayElement = 0,
+		    .descriptorCount = 1,
+		    .descriptorType  = vk::DescriptorType::eUniformBuffer,
+		    .pBufferInfo     = &bufferInfo};
+
+		// The shadow array image starts in eUndefined; we use eShaderReadOnlyOptimal
+		// as the declared layout here because the first frame's shadow pass will
+		// transition it via eUndefined → eDepthAttachmentOptimal → eShaderReadOnlyOptimal
+		// before the main pass samples it.
+		vk::DescriptorImageInfo shadowImageInfo{
+		    .imageView   = *frames.shadowArrayViews[i],
+		    .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+
+		vk::WriteDescriptorSet shadowImageWrite{
+		    .dstSet          = *descriptorSets[i],
+		    .dstBinding      = 1,
+		    .dstArrayElement = 0,
+		    .descriptorCount = 1,
+		    .descriptorType  = vk::DescriptorType::eSampledImage,
+		    .pImageInfo      = &shadowImageInfo};
+
+		vk::DescriptorImageInfo shadowSamplerInfo{
+		    .sampler = *frames.shadowSampler};
+
+		vk::WriteDescriptorSet shadowSamplerWrite{
+		    .dstSet          = *descriptorSets[i],
+		    .dstBinding      = 2,
+		    .dstArrayElement = 0,
+		    .descriptorCount = 1,
+		    .descriptorType  = vk::DescriptorType::eSampler,
+		    .pImageInfo      = &shadowSamplerInfo};
+
+		std::array<vk::WriteDescriptorSet, 3> writes = {uboWrite, shadowImageWrite, shadowSamplerWrite};
+		vulkan.logicalDevice.updateDescriptorSets(writes, {});
+	}
+}
+
+void EngineCore::createTimestampQueryPool()
+{
+	vk::QueryPoolCreateInfo queryPoolInfo{
+	    .queryType  = vk::QueryType::eTimestamp,
+	    .queryCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * kGpuTimestampQueryCountPerFrame};
+	gpuTimestampQueryPool = vk::raii::QueryPool(vulkan.logicalDevice, queryPoolInfo);
+	timestampPeriodNs    = vulkan.physicalDevice.getProperties().limits.timestampPeriod;
+}
+
+uint32_t EngineCore::getGpuTimestampQueryBase(uint32_t frameSlot) const
+{
+	return frameSlot * kGpuTimestampQueryCountPerFrame;
+}
+
+void EngineCore::collectPathTracerTimings(uint32_t frameSlot)
+{
+	if (!*gpuTimestampQueryPool || !gpuTimestampsValid[frameSlot])
+	{
+		return;
+	}
+
+	std::array<uint64_t, kPtTimestampQueryCountPerFrame> timestamps{};
+	const VkResult                                       queryResult = vkGetQueryPoolResults(
         static_cast<VkDevice>(*vulkan.logicalDevice),
-        static_cast<VkQueryPool>(*ptTimestampQueryPool),
-        getPathTracerQueryBase(frameSlot),
+        static_cast<VkQueryPool>(*gpuTimestampQueryPool),
+		getGpuTimestampQueryBase(frameSlot),
         kPtTimestampQueryCountPerFrame,
         sizeof(timestamps),
         timestamps.data(),
         sizeof(uint64_t),
         VK_QUERY_RESULT_64_BIT);
 
-    if (queryResult != VK_SUCCESS) {
-        return;
-    }
+	if (queryResult != VK_SUCCESS)
+	{
+		return;
+	}
 
-    auto toMs = [this](uint64_t start, uint64_t end) -> float {
-        if (end <= start) {
-            return 0.0f;
-        }
-        const double deltaTicks = static_cast<double>(end - start);
-        const double deltaNs = deltaTicks * static_cast<double>(timestampPeriodNs);
-        return static_cast<float>(deltaNs * 1e-6);
-    };
+	auto toMs = [this](uint64_t start, uint64_t end) -> float {
+		if (end <= start)
+		{
+			return 0.0f;
+		}
+		const double deltaTicks = static_cast<double>(end - start);
+		const double deltaNs    = deltaTicks * static_cast<double>(timestampPeriodNs);
+		return static_cast<float>(deltaNs * 1e-6);
+	};
 
-    ui.pathTracerPerfStats.tlasBuildMs = toMs(timestamps[kPtTS_TlasStart], timestamps[kPtTS_TlasEnd]);
-    ui.pathTracerPerfStats.rayTraceMs = toMs(timestamps[kPtTS_RayTraceStart], timestamps[kPtTS_RayTraceEnd]);
-    ui.pathTracerPerfStats.reprojectionMs = toMs(timestamps[kPtTS_ReprojectionStart], timestamps[kPtTS_ReprojectionEnd]);
-    ui.pathTracerPerfStats.denoiserMs = toMs(timestamps[kPtTS_DenoiserStart], timestamps[kPtTS_DenoiserEnd]);
+	ui.pathTracerPerfStats.tlasBuildMs    = toMs(timestamps[kPtTS_TlasStart], timestamps[kPtTS_TlasEnd]);
+	ui.pathTracerPerfStats.rayTraceMs     = toMs(timestamps[kPtTS_RayTraceStart], timestamps[kPtTS_RayTraceEnd]);
+	ui.pathTracerPerfStats.reprojectionMs = toMs(timestamps[kPtTS_ReprojectionStart], timestamps[kPtTS_ReprojectionEnd]);
+	ui.pathTracerPerfStats.denoiserMs     = toMs(timestamps[kPtTS_DenoiserStart], timestamps[kPtTS_DenoiserEnd]);
 
-    const uint64_t totalStart = (timestamps[kPtTS_TlasStart] != 0) ? timestamps[kPtTS_TlasStart] : timestamps[kPtTS_RayTraceStart];
-    const uint64_t totalEnd = (timestamps[kPtTS_DenoiserEnd] != 0) ? timestamps[kPtTS_DenoiserEnd] : timestamps[kPtTS_RayTraceEnd];
-    ui.pathTracerPerfStats.totalFrameMs = toMs(totalStart, totalEnd);
+	const uint64_t totalStart           = (timestamps[kPtTS_TlasStart] != 0) ? timestamps[kPtTS_TlasStart] : timestamps[kPtTS_RayTraceStart];
+	const uint64_t totalEnd             = (timestamps[kPtTS_DenoiserEnd] != 0) ? timestamps[kPtTS_DenoiserEnd] : timestamps[kPtTS_RayTraceEnd];
+	ui.pathTracerPerfStats.totalFrameMs = toMs(totalStart, totalEnd);
+
+	constexpr size_t kRollingWindow = 300;
+	ptRollingTotalMs.push_back(ui.pathTracerPerfStats.totalFrameMs);
+	ptRollingRayTraceMs.push_back(ui.pathTracerPerfStats.rayTraceMs);
+	ptRollingDenoiserMs.push_back(ui.pathTracerPerfStats.denoiserMs);
+	if (ptRollingTotalMs.size() > kRollingWindow)
+	{
+		ptRollingTotalMs.erase(ptRollingTotalMs.begin());
+	}
+	if (ptRollingRayTraceMs.size() > kRollingWindow)
+	{
+		ptRollingRayTraceMs.erase(ptRollingRayTraceMs.begin());
+	}
+	if (ptRollingDenoiserMs.size() > kRollingWindow)
+	{
+		ptRollingDenoiserMs.erase(ptRollingDenoiserMs.begin());
+	}
+
+	updatePathTracerTimingPercentiles();
 }
 
-void EngineCore::updateAdaptivePathTracerSettings() {
-    if (ui.pathTracerSettings.qualityMode == UISystem::PathTracerQualityMode::Manual) {
-        return;
-    }
+void EngineCore::collectSurfelPathTracerTimings(uint32_t frameSlot)
+{
+	if (!*gpuTimestampQueryPool || !gpuTimestampsValid[frameSlot])
+	{
+		return;
+	}
 
-    const float frameMs = ui.pathTracerPerfStats.totalFrameMs;
-    if (frameMs <= 0.0f) {
-        return;
-    }
+	std::array<uint64_t, kSurfelTimestampQueryCountPerFrame> timestamps{};
+	const VkResult queryResult = vkGetQueryPoolResults(
+	    static_cast<VkDevice>(*vulkan.logicalDevice),
+	    static_cast<VkQueryPool>(*gpuTimestampQueryPool),
+	    getGpuTimestampQueryBase(frameSlot) + kSurfelTimestampQueryOffset,
+	    kSurfelTimestampQueryCountPerFrame,
+	    sizeof(timestamps),
+	    timestamps.data(),
+	    sizeof(uint64_t),
+	    VK_QUERY_RESULT_64_BIT);
+	if (queryResult != VK_SUCCESS)
+	{
+		return;
+	}
 
-    const bool aggressive = (ui.pathTracerSettings.qualityMode == UISystem::PathTracerQualityMode::AutoAggressive);
-    const float targetMs = std::max(8.0f, ui.pathTracerSettings.targetFrameMs);
-    const float dropMargin = aggressive ? 0.25f : 0.75f;
-    const float raiseMargin = aggressive ? 2.5f : 1.5f;
+	auto toMs = [this](uint64_t start, uint64_t end) -> float {
+		if (end <= start)
+		{
+			return 0.0f;
+		}
+		const double deltaTicks = static_cast<double>(end - start);
+		const double deltaNs = deltaTicks * static_cast<double>(timestampPeriodNs);
+		return static_cast<float>(deltaNs * 1e-6);
+	};
 
-    if (frameMs > targetMs + dropMargin) {
-        if (ui.pathTracerSettings.denoiserIterations > 1) {
-            ui.pathTracerSettings.denoiserIterations -= 1;
-        } else {
-            ui.pathTracerSettings.resolutionScale = std::max(0.50f, ui.pathTracerSettings.resolutionScale - 0.05f);
-        }
-        return;
-    }
+	auto &stats = ui.surfelPathTracerStats;
+	stats.gBufferMs = toMs(timestamps[kSurfelTS_GBufferStart], timestamps[kSurfelTS_GBufferEnd]);
+	stats.prepareMs = toMs(timestamps[kSurfelTS_PrepareStart], timestamps[kSurfelTS_PrepareEnd]);
+	stats.generateMs = toMs(timestamps[kSurfelTS_GenerateStart], timestamps[kSurfelTS_GenerateEnd]);
+	stats.updateMs = toMs(timestamps[kSurfelTS_UpdateStart], timestamps[kSurfelTS_UpdateEnd]);
+	stats.cellInfoMs = toMs(timestamps[kSurfelTS_CellInfoStart], timestamps[kSurfelTS_CellInfoEnd]);
+	stats.cellMapMs = toMs(timestamps[kSurfelTS_CellMapStart], timestamps[kSurfelTS_CellMapEnd]);
+	stats.rayScheduleMs = toMs(timestamps[kSurfelTS_RayScheduleStart], timestamps[kSurfelTS_RayScheduleEnd]);
+	stats.cacheUpdateMs = toMs(timestamps[kSurfelTS_PrepareStart], timestamps[kSurfelTS_RayScheduleEnd]);
+	stats.surfelRayTraceMs = toMs(timestamps[kSurfelTS_RayTraceStart], timestamps[kSurfelTS_RayTraceEnd]);
+	stats.integrateMs = toMs(timestamps[kSurfelTS_IntegrateStart], timestamps[kSurfelTS_IntegrateEnd]);
+	stats.evaluateMs = toMs(timestamps[kSurfelTS_EvaluateStart], timestamps[kSurfelTS_EvaluateEnd]);
+	stats.reflectionMs = toMs(timestamps[kSurfelTS_ReflectionStart], timestamps[kSurfelTS_ReflectionEnd]);
+	stats.postProcessMs = toMs(timestamps[kSurfelTS_PostProcessStart], timestamps[kSurfelTS_PostProcessEnd]);
+	stats.totalFrameMs = toMs(timestamps[kSurfelTS_GBufferStart], timestamps[kSurfelTS_PostProcessEnd]);
 
-    if (frameMs < targetMs - raiseMargin) {
-        if (ui.pathTracerSettings.resolutionScale < 1.0f) {
-            ui.pathTracerSettings.resolutionScale = std::min(1.0f, ui.pathTracerSettings.resolutionScale + 0.05f);
-        } else if (ui.pathTracerSettings.denoiserIterations < 5) {
-            ui.pathTracerSettings.denoiserIterations += 1;
-        }
-    }
+	// Rolling window so the panel can report steady-state means and percentiles
+	// instead of a single frame (mirrors the PathTracer panel).
+	if (ui.resetSurfelPathTracerStatsWindow)
+	{
+		for (auto &samples : surfelRollingMs)
+		{
+			samples.clear();
+		}
+		for (auto &samples : surfelRollingCounters)
+		{
+			samples.clear();
+		}
+		ui.resetSurfelPathTracerStatsWindow = false;
+	}
+	constexpr size_t kRollingWindow = 300;
+	const std::array<float, kSurfelRollingSpanCount> currentSpans{
+	    stats.gBufferMs, stats.cacheUpdateMs, stats.surfelRayTraceMs, stats.integrateMs,
+	    stats.evaluateMs, stats.reflectionMs, stats.postProcessMs, stats.totalFrameMs};
+	for (size_t i = 0; i < kSurfelRollingSpanCount; ++i)
+	{
+		auto &samples = surfelRollingMs[i];
+		samples.push_back(currentSpans[i]);
+		if (samples.size() > kRollingWindow)
+		{
+			samples.erase(samples.begin());
+		}
+	}
+	auto mean = [](const std::vector<float> &samples) -> float {
+		if (samples.empty())
+		{
+			return 0.0f;
+		}
+		double sum = 0.0;
+		for (float v : samples)
+		{
+			sum += v;
+		}
+		return static_cast<float>(sum / static_cast<double>(samples.size()));
+	};
+	stats.rollingSamples      = static_cast<uint32_t>(surfelRollingMs[0].size());
+	stats.avgGBufferMs        = mean(surfelRollingMs[0]);
+	stats.avgCacheUpdateMs    = mean(surfelRollingMs[1]);
+	stats.avgSurfelRayTraceMs = mean(surfelRollingMs[2]);
+	stats.avgIntegrateMs      = mean(surfelRollingMs[3]);
+	stats.avgEvaluateMs       = mean(surfelRollingMs[4]);
+	stats.avgReflectionMs     = mean(surfelRollingMs[5]);
+	stats.avgPostProcessMs    = mean(surfelRollingMs[6]);
+	stats.avgTotalFrameMs     = mean(surfelRollingMs[7]);
+	const auto totalPct       = computePercentiles(surfelRollingMs[7]);
+	stats.totalP50Ms          = totalPct.p50;
+	stats.totalP95Ms          = totalPct.p95;
+
+	// Counters for this slot were read back by readStats() earlier in the frame.
+	const std::array<float, kSurfelRollingCounterCount> currentCounters{
+	    static_cast<float>(stats.aliveSurfels), static_cast<float>(stats.requestedRays),
+	    static_cast<float>(stats.demandedRays), static_cast<float>(stats.filledCells),
+	    static_cast<float>(stats.rejectedStores), static_cast<float>(stats.spawnedSurfels),
+	    static_cast<float>(stats.removedSurfels), static_cast<float>(stats.recycledSurfels),
+	    static_cast<float>(stats.guidedRays), static_cast<float>(stats.cosineRays),
+	    static_cast<float>(stats.surfelTerminationAttempts), static_cast<float>(stats.surfelTerminationHits)};
+	for (size_t i = 0; i < kSurfelRollingCounterCount; ++i)
+	{
+		auto &samples = surfelRollingCounters[i];
+		samples.push_back(currentCounters[i]);
+		if (samples.size() > kRollingWindow)
+		{
+			samples.erase(samples.begin());
+		}
+	}
+	stats.avgAliveSurfels        = mean(surfelRollingCounters[0]);
+	stats.avgRequestedRays       = mean(surfelRollingCounters[1]);
+	stats.avgDemandedRays        = mean(surfelRollingCounters[2]);
+	stats.avgFilledCells         = mean(surfelRollingCounters[3]);
+	stats.avgRejectedStores      = mean(surfelRollingCounters[4]);
+	stats.avgSpawnedSurfels      = mean(surfelRollingCounters[5]);
+	stats.avgRemovedSurfels      = mean(surfelRollingCounters[6]);
+	stats.avgRecycledSurfels     = mean(surfelRollingCounters[7]);
+	stats.avgGuidedRays          = mean(surfelRollingCounters[8]);
+	stats.avgCosineRays          = mean(surfelRollingCounters[9]);
+	stats.avgTerminationAttempts = mean(surfelRollingCounters[10]);
+	stats.avgTerminationHits     = mean(surfelRollingCounters[11]);
 }
 
-void EngineCore::recordCommandBuffer(uint32_t imageIndex) const {
-    auto &commandBuffer = frames.commandBuffers[frames.frameIndex];
-    const uint32_t queryBase = getPathTracerQueryBase(frames.frameIndex);
-    if (*ptTimestampQueryPool) {
-        commandBuffer.resetQueryPool(*ptTimestampQueryPool, queryBase, kPtTimestampQueryCountPerFrame);
-    }
 
-    vk::ClearValue clearColor = vk::ClearColorValue(0.02f, 0.02f, 0.02f, 1.0f);
-    if (ui.renderMode == RenderMode::Rasterizer) {
-        // V1.3: raster path uses direct atmospheric clear color (no compute sky prepass).
-        clearColor = vk::ClearColorValue(0.60f, 0.64f, 0.72f, 1.0f);
-    }
+// ---------------------------------------------------------------------------
+// Auto-exposure luminance probe + pixel probe
+// ---------------------------------------------------------------------------
+static float halfToFloat(uint16_t h)
+{
+	const uint32_t sign     = (h >> 15) & 1u;
+	uint32_t       exponent = (h >> 10) & 0x1Fu;
+	uint32_t       mantissa = h & 0x3FFu;
+	uint32_t       bits;
+	if (exponent == 0)
+	{
+		if (mantissa == 0)
+		{
+			bits = sign << 31;
+		}
+		else
+		{
+			exponent = 1;
+			while ((mantissa & 0x400u) == 0)
+			{
+				mantissa <<= 1;
+				--exponent;
+			}
+			mantissa &= 0x3FFu;
+			bits = (sign << 31) | ((exponent + 112u) << 23) | (mantissa << 13);
+		}
+	}
+	else if (exponent == 31)
+	{
+		bits = (sign << 31) | 0x7F800000u | (mantissa << 13);
+	}
+	else
+	{
+		bits = (sign << 31) | ((exponent + 112u) << 23) | (mantissa << 13);
+	}
+	float result;
+	std::memcpy(&result, &bits, sizeof(result));
+	return result;
+}
 
-    recordSkinningPass(commandBuffer);
+static glm::vec4 readHalf4(const uint8_t *bytes)
+{
+	uint16_t h[4];
+	std::memcpy(h, bytes, sizeof(h));
+	return glm::vec4(halfToFloat(h[0]), halfToFloat(h[1]), halfToFloat(h[2]), halfToFloat(h[3]));
+}
 
-    // --- Build TLAS ---
-    if (ui.renderMode != RenderMode::Rasterizer) {
-        std::vector<vk::AccelerationStructureInstanceKHR> tlasInstances;
-        for (const auto &node: scene->getAllNodes()) {
-            if (node->modelId < 0) {
-                continue;
-            }
+void EngineCore::createExposureProbeResources()
+{
+	destroyExposureProbeResources();
+	const vk::DeviceSize luminanceBytes =
+	    static_cast<vk::DeviceSize>(kLuminanceProbeWidth) * kLuminanceProbeHeight * 8u;
+	for (uint32_t slot = 0; slot < MAX_FRAMES_IN_FLIGHT; ++slot)
+	{
+		VulkanUtils::createImage(vulkan.logicalDevice, vulkan.physicalDevice,
+		                         kLuminanceProbeWidth, kLuminanceProbeHeight,
+		                         vk::Format::eR16G16B16A16Sfloat, vk::ImageTiling::eOptimal,
+		                         vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc,
+		                         vk::MemoryPropertyFlagBits::eDeviceLocal, luminanceProbeImages[slot]);
+		VulkanUtils::createBuffer(vulkan.logicalDevice, vulkan.physicalDevice, luminanceBytes,
+		                          vk::BufferUsageFlagBits::eTransferDst,
+		                          vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+		                          luminanceReadbackBuffers[slot]);
+		luminanceReadbackMapped[slot] = luminanceReadbackBuffers[slot].memory.mapMemory(0, luminanceBytes);
+		std::memset(luminanceReadbackMapped[slot], 0, static_cast<size_t>(luminanceBytes));
 
-            ModelResource *modelRes = resourceManager->getModelResource(node->modelId);
-            if (!modelRes || modelRes->blasElements.empty()) {
-                continue;
-            }
+		VulkanUtils::createBuffer(vulkan.logicalDevice, vulkan.physicalDevice, kPixelProbeBytes,
+		                          vk::BufferUsageFlagBits::eTransferDst,
+		                          vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+		                          pixelProbeReadbackBuffers[slot]);
+		pixelProbeReadbackMapped[slot] = pixelProbeReadbackBuffers[slot].memory.mapMemory(0, kPixelProbeBytes);
+		std::memset(pixelProbeReadbackMapped[slot], 0, static_cast<size_t>(kPixelProbeBytes));
 
-            glm::mat4 transform = node->getWorldTransform();
+		luminanceReadbackValid[slot]         = false;
+		luminanceProbeImageInitialized[slot] = false;
+		pixelProbeReadbackValid[slot]        = false;
+	}
+}
 
-            // Convert to vk::TransformMatrixKHR (3x4 row-major array)
-            vk::TransformMatrixKHR transformMatrix;
-            for (int r = 0; r < 3; ++r) {
-                for (int c = 0; c < 4; ++c) {
-                    transformMatrix.matrix[r][c] = transform[c][r]; // GLM is column-major
-                }
-            }
+void EngineCore::destroyExposureProbeResources()
+{
+	for (uint32_t slot = 0; slot < MAX_FRAMES_IN_FLIGHT; ++slot)
+	{
+		if (luminanceReadbackMapped[slot])
+		{
+			luminanceReadbackBuffers[slot].memory.unmapMemory();
+			luminanceReadbackMapped[slot] = nullptr;
+		}
+		if (pixelProbeReadbackMapped[slot])
+		{
+			pixelProbeReadbackBuffers[slot].memory.unmapMemory();
+			pixelProbeReadbackMapped[slot] = nullptr;
+		}
+		luminanceReadbackBuffers[slot].reset();
+		pixelProbeReadbackBuffers[slot].reset();
+		luminanceProbeImages[slot].reset();
+		luminanceReadbackValid[slot]         = false;
+		luminanceProbeImageInitialized[slot] = false;
+		pixelProbeReadbackValid[slot]        = false;
+	}
+}
 
-            for (int meshIdx: node->getMeshIndices()) {
-                if (meshIdx < 0 || meshIdx >= modelRes->blasElements.size()) {
-                    continue;
-                }
+void EngineCore::recordLuminanceProbe(const vk::raii::CommandBuffer &commandBuffer, vk::Image hdrImage,
+                                      vk::Extent2D hdrExtent, uint32_t frameSlot) const
+{
+	if (frameSlot >= MAX_FRAMES_IN_FLIGHT || !luminanceProbeImages[frameSlot].valid() ||
+	    !luminanceReadbackBuffers[frameSlot].valid() || hdrExtent.width == 0 || hdrExtent.height == 0)
+	{
+		return;
+	}
+	const vk::ImageSubresourceRange colorRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
 
-                auto &blas = modelRes->blasElements[meshIdx];
+	// Shader writes to the HDR image -> transfer read; probe image -> transfer dst.
+	vk::MemoryBarrier2 shaderToTransfer{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+	    .dstStageMask  = vk::PipelineStageFlagBits2::eTransfer,
+	    .dstAccessMask = vk::AccessFlagBits2::eTransferRead | vk::AccessFlagBits2::eTransferWrite};
+	vk::ImageMemoryBarrier2 probeToDst{
+	    .srcStageMask        = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask       = vk::AccessFlagBits2::eTransferRead,
+	    .dstStageMask        = vk::PipelineStageFlagBits2::eTransfer,
+	    .dstAccessMask       = vk::AccessFlagBits2::eTransferWrite,
+	    .oldLayout           = luminanceProbeImageInitialized[frameSlot] ? vk::ImageLayout::eTransferSrcOptimal
+	                                                                     : vk::ImageLayout::eUndefined,
+	    .newLayout           = vk::ImageLayout::eTransferDstOptimal,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .image               = *luminanceProbeImages[frameSlot],
+	    .subresourceRange    = colorRange};
+	vk::DependencyInfo beginDependency{
+	    .memoryBarrierCount      = 1,
+	    .pMemoryBarriers         = &shaderToTransfer,
+	    .imageMemoryBarrierCount = 1,
+	    .pImageMemoryBarriers    = &probeToDst};
+	commandBuffer.pipelineBarrier2(beginDependency);
 
-                uint32_t primitiveOffset = 0;
-                for (int i = 0; i < meshIdx; ++i) {
-                    primitiveOffset += modelRes->meshes[i].primitives.size();
-                }
+	vk::ImageBlit blit{
+	    .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .srcOffsets     = {{vk::Offset3D{0, 0, 0},
+	                        vk::Offset3D{static_cast<int32_t>(hdrExtent.width), static_cast<int32_t>(hdrExtent.height), 1}}},
+	    .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .dstOffsets     = {{vk::Offset3D{0, 0, 0},
+	                        vk::Offset3D{static_cast<int32_t>(kLuminanceProbeWidth), static_cast<int32_t>(kLuminanceProbeHeight), 1}}}};
+	commandBuffer.blitImage(hdrImage, vk::ImageLayout::eGeneral,
+	                        *luminanceProbeImages[frameSlot], vk::ImageLayout::eTransferDstOptimal,
+	                        blit, vk::Filter::eLinear);
 
-                // Encode modelId in top 10 bits, primitiveOffset in bottom 14 bits
-                // InstanceCustomIndex is exactly 24 bit in size.
-                assert(node->modelId < 1024 && "modelId exceeds 10-bit limit; customIndex encoding will be corrupted");
-                uint32_t customIndex = (node->modelId << 14) | (primitiveOffset & 0x3FFF);
+	vk::ImageMemoryBarrier2 probeToSrc{
+	    .srcStageMask        = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask       = vk::AccessFlagBits2::eTransferWrite,
+	    .dstStageMask        = vk::PipelineStageFlagBits2::eTransfer,
+	    .dstAccessMask       = vk::AccessFlagBits2::eTransferRead,
+	    .oldLayout           = vk::ImageLayout::eTransferDstOptimal,
+	    .newLayout           = vk::ImageLayout::eTransferSrcOptimal,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .image               = *luminanceProbeImages[frameSlot],
+	    .subresourceRange    = colorRange};
+	vk::DependencyInfo probeDependency{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &probeToSrc};
+	commandBuffer.pipelineBarrier2(probeDependency);
 
-                vk::AccelerationStructureDeviceAddressInfoKHR addressInfo{};
-                addressInfo.accelerationStructure = *blas;
-                vk::DeviceAddress blasAddress = vulkan.logicalDevice.getAccelerationStructureAddressKHR(addressInfo);
+	vk::BufferImageCopy copyRegion{
+	    .bufferOffset      = 0,
+	    .bufferRowLength   = 0,
+	    .bufferImageHeight = 0,
+	    .imageSubresource  = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+	    .imageOffset       = {0, 0, 0},
+	    .imageExtent       = {kLuminanceProbeWidth, kLuminanceProbeHeight, 1}};
+	commandBuffer.copyImageToBuffer(*luminanceProbeImages[frameSlot], vk::ImageLayout::eTransferSrcOptimal,
+	                                *luminanceReadbackBuffers[frameSlot], copyRegion);
 
-                vk::AccelerationStructureInstanceKHR instance{};
-                instance.transform = transformMatrix;
-                instance.instanceCustomIndex = customIndex;
-                instance.mask = 0xFF; // All rays hit
-                instance.instanceShaderBindingTableRecordOffset = 0;
-                instance.flags = static_cast<uint32_t>(vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable);
-                instance.accelerationStructureReference = blasAddress;
+	vk::BufferMemoryBarrier2 toHost{
+	    .srcStageMask        = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask       = vk::AccessFlagBits2::eTransferWrite,
+	    .dstStageMask        = vk::PipelineStageFlagBits2::eHost,
+	    .dstAccessMask       = vk::AccessFlagBits2::eHostRead,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .buffer              = *luminanceReadbackBuffers[frameSlot],
+	    .offset              = 0,
+	    .size                = VK_WHOLE_SIZE};
+	vk::MemoryBarrier2 transferToShader{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+	    .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite};
+	vk::DependencyInfo endDependency{
+	    .memoryBarrierCount       = 1,
+	    .pMemoryBarriers          = &transferToShader,
+	    .bufferMemoryBarrierCount = 1,
+	    .pBufferMemoryBarriers    = &toHost};
+	commandBuffer.pipelineBarrier2(endDependency);
 
-                tlasInstances.push_back(instance);
-            }
-        }
+	luminanceProbeImageInitialized[frameSlot] = true;
+	luminanceReadbackValid[frameSlot]         = true;
+}
 
-        if (tlasInstances.size() > frames.MAX_TLAS_INSTANCES) {
-            throw std::runtime_error(
-                "TLAS instance count (" + std::to_string(tlasInstances.size()) +
-                ") exceeds MAX_TLAS_INSTANCES (" + std::to_string(frames.MAX_TLAS_INSTANCES) + ")");
-        }
+void EngineCore::recordSurfelPixelProbe(const vk::raii::CommandBuffer &commandBuffer, uint32_t frameSlot) const
+{
+	const auto &res = surfelPathTracerResources;
+	if (frameSlot >= MAX_FRAMES_IN_FLIGHT || !pixelProbeReadbackBuffers[frameSlot].valid() ||
+	    frameSlot >= res.lightingImages.size() || frameSlot >= res.outputImages.size() ||
+	    frameSlot >= res.gBufferAlbedoImages.size() || frameSlot >= res.gBufferNormalImages.size() ||
+	    frameSlot >= res.gBufferMaterialImages.size() || frameSlot >= res.gBufferDepthImages.size())
+	{
+		return;
+	}
+	const uint32_t px = std::min(ui.pixelProbe.x, swapchain.extent.width - 1);
+	const uint32_t py = std::min(ui.pixelProbe.y, swapchain.extent.height - 1);
 
-        // Only copy instance data when there is something to copy; building with
-        // primitiveCount = 0 is valid and produces a traversable empty TLAS.
-        if (!tlasInstances.empty()) {
-            size_t dataSize = tlasInstances.size() * sizeof(vk::AccelerationStructureInstanceKHR);
-            memcpy(frames.tlasInstanceBuffersMapped[frames.frameIndex], tlasInstances.data(), dataSize);
-        }
+	vk::MemoryBarrier2 shaderToTransfer{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+	    .dstStageMask  = vk::PipelineStageFlagBits2::eTransfer,
+	    .dstAccessMask = vk::AccessFlagBits2::eTransferRead};
+	vk::DependencyInfo beginDependency{.memoryBarrierCount = 1, .pMemoryBarriers = &shaderToTransfer};
+	commandBuffer.pipelineBarrier2(beginDependency);
 
-        // Memory barrier to ensure host writes to the instance buffer are visible to the AS builder
-        vk::MemoryBarrier2 hostToDeviceBarrier{
-            .srcStageMask = vk::PipelineStageFlagBits2::eHost,
-            .srcAccessMask = vk::AccessFlagBits2::eHostWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-            .dstAccessMask = vk::AccessFlagBits2::eAccelerationStructureReadKHR
-        };
+	struct ProbeSource
+	{
+		vk::Image      image;
+		vk::DeviceSize offset;
+	};
+	std::vector<ProbeSource> sources{
+	    {*res.lightingImages[frameSlot], 0},
+	    {*res.outputImages[frameSlot], 16},
+	    {*res.gBufferAlbedoImages[frameSlot], 32},
+	    {*res.gBufferNormalImages[frameSlot], 48},
+	    {*res.gBufferMaterialImages[frameSlot], 64},
+	    {*res.gBufferDepthImages[frameSlot], 80}};
+	if (frameSlot < res.referenceImages.size() && res.referenceImages[frameSlot].valid())
+	{
+		sources.push_back({*res.referenceImages[frameSlot], 96});
+	}
+	for (const auto &source : sources)
+	{
+		vk::BufferImageCopy region{
+		    .bufferOffset      = source.offset,
+		    .bufferRowLength   = 0,
+		    .bufferImageHeight = 0,
+		    .imageSubresource  = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+		    .imageOffset       = {static_cast<int32_t>(px), static_cast<int32_t>(py), 0},
+		    .imageExtent       = {1, 1, 1}};
+		commandBuffer.copyImageToBuffer(source.image, vk::ImageLayout::eGeneral,
+		                                *pixelProbeReadbackBuffers[frameSlot], region);
+	}
 
-        vk::DependencyInfo dependencyInfo{
-            .memoryBarrierCount = 1,
-            .pMemoryBarriers = &hostToDeviceBarrier
-        };
-        commandBuffer.pipelineBarrier2(dependencyInfo);
+	vk::BufferMemoryBarrier2 toHost{
+	    .srcStageMask        = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask       = vk::AccessFlagBits2::eTransferWrite,
+	    .dstStageMask        = vk::PipelineStageFlagBits2::eHost,
+	    .dstAccessMask       = vk::AccessFlagBits2::eHostRead,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .buffer              = *pixelProbeReadbackBuffers[frameSlot],
+	    .offset              = 0,
+	    .size                = VK_WHOLE_SIZE};
+	vk::MemoryBarrier2 transferToShader{
+	    .srcStageMask  = vk::PipelineStageFlagBits2::eTransfer,
+	    .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+	    .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+	    .dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite};
+	vk::DependencyInfo endDependency{
+	    .memoryBarrierCount       = 1,
+	    .pMemoryBarriers          = &transferToShader,
+	    .bufferMemoryBarrierCount = 1,
+	    .pBufferMemoryBarriers    = &toHost};
+	commandBuffer.pipelineBarrier2(endDependency);
 
-        // Build TLAS — always, even when the scene is empty (primitiveCount = 0 is valid).
-        vk::AccelerationStructureGeometryInstancesDataKHR instancesData{};
-        instancesData.arrayOfPointers = vk::False;
-        instancesData.data.deviceAddress = frames.tlasInstanceAddresses[frames.frameIndex];
+	pixelProbeReadbackPixel[frameSlot] = glm::uvec2(px, py);
+	pixelProbeReadbackValid[frameSlot] = true;
+}
 
-        vk::AccelerationStructureGeometryKHR tlasGeometry{};
-        tlasGeometry.geometryType = vk::GeometryTypeKHR::eInstances;
-        tlasGeometry.geometry.instances = instancesData;
+void EngineCore::updateAutoExposure(uint32_t frameSlot)
+{
+	if (frameSlot >= MAX_FRAMES_IN_FLIGHT || !luminanceReadbackValid[frameSlot] || !luminanceReadbackMapped[frameSlot])
+	{
+		return;
+	}
+	luminanceReadbackValid[frameSlot] = false;
 
-        vk::AccelerationStructureBuildGeometryInfoKHR buildInfo{};
-        buildInfo.type = vk::AccelerationStructureTypeKHR::eTopLevel;
-        buildInfo.flags = vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace;
-        buildInfo.mode = vk::BuildAccelerationStructureModeKHR::eBuild;
-        buildInfo.geometryCount = 1;
-        buildInfo.pGeometries = &tlasGeometry;
-        buildInfo.dstAccelerationStructure = *frames.tlas[frames.frameIndex];
-        buildInfo.scratchData.deviceAddress = frames.tlasScratchAddresses[frames.frameIndex];
+	const auto *bytes = static_cast<const uint8_t *>(luminanceReadbackMapped[frameSlot]);
+	double   sumLog = 0.0;
+	uint32_t count  = 0;
+	for (uint32_t i = 0; i < kLuminanceProbeWidth * kLuminanceProbeHeight; ++i)
+	{
+		const glm::vec4 texel = readHalf4(bytes + static_cast<size_t>(i) * 8u);
+		const float     lum   = 0.2126f * texel.r + 0.7152f * texel.g + 0.0722f * texel.b;
+		if (std::isfinite(lum) && lum >= 0.0f)
+		{
+			sumLog += std::log(static_cast<double>(lum) + 1e-4);
+			++count;
+		}
+	}
+	if (count == 0)
+	{
+		return;
+	}
+	auto       &ae      = ui.autoExposure;
+	const float logMean = static_cast<float>(std::exp(sumLog / static_cast<double>(count)));
+	ae.measuredLogMeanLuminance = logMean;
+	const float target = std::clamp(ae.key / std::max(logMean, 1e-4f), ae.minExposure, ae.maxExposure);
+	ae.targetExposure  = target;
+	if (ae.enabled)
+	{
+		// Adapt in stops (log2) so a 2x brightening and a 2x darkening take the same time.
+		const float dt        = std::clamp(lastDeltaTimeSeconds, 0.0f, 0.1f);
+		const float alpha     = 1.0f - std::exp(-dt * std::max(ae.adaptationSpeed, 0.0f));
+		const float currentEv = std::log2(std::max(ui.exposure, 1e-4f));
+		const float targetEv  = std::log2(std::max(target, 1e-4f));
+		ui.exposure           = std::clamp(std::exp2(glm::mix(currentEv, targetEv, alpha)), ae.minExposure, ae.maxExposure);
+	}
+}
 
-        vk::AccelerationStructureBuildRangeInfoKHR buildRange{};
-        buildRange.primitiveCount = static_cast<uint32_t>(tlasInstances.size());
-        buildRange.primitiveOffset = 0;
-        buildRange.firstVertex = 0;
-        buildRange.transformOffset = 0;
+void EngineCore::readPixelProbe(uint32_t frameSlot)
+{
+	if (frameSlot >= MAX_FRAMES_IN_FLIGHT || !pixelProbeReadbackValid[frameSlot] || !pixelProbeReadbackMapped[frameSlot])
+	{
+		return;
+	}
+	pixelProbeReadbackValid[frameSlot] = false;
+	const auto *bytes = static_cast<const uint8_t *>(pixelProbeReadbackMapped[frameSlot]);
+	auto       &probe = ui.pixelProbe;
+	const glm::vec4 lighting  = readHalf4(bytes + 0);
+	const glm::vec4 resolved  = readHalf4(bytes + 16);
+	const glm::vec4 albedo    = readHalf4(bytes + 32);
+	const glm::vec4 normal    = readHalf4(bytes + 48);
+	const glm::vec4 material  = readHalf4(bytes + 64);
+	float           depth     = 0.0f;
+	std::memcpy(&depth, bytes + 80, sizeof(depth));
+	const glm::vec4 reference = readHalf4(bytes + 96);
+	probe.sampledX           = pixelProbeReadbackPixel[frameSlot].x;
+	probe.sampledY           = pixelProbeReadbackPixel[frameSlot].y;
+	probe.lighting           = glm::vec3(lighting);
+	probe.resolvedIrradiance = glm::vec3(resolved);
+	probe.coverage           = resolved.a;
+	probe.albedo             = glm::vec3(albedo);
+	probe.normal             = glm::vec3(normal);
+	probe.sunVisibility      = normal.a;
+	probe.ao                 = material.a;
+	probe.depth              = depth;
+	probe.reference          = glm::vec3(reference);
+	probe.referenceValid     = reference.a > 0.0f;
+	probe.valid              = true;
+}
 
-        const vk::AccelerationStructureBuildRangeInfoKHR *pBuildRange = &buildRange;
-        if (*ptTimestampQueryPool) {
-            commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, *ptTimestampQueryPool, queryBase + kPtTS_TlasStart);
-        }
-        commandBuffer.buildAccelerationStructuresKHR(buildInfo, pBuildRange);
-        if (*ptTimestampQueryPool) {
-            commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, *ptTimestampQueryPool, queryBase + kPtTS_TlasEnd);
-        }
+void EngineCore::updatePathTracerTimingPercentiles()
+{
+	const auto totalPct                        = computePercentiles(ptRollingTotalMs);
+	const auto rayPct                          = computePercentiles(ptRollingRayTraceMs);
+	const auto denoisePct                      = computePercentiles(ptRollingDenoiserMs);
+	ui.pathTracerPerfStats.totalFrameP50Ms     = totalPct.p50;
+	ui.pathTracerPerfStats.totalFrameP95Ms     = totalPct.p95;
+	ui.pathTracerPerfStats.totalFrameP99Ms     = totalPct.p99;
+	ui.pathTracerPerfStats.rayTraceP95Ms       = rayPct.p95;
+	ui.pathTracerPerfStats.denoiserP95Ms       = denoisePct.p95;
+}
 
-        // Memory barrier to ensure TLAS build finishes before the ray tracing shader reads it
-        vk::MemoryBarrier2 asBuildToRayTracingBarrier{
-            .srcStageMask = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-            .srcAccessMask = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
-            .dstStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-            .dstAccessMask = vk::AccessFlagBits2::eAccelerationStructureReadKHR
-        };
+void EngineCore::updateAdaptivePathTracerSettings()
+{
+	if (ui.pathTracerSettings.qualityMode == UISystem::PathTracerQualityMode::Manual)
+	{
+		return;
+	}
 
-        vk::DependencyInfo asDependencyInfo{
-            .memoryBarrierCount = 1,
-            .pMemoryBarriers = &asBuildToRayTracingBarrier
-        };
-        commandBuffer.pipelineBarrier2(asDependencyInfo);
-    }
-    // --- End TLAS Build ---
+	const float frameMs = ui.pathTracerPerfStats.totalFrameMs;
+	if (frameMs <= 0.0f)
+	{
+		return;
+	}
 
-    // ── Cascaded Shadow Map Pass ──────────────────────────────────────────────
-    // Only run for the raster path; both RT pipelines handle their own shadowing.
-    if (ui.renderMode == RenderMode::Rasterizer) {
-        vk::Image shadowImg = *frames.shadowImages[frames.frameIndex];
+	const bool  aggressive  = (ui.pathTracerSettings.qualityMode == UISystem::PathTracerQualityMode::AutoAggressive);
+	const float targetMs    = std::max(8.0f, ui.pathTracerSettings.targetFrameMs);
+	const float dropMargin  = aggressive ? 0.25f : 0.75f;
+	const float raiseMargin = aggressive ? 2.5f : 1.5f;
 
-        // Transition all 4 cascade layers: eUndefined → eDepthAttachmentOptimal.
-        // We always use eUndefined as the old layout so the previous frame's contents
-        // are discarded — the depth buffer is cleared at the start of each cascade render.
-        vk::ImageMemoryBarrier2 shadowToWrite{
-            .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
-            .srcAccessMask = {},
-            .dstStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-            .dstAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-            .oldLayout = vk::ImageLayout::eUndefined,
-            .newLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = shadowImg,
-            .subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, NUM_SHADOW_CASCADES}
-        };
-        vk::DependencyInfo shadowWriteDep{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &shadowToWrite};
-        commandBuffer.pipelineBarrier2(shadowWriteDep);
+	if (frameMs > targetMs + dropMargin)
+	{
+		if (ui.pathTracerSettings.denoiserIterations > 1)
+		{
+			ui.pathTracerSettings.denoiserIterations -= 1;
+		}
+		else
+		{
+			ui.pathTracerSettings.resolutionScale = std::max(0.50f, ui.pathTracerSettings.resolutionScale - 0.05f);
+		}
+		return;
+	}
 
-        // Render each cascade into its own layer of the shadow array image.
-        commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *pipelines.shadowPipeline);
-        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                         *pipelines.shadowPipelineLayout, 0,
-                                         *descriptorSets[frames.frameIndex], nullptr);
+	if (frameMs < targetMs - raiseMargin)
+	{
+		if (ui.pathTracerSettings.resolutionScale < 1.0f)
+		{
+			ui.pathTracerSettings.resolutionScale = std::min(1.0f, ui.pathTracerSettings.resolutionScale + 0.05f);
+		}
+		else if (ui.pathTracerSettings.denoiserIterations < 5)
+		{
+			ui.pathTracerSettings.denoiserIterations += 1;
+		}
+	}
+}
 
-        vk::Viewport shadowViewport{
-            0.0f, 0.0f,
-            static_cast<float>(SHADOW_MAP_DIM), static_cast<float>(SHADOW_MAP_DIM),
-            0.0f, 1.0f
-        };
-        vk::Rect2D shadowScissor{{0, 0}, {SHADOW_MAP_DIM, SHADOW_MAP_DIM}};
+void EngineCore::recordCommandBuffer(uint32_t imageIndex) const
+{
+	auto          &commandBuffer = frames.commandBuffers[frames.frameIndex];
+	const uint32_t queryBase     = getGpuTimestampQueryBase(frames.frameIndex);
+	if (*gpuTimestampQueryPool)
+	{
+		commandBuffer.resetQueryPool(*gpuTimestampQueryPool, queryBase, kGpuTimestampQueryCountPerFrame);
+	}
 
-        for (uint32_t cascadeIdx = 0; cascadeIdx < NUM_SHADOW_CASCADES; cascadeIdx++) {
-            uint32_t viewIdx = frames.frameIndex * NUM_SHADOW_CASCADES + cascadeIdx;
+	vk::ClearValue clearColor = vk::ClearColorValue(0.02f, 0.02f, 0.02f, 1.0f);
+	if (ui.renderMode == RenderMode::Rasterizer)
+	{
+		// V1.3: raster path uses direct atmospheric clear color (no compute sky prepass).
+		clearColor = vk::ClearColorValue(0.60f, 0.64f, 0.72f, 1.0f);
+	}
 
-            vk::RenderingAttachmentInfo cascadeDepthAttachment{
-                .imageView = *frames.shadowCascadeViews[viewIdx],
-                .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-                .loadOp = vk::AttachmentLoadOp::eClear,
-                .storeOp = vk::AttachmentStoreOp::eStore,
-                .clearValue = vk::ClearDepthStencilValue{1.0f, 0}
-            };
+	recordSkinningPass(commandBuffer);
 
-            vk::RenderingInfo cascadeRenderingInfo{
-                .renderArea = {{0, 0}, {SHADOW_MAP_DIM, SHADOW_MAP_DIM}},
-                .layerCount = 1,
-                .colorAttachmentCount = 0,
-                .pDepthAttachment = &cascadeDepthAttachment
-            };
+	// --- Build TLAS ---
+	if (ui.renderMode != RenderMode::Rasterizer)
+	{
+		std::vector<vk::AccelerationStructureInstanceKHR> tlasInstances;
+		surfelSourceInstances.clear();
+		surfelSourceTransforms.clear();
+		currentSurfelSourceInstanceCount = 0u;
+		currentSurfelSourceTransformCount = 0u;
 
-            commandBuffer.beginRendering(cascadeRenderingInfo);
-            commandBuffer.setViewport(0, shadowViewport);
-            commandBuffer.setScissor(0, shadowScissor);
+		uint32_t nextSourceNodeId = nextSurfelSourceNodeId;
+		for (const auto &node : scene->getAllNodes())
+		{
+			if (node->surfelSourceNodeId != UINT32_MAX)
+			{
+				nextSourceNodeId = std::max(nextSourceNodeId, node->surfelSourceNodeId + 1u);
+			}
+		}
 
-            // Draw all scene nodes into this cascade.
-            for (const auto &node: scene->getAllNodes()) {
-                if (node->modelId < 0)
-                    continue;
-                auto *modelRes = resourceManager->getModelResource(node->modelId);
-                if (!modelRes)
-                    continue;
+		for (const auto &node : scene->getAllNodes())
+		{
+			if (node->modelId < 0)
+			{
+				continue;
+			}
+			if (node->modelId >= static_cast<int>(Laphria::EngineConfig::kBindlessModelCapacity))
+			{
+				throw std::runtime_error(
+				    "TLAS source modelId " + std::to_string(node->modelId) +
+				    " exceeds bindless RT descriptor capacity " +
+				    std::to_string(Laphria::EngineConfig::kBindlessModelCapacity));
+			}
 
-                resourceManager->bindResources(commandBuffer, node->modelId, modelRes->hasRuntimeSkinning);
-                glm::mat4 worldTransform = node->getWorldTransform();
+			ModelResource *modelRes = resourceManager->getModelResource(node->modelId);
+			if (!modelRes || modelRes->blasElements.empty())
+			{
+				continue;
+			}
 
-                if (*modelRes->descriptorSet) {
-                    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *pipelines.shadowPipelineLayout, 1, {*modelRes->descriptorSet}, nullptr);
-                }
+			if (node->surfelSourceNodeId == UINT32_MAX)
+			{
+				node->surfelSourceNodeId = nextSourceNodeId++;
+			}
 
-                for (int meshIdx: node->getMeshIndices()) {
-                    if (meshIdx < 0 || meshIdx >= static_cast<int>(modelRes->meshes.size()))
-                        continue;
-                    for (const auto &prim: modelRes->meshes[meshIdx].primitives) {
-                        Laphria::ScenePushConstants pc{};
-                        pc.modelMatrix = worldTransform;
-                        pc.cascadeIndex = static_cast<int>(cascadeIdx);
-                        pc.materialIndex = prim.flatPrimitiveIndex;
-                        commandBuffer.pushConstants<Laphria::ScenePushConstants>(
-                            *pipelines.shadowPipelineLayout,
-                            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-                            0, pc);
-                        commandBuffer.drawIndexed(prim.indexCount, 1, prim.firstIndex, prim.vertexOffset, 0);
-                    }
-                }
-            }
+			const uint32_t sourceNodeId = node->surfelSourceNodeId;
+			if (sourceNodeId >= surfelPathTracerResources.maxSourceTransforms)
+			{
+				throw std::runtime_error(
+				    "SurfelPathTracer source node id " + std::to_string(sourceNodeId) +
+				    " exceeds SurfelPathTracer source transform capacity " +
+				    std::to_string(surfelPathTracerResources.maxSourceTransforms));
+			}
 
-            commandBuffer.endRendering();
-        }
+			if (surfelSourceTransforms.size() <= sourceNodeId)
+			{
+				surfelSourceTransforms.resize(sourceNodeId + 1u);
+			}
 
-        // Transition shadow image: eDepthAttachmentOptimal → eShaderReadOnlyOptimal
-        // so the main fragment shader can sample it.
-        vk::ImageMemoryBarrier2 shadowToRead{
-            .srcStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-            .srcAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
-            .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
-            .oldLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = shadowImg,
-            .subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, NUM_SHADOW_CASCADES}
-        };
-        vk::DependencyInfo shadowReadDep{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &shadowToRead};
-        commandBuffer.pipelineBarrier2(shadowReadDep);
-        // V1.3: remove compute sky from raster path; render directly into a cleared color target.
+			Laphria::SurfelPathTracerSourceTransform sourceTransform{};
+			sourceTransform.objectToWorld = node->getWorldTransform();
+			(void)tryFinalizeSurfelSourceTransform(sourceTransform);
+			surfelSourceTransforms[sourceNodeId] = sourceTransform;
 
-        transition_image_layout(
-            swapchain.images[imageIndex],
-            vk::ImageLayout::eUndefined,
-            vk::ImageLayout::eColorAttachmentOptimal,
-            {},
-            vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
-            vk::PipelineStageFlagBits2::eTopOfPipe,
-            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            vk::ImageAspectFlagBits::eColor);
-    }
+			glm::mat4 transform = node->getWorldTransform();
 
-    if (ui.renderMode == RenderMode::PathTracer) {
-        recordRayTracingCommandBuffer(commandBuffer, imageIndex);
-    } else if (ui.renderMode == RenderMode::RayTracer) {
-        recordClassicRTCommandBuffer(commandBuffer, imageIndex);
-    }
+			// Convert to vk::TransformMatrixKHR (3x4 row-major array)
+			vk::TransformMatrixKHR transformMatrix;
+			for (int r = 0; r < 3; ++r)
+			{
+				for (int c = 0; c < 4; ++c)
+				{
+					transformMatrix.matrix[r][c] = transform[c][r];        // GLM is column-major
+				}
+			}
 
-    transition_image_layout(
-        *frames.depthImages[imageIndex],
-        vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eDepthAttachmentOptimal,
-        {},
-        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        vk::ImageAspectFlagBits::eDepth);
+			for (int meshIdx : node->getMeshIndices())
+			{
+				if (meshIdx < 0 || meshIdx >= modelRes->blasElements.size())
+				{
+					continue;
+				}
 
-    vk::RenderingAttachmentInfo attachmentInfo = {
-        .imageView = *swapchain.imageViews[imageIndex],
-        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .loadOp = (ui.renderMode == RenderMode::Rasterizer) ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
-        .storeOp = vk::AttachmentStoreOp::eStore,
-        .clearValue = clearColor
-    };
+				auto &blas = modelRes->blasElements[meshIdx];
 
-    vk::RenderingAttachmentInfo depthAttachmentInfo{
-        .imageView = *frames.depthImageViews[imageIndex],
-        .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
-        .storeOp = vk::AttachmentStoreOp::eStore,
-        .clearValue = vk::ClearDepthStencilValue{1.0f, 0}
-    };
+				uint32_t primitiveOffset = 0;
+				for (int i = 0; i < meshIdx; ++i)
+				{
+					primitiveOffset += modelRes->meshes[i].primitives.size();
+				}
 
-    vk::RenderingInfo renderingInfo = {
-        .renderArea = {.offset = {0, 0}, .extent = swapchain.extent},
-        .layerCount = 1,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &attachmentInfo,
-        .pDepthAttachment = &depthAttachmentInfo
-    };
+				if (surfelSourceInstances.size() >= surfelPathTracerResources.maxSourceInstances)
+				{
+					throw std::runtime_error(
+					    "SurfelPathTracer source instance count " + std::to_string(surfelSourceInstances.size() + 1u) +
+					    " exceeds SurfelPathTracer source instance capacity " +
+					    std::to_string(surfelPathTracerResources.maxSourceInstances));
+				}
 
-    commandBuffer.beginRendering(renderingInfo);
+				const uint32_t sourceInstanceId = static_cast<uint32_t>(surfelSourceInstances.size());
+				if (sourceInstanceId > 0x00FFFFFFu)
+				{
+					throw std::runtime_error(
+					    "SurfelPathTracer source instance id " + std::to_string(sourceInstanceId) +
+					    " exceeds Vulkan 24-bit instance custom index range");
+				}
 
-    if (ui.renderMode == RenderMode::Rasterizer) {
-        commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *pipelines.graphicsPipeline);
+				Laphria::SurfelPathTracerSourceInstance sourceInstance{};
+				sourceInstance.sourceNodeId = sourceNodeId;
+				sourceInstance.modelId = static_cast<uint32_t>(node->modelId);
+				sourceInstance.primitiveOffset = primitiveOffset;
+				sourceInstance.flags = Laphria::SURFEL_PT_SOURCE_FLAG_VALID;
+				surfelSourceInstances.push_back(sourceInstance);
 
-        // Y starts at height and height is negative: this flips the Vulkan NDC Y-axis so that
-        // +Y points up in clip space, matching GLM's convention (which was designed for OpenGL).
-        vk::Viewport viewport{
-            0.0f, static_cast<float>(swapchain.extent.height),
-            static_cast<float>(swapchain.extent.width),
-            -static_cast<float>(swapchain.extent.height), 0.0f, 1.0f
-        };
-        commandBuffer.setViewport(0, viewport);
-        commandBuffer.setScissor(0, vk::Rect2D({0, 0}, swapchain.extent));
+				vk::AccelerationStructureDeviceAddressInfoKHR addressInfo{};
+				addressInfo.accelerationStructure = *blas;
+				vk::DeviceAddress blasAddress     = vulkan.logicalDevice.getAccelerationStructureAddressKHR(addressInfo);
 
-        // Global UBO Binding (Set 0)
-        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *pipelines.graphicsPipelineLayout, 0,
-                                         *descriptorSets[frames.frameIndex], nullptr);
+				vk::AccelerationStructureInstanceKHR instance{};
+				instance.transform                              = transformMatrix;
+				const uint32_t legacyCustomIndex = (static_cast<uint32_t>(node->modelId) << 14u) | (primitiveOffset & 0x3FFFu);
+				instance.instanceCustomIndex                    = legacyCustomIndex;
+				instance.mask                                   = 0xFF;        // All rays hit
+				instance.instanceShaderBindingTableRecordOffset = 0;
+				instance.flags                                  = static_cast<uint32_t>(vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable);
+				instance.accelerationStructureReference         = blasAddress;
 
-        const float aspectRatio = static_cast<float>(swapchain.extent.width) / static_cast<float>(swapchain.extent.height);
-        const glm::mat4 view = camera.getViewMatrix();
-        const glm::mat4 proj = glm::perspective(
+				tlasInstances.push_back(instance);
+			}
+		}
+		nextSurfelSourceNodeId = nextSourceNodeId;
+
+		if (tlasInstances.size() > frames.MAX_TLAS_INSTANCES)
+		{
+			throw std::runtime_error(
+			    "TLAS instance count (" + std::to_string(tlasInstances.size()) +
+			    ") exceeds MAX_TLAS_INSTANCES (" + std::to_string(frames.MAX_TLAS_INSTANCES) + ")");
+		}
+
+		// Only copy instance data when there is something to copy; building with
+		// primitiveCount = 0 is valid and produces a traversable empty TLAS.
+		if (!tlasInstances.empty())
+		{
+			size_t dataSize = tlasInstances.size() * sizeof(vk::AccelerationStructureInstanceKHR);
+			memcpy(frames.tlasInstanceBuffersMapped[frames.frameIndex], tlasInstances.data(), dataSize);
+		}
+
+		// Memory barrier to ensure host writes to the instance buffer are visible to the AS builder
+		vk::MemoryBarrier2 hostToDeviceBarrier{
+		    .srcStageMask  = vk::PipelineStageFlagBits2::eHost,
+		    .srcAccessMask = vk::AccessFlagBits2::eHostWrite,
+		    .dstStageMask  = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+		    .dstAccessMask = vk::AccessFlagBits2::eAccelerationStructureReadKHR};
+
+		vk::DependencyInfo dependencyInfo{
+		    .memoryBarrierCount = 1,
+		    .pMemoryBarriers    = &hostToDeviceBarrier};
+		commandBuffer.pipelineBarrier2(dependencyInfo);
+
+		// Build TLAS — always, even when the scene is empty (primitiveCount = 0 is valid).
+		vk::AccelerationStructureGeometryInstancesDataKHR instancesData{};
+		instancesData.arrayOfPointers    = vk::False;
+		instancesData.data.deviceAddress = frames.tlasInstanceAddresses[frames.frameIndex];
+
+		vk::AccelerationStructureGeometryKHR tlasGeometry{};
+		tlasGeometry.geometryType       = vk::GeometryTypeKHR::eInstances;
+		tlasGeometry.geometry.instances = instancesData;
+
+		vk::AccelerationStructureBuildGeometryInfoKHR buildInfo{};
+		buildInfo.type                      = vk::AccelerationStructureTypeKHR::eTopLevel;
+		buildInfo.flags                     = vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace;
+		buildInfo.mode                      = vk::BuildAccelerationStructureModeKHR::eBuild;
+		buildInfo.geometryCount             = 1;
+		buildInfo.pGeometries               = &tlasGeometry;
+		buildInfo.dstAccelerationStructure  = *frames.tlas[frames.frameIndex];
+		buildInfo.scratchData.deviceAddress = frames.tlasScratchAddresses[frames.frameIndex];
+
+		vk::AccelerationStructureBuildRangeInfoKHR buildRange{};
+		buildRange.primitiveCount  = static_cast<uint32_t>(tlasInstances.size());
+		buildRange.primitiveOffset = 0;
+		buildRange.firstVertex     = 0;
+		buildRange.transformOffset = 0;
+
+		const vk::AccelerationStructureBuildRangeInfoKHR *pBuildRange = &buildRange;
+		if (*gpuTimestampQueryPool)
+		{
+			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, *gpuTimestampQueryPool, queryBase + kPtTS_TlasStart);
+		}
+		commandBuffer.buildAccelerationStructuresKHR(buildInfo, pBuildRange);
+		if (*gpuTimestampQueryPool)
+		{
+			commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, *gpuTimestampQueryPool, queryBase + kPtTS_TlasEnd);
+		}
+
+		// Memory barrier to ensure TLAS build finishes before the ray tracing shader reads it
+		vk::MemoryBarrier2 asBuildToRayTracingBarrier{
+		    .srcStageMask  = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+		    .srcAccessMask = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+		    .dstStageMask  = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+		    .dstAccessMask = vk::AccessFlagBits2::eAccelerationStructureReadKHR};
+
+		vk::DependencyInfo asDependencyInfo{
+		    .memoryBarrierCount = 1,
+		    .pMemoryBarriers    = &asBuildToRayTracingBarrier};
+		commandBuffer.pipelineBarrier2(asDependencyInfo);
+
+		currentSurfelSourceInstanceCount = static_cast<uint32_t>(surfelSourceInstances.size());
+		currentSurfelSourceTransformCount = static_cast<uint32_t>(surfelSourceTransforms.size());
+
+		auto ensureSurfelSourceStagingBuffer =
+		    [&](Laphria::VulkanUtils::VmaBuffer &buffer,
+		        void *&mapped,
+		        vk::DeviceSize &capacity,
+		        vk::DeviceSize byteSize,
+		        const char *resourceName) {
+			    if (byteSize == 0 || (buffer.valid() && capacity >= byteSize))
+			    {
+				    return;
+			    }
+			    if (mapped)
+			    {
+				    buffer.memory.unmapMemory();
+				    mapped = nullptr;
+			    }
+			    buffer.reset();
+			    capacity = 0;
+			    try
+			    {
+				    Laphria::VulkanUtils::createBuffer(
+				        vulkan.logicalDevice,
+				        vulkan.physicalDevice,
+				        byteSize,
+				        vk::BufferUsageFlagBits::eTransferSrc,
+				        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+				        buffer);
+			    }
+			    catch (const std::exception &ex)
+			    {
+				    throw std::runtime_error(std::string(resourceName) + ": " + ex.what());
+			    }
+			    mapped = buffer.memory.mapMemory(0, byteSize);
+			    capacity = byteSize;
+		    };
+
+		struct SourceBufferUpload
+		{
+			vk::DeviceSize byteSize = 0;
+			const Laphria::VulkanUtils::VmaBuffer *destination = nullptr;
+		};
+
+		auto &instanceStagingBuffer = surfelSourceInstanceStagingBuffers[frames.frameIndex];
+		auto &instanceStagingMapped = surfelSourceInstanceStagingMapped[frames.frameIndex];
+		auto &instanceStagingSize = surfelSourceInstanceStagingSizes[frames.frameIndex];
+		auto &transformStagingBuffer = surfelSourceTransformStagingBuffers[frames.frameIndex];
+		auto &transformStagingMapped = surfelSourceTransformStagingMapped[frames.frameIndex];
+		auto &transformStagingSize = surfelSourceTransformStagingSizes[frames.frameIndex];
+
+		std::vector<SourceBufferUpload> sourceUploads;
+		if (surfelPathTracerResources.initialized())
+		{
+			if (!surfelSourceInstances.empty() && surfelPathTracerResources.sourceInstanceBuffer.valid())
+			{
+				const vk::DeviceSize byteSize = surfelSourceInstances.size() * sizeof(Laphria::SurfelPathTracerSourceInstance);
+				ensureSurfelSourceStagingBuffer(instanceStagingBuffer,
+				                                instanceStagingMapped,
+				                                instanceStagingSize,
+				                                byteSize,
+				                                "SurfelPathTracer.SourceInstanceStagingBuffer");
+				std::memcpy(instanceStagingMapped, surfelSourceInstances.data(), static_cast<size_t>(byteSize));
+				sourceUploads.push_back(SourceBufferUpload{
+				    .byteSize = byteSize,
+				    .destination = &surfelPathTracerResources.sourceInstanceBuffer});
+			}
+			if (!surfelSourceTransforms.empty() && surfelPathTracerResources.sourceTransformBuffer.valid())
+			{
+				const vk::DeviceSize byteSize = surfelSourceTransforms.size() * sizeof(Laphria::SurfelPathTracerSourceTransform);
+				ensureSurfelSourceStagingBuffer(transformStagingBuffer,
+				                                transformStagingMapped,
+				                                transformStagingSize,
+				                                byteSize,
+				                                "SurfelPathTracer.SourceTransformStagingBuffer");
+				std::memcpy(transformStagingMapped, surfelSourceTransforms.data(), static_cast<size_t>(byteSize));
+				sourceUploads.push_back(SourceBufferUpload{
+				    .byteSize = byteSize,
+				    .destination = &surfelPathTracerResources.sourceTransformBuffer});
+			}
+		}
+
+		if (!sourceUploads.empty())
+		{
+			std::vector<vk::BufferMemoryBarrier2> shaderReadToTransferBarriers;
+			shaderReadToTransferBarriers.reserve(sourceUploads.size());
+			for (const SourceBufferUpload &upload : sourceUploads)
+			{
+				shaderReadToTransferBarriers.push_back(vk::BufferMemoryBarrier2{
+				    .srcStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR | vk::PipelineStageFlagBits2::eComputeShader,
+				    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
+				    .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+				    .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+				    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				    .buffer = **upload.destination,
+				    .offset = 0,
+				    .size = VK_WHOLE_SIZE});
+			}
+
+			vk::DependencyInfo shaderReadToTransferDependency{
+			    .bufferMemoryBarrierCount = static_cast<uint32_t>(shaderReadToTransferBarriers.size()),
+			    .pBufferMemoryBarriers = shaderReadToTransferBarriers.data()};
+			commandBuffer.pipelineBarrier2(shaderReadToTransferDependency);
+
+			vk::MemoryBarrier2 hostToTransferBarrier{
+			    .srcStageMask = vk::PipelineStageFlagBits2::eHost,
+			    .srcAccessMask = vk::AccessFlagBits2::eHostWrite,
+			    .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+			    .dstAccessMask = vk::AccessFlagBits2::eTransferRead};
+			vk::DependencyInfo hostToTransferDependency{
+			    .memoryBarrierCount = 1,
+			    .pMemoryBarriers = &hostToTransferBarrier};
+			commandBuffer.pipelineBarrier2(hostToTransferDependency);
+
+			std::vector<vk::BufferMemoryBarrier2> transferToShaderBarriers;
+			transferToShaderBarriers.reserve(sourceUploads.size());
+			for (const SourceBufferUpload &upload : sourceUploads)
+			{
+				vk::BufferCopy copyRegion{};
+				copyRegion.size = upload.byteSize;
+				if (upload.destination == &surfelPathTracerResources.sourceInstanceBuffer)
+				{
+					commandBuffer.copyBuffer(*instanceStagingBuffer, *surfelPathTracerResources.sourceInstanceBuffer, copyRegion);
+				}
+				else
+				{
+					commandBuffer.copyBuffer(*transformStagingBuffer, *surfelPathTracerResources.sourceTransformBuffer, copyRegion);
+				}
+				transferToShaderBarriers.push_back(vk::BufferMemoryBarrier2{
+				    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+				    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+				    .dstStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR | vk::PipelineStageFlagBits2::eComputeShader,
+				    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
+				    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				    .buffer = **upload.destination,
+				    .offset = 0,
+				    .size = upload.byteSize});
+			}
+
+			vk::DependencyInfo transferToShaderDependency{
+			    .bufferMemoryBarrierCount = static_cast<uint32_t>(transferToShaderBarriers.size()),
+			    .pBufferMemoryBarriers = transferToShaderBarriers.data()};
+			commandBuffer.pipelineBarrier2(transferToShaderDependency);
+		}
+	}
+	// --- End TLAS Build ---
+
+	// ── Cascaded Shadow Map Pass ──────────────────────────────────────────────
+	// Only run for the raster path; both RT pipelines handle their own shadowing.
+	if (ui.renderMode == RenderMode::Rasterizer)
+	{
+		vk::Image shadowImg = *frames.shadowImages[frames.frameIndex];
+
+		// Transition all 4 cascade layers: eUndefined → eDepthAttachmentOptimal.
+		// We always use eUndefined as the old layout so the previous frame's contents
+		// are discarded — the depth buffer is cleared at the start of each cascade render.
+		vk::ImageMemoryBarrier2 shadowToWrite{
+		    .srcStageMask        = vk::PipelineStageFlagBits2::eTopOfPipe,
+		    .srcAccessMask       = {},
+		    .dstStageMask        = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+		    .dstAccessMask       = vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+		    .oldLayout           = vk::ImageLayout::eUndefined,
+		    .newLayout           = vk::ImageLayout::eDepthAttachmentOptimal,
+		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		    .image               = shadowImg,
+		    .subresourceRange    = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, NUM_SHADOW_CASCADES}};
+		vk::DependencyInfo shadowWriteDep{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &shadowToWrite};
+		commandBuffer.pipelineBarrier2(shadowWriteDep);
+
+		// Render each cascade into its own layer of the shadow array image.
+		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *pipelines.shadowPipeline);
+		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+		                                 *pipelines.shadowPipelineLayout, 0,
+		                                 *descriptorSets[frames.frameIndex], nullptr);
+
+		vk::Viewport shadowViewport{
+		    0.0f, 0.0f,
+		    static_cast<float>(SHADOW_MAP_DIM), static_cast<float>(SHADOW_MAP_DIM),
+		    0.0f, 1.0f};
+		vk::Rect2D shadowScissor{{0, 0}, {SHADOW_MAP_DIM, SHADOW_MAP_DIM}};
+
+		for (uint32_t cascadeIdx = 0; cascadeIdx < NUM_SHADOW_CASCADES; cascadeIdx++)
+		{
+			uint32_t viewIdx = frames.frameIndex * NUM_SHADOW_CASCADES + cascadeIdx;
+
+			vk::RenderingAttachmentInfo cascadeDepthAttachment{
+			    .imageView   = *frames.shadowCascadeViews[viewIdx],
+			    .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+			    .loadOp      = vk::AttachmentLoadOp::eClear,
+			    .storeOp     = vk::AttachmentStoreOp::eStore,
+			    .clearValue  = vk::ClearDepthStencilValue{1.0f, 0}};
+
+			vk::RenderingInfo cascadeRenderingInfo{
+			    .renderArea           = {{0, 0}, {SHADOW_MAP_DIM, SHADOW_MAP_DIM}},
+			    .layerCount           = 1,
+			    .colorAttachmentCount = 0,
+			    .pDepthAttachment     = &cascadeDepthAttachment};
+
+			commandBuffer.beginRendering(cascadeRenderingInfo);
+			commandBuffer.setViewport(0, shadowViewport);
+			commandBuffer.setScissor(0, shadowScissor);
+
+			// Draw all scene nodes into this cascade.
+			for (const auto &node : scene->getAllNodes())
+			{
+				if (node->modelId < 0)
+					continue;
+				auto *modelRes = resourceManager->getModelResource(node->modelId);
+				if (!modelRes)
+					continue;
+
+				resourceManager->bindResources(commandBuffer, node->modelId, modelRes->hasRuntimeSkinning);
+				glm::mat4 worldTransform = node->getWorldTransform();
+
+				if (*modelRes->descriptorSet)
+				{
+					commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *pipelines.shadowPipelineLayout, 1, {*modelRes->descriptorSet}, nullptr);
+				}
+
+				for (int meshIdx : node->getMeshIndices())
+				{
+					if (meshIdx < 0 || meshIdx >= static_cast<int>(modelRes->meshes.size()))
+						continue;
+					for (const auto &prim : modelRes->meshes[meshIdx].primitives)
+					{
+						Laphria::ScenePushConstants pc{};
+						pc.modelMatrix   = worldTransform;
+						pc.cascadeIndex  = static_cast<int>(cascadeIdx);
+						pc.materialIndex = prim.flatPrimitiveIndex;
+						commandBuffer.pushConstants<Laphria::ScenePushConstants>(
+						    *pipelines.shadowPipelineLayout,
+						    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+						    0, pc);
+						commandBuffer.drawIndexed(prim.indexCount, 1, prim.firstIndex, prim.vertexOffset, 0);
+					}
+				}
+			}
+
+			commandBuffer.endRendering();
+		}
+
+		// Transition shadow image: eDepthAttachmentOptimal → eShaderReadOnlyOptimal
+		// so the main fragment shader can sample it.
+		vk::ImageMemoryBarrier2 shadowToRead{
+		    .srcStageMask        = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+		    .srcAccessMask       = vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+		    .dstStageMask        = vk::PipelineStageFlagBits2::eFragmentShader,
+		    .dstAccessMask       = vk::AccessFlagBits2::eShaderRead,
+		    .oldLayout           = vk::ImageLayout::eDepthAttachmentOptimal,
+		    .newLayout           = vk::ImageLayout::eShaderReadOnlyOptimal,
+		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		    .image               = shadowImg,
+		    .subresourceRange    = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, NUM_SHADOW_CASCADES}};
+		vk::DependencyInfo shadowReadDep{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &shadowToRead};
+		commandBuffer.pipelineBarrier2(shadowReadDep);
+		// V1.3: remove compute sky from raster path; render directly into a cleared color target.
+
+		transition_image_layout(
+		    swapchain.images[imageIndex],
+		    vk::ImageLayout::eUndefined,
+		    vk::ImageLayout::eColorAttachmentOptimal,
+		    {},
+		    vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
+		    vk::PipelineStageFlagBits2::eTopOfPipe,
+		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		    vk::ImageAspectFlagBits::eColor);
+	}
+
+	if (ui.renderMode == RenderMode::PathTracer)
+	{
+		recordRayTracingCommandBuffer(commandBuffer, imageIndex);
+	}
+	else if (ui.renderMode == RenderMode::RayTracer)
+	{
+		recordClassicRTCommandBuffer(commandBuffer, imageIndex);
+	}
+	else if (ui.renderMode == RenderMode::SurfelPathTracer)
+	{
+		recordSurfelPathTracerCommandBuffer(commandBuffer, imageIndex);
+	}
+
+	transition_image_layout(
+	    *frames.depthImages[imageIndex],
+	    vk::ImageLayout::eUndefined,
+	    vk::ImageLayout::eDepthAttachmentOptimal,
+	    {},
+	    vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+	    vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+	    vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+	    vk::ImageAspectFlagBits::eDepth);
+
+	vk::RenderingAttachmentInfo attachmentInfo = {
+	    .imageView   = *swapchain.imageViews[imageIndex],
+	    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+	    .loadOp      = (ui.renderMode == RenderMode::Rasterizer) ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
+	    .storeOp     = vk::AttachmentStoreOp::eStore,
+	    .clearValue  = clearColor};
+
+	vk::RenderingAttachmentInfo depthAttachmentInfo{
+	    .imageView   = *frames.depthImageViews[imageIndex],
+	    .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+	    .loadOp      = vk::AttachmentLoadOp::eClear,
+	    .storeOp     = vk::AttachmentStoreOp::eStore,
+	    .clearValue  = vk::ClearDepthStencilValue{1.0f, 0}};
+
+	vk::RenderingInfo renderingInfo = {
+	    .renderArea           = {.offset = {0, 0}, .extent = swapchain.extent},
+	    .layerCount           = 1,
+	    .colorAttachmentCount = 1,
+	    .pColorAttachments    = &attachmentInfo,
+	    .pDepthAttachment     = &depthAttachmentInfo};
+
+	commandBuffer.beginRendering(renderingInfo);
+
+	if (ui.renderMode == RenderMode::Rasterizer)
+	{
+		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *pipelines.graphicsPipeline);
+
+		// Y starts at height and height is negative: this flips the Vulkan NDC Y-axis so that
+		// +Y points up in clip space, matching GLM's convention (which was designed for OpenGL).
+		vk::Viewport viewport{
+		    0.0f, static_cast<float>(swapchain.extent.height),
+		    static_cast<float>(swapchain.extent.width),
+		    -static_cast<float>(swapchain.extent.height), 0.0f, 1.0f};
+		commandBuffer.setViewport(0, viewport);
+		commandBuffer.setScissor(0, vk::Rect2D({0, 0}, swapchain.extent));
+
+		// Global UBO Binding (Set 0)
+		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *pipelines.graphicsPipelineLayout, 0,
+		                                 *descriptorSets[frames.frameIndex], nullptr);
+
+		const float     aspectRatio = static_cast<float>(swapchain.extent.width) / static_cast<float>(swapchain.extent.height);
+		const glm::mat4 view        = camera.getViewMatrix();
+		const glm::mat4 proj        = glm::perspective(
             glm::radians(Laphria::EngineConfig::kMainCameraFovDegrees),
             aspectRatio,
             Laphria::EngineConfig::kMainCameraNearPlane,
             Laphria::EngineConfig::kMainCameraFarPlane);
-        const glm::mat4 viewProjection = proj * view;
-        const glm::mat4 invViewProjection = glm::inverse(viewProjection);
+		const glm::mat4 viewProjection    = proj * view;
+		const glm::mat4 invViewProjection = glm::inverse(viewProjection);
 
-        const Laphria::Frustum frustum = Laphria::Frustum::fromViewProjection(viewProjection);
-        Laphria::AABB cullBounds = Laphria::Frustum::computeAABB(invViewProjection);
-        // Expand query bounds so close-up objects whose origins are just outside
-        // the near plane are still submitted in raster mode.
-        constexpr float kRasterCullMargin = 2.0f;
-        cullBounds.min -= glm::vec3(kRasterCullMargin);
-        cullBounds.max += glm::vec3(kRasterCullMargin);
-        scene->draw(commandBuffer, pipelines.graphicsPipelineLayout, *resourceManager, cullBounds, frustum);
-    }
+		const Laphria::Frustum frustum    = Laphria::Frustum::fromViewProjection(viewProjection);
+		Laphria::AABB          cullBounds = Laphria::Frustum::computeAABB(invViewProjection);
+		// Expand query bounds so close-up objects whose origins are just outside
+		// the near plane are still submitted in raster mode.
+		constexpr float kRasterCullMargin = 2.0f;
+		cullBounds.min -= glm::vec3(kRasterCullMargin);
+		cullBounds.max += glm::vec3(kRasterCullMargin);
+		scene->draw(commandBuffer, pipelines.graphicsPipelineLayout, *resourceManager, cullBounds, frustum);
+	}
 
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *commandBuffer);
+	ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *commandBuffer);
 
-    commandBuffer.endRendering();
+	commandBuffer.endRendering();
 
-    // Transition SwapChain to Present Layout
-    transition_image_layout(
-        swapchain.images[imageIndex],
-        vk::ImageLayout::eColorAttachmentOptimal,
-        vk::ImageLayout::ePresentSrcKHR,
-        vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
-        {},
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::PipelineStageFlagBits2::eBottomOfPipe,
-        vk::ImageAspectFlagBits::eColor);
+	// Transition SwapChain to Present Layout
+	transition_image_layout(
+	    swapchain.images[imageIndex],
+	    vk::ImageLayout::eColorAttachmentOptimal,
+	    vk::ImageLayout::ePresentSrcKHR,
+	    vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead,
+	    {},
+	    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+	    vk::PipelineStageFlagBits2::eBottomOfPipe,
+	    vk::ImageAspectFlagBits::eColor);
 }
 
 // Inline Synchronization2 image barrier recorded into the current frame's command buffer.
 // Unlike VulkanUtils::recordImageLayoutTransition (which uses Vulkan 1.0 pipelineBarrier),
 // this version accepts explicit stage/access masks for fine-grained GPU dependency control.
 void EngineCore::transition_image_layout(
-    vk::Image image,
-    vk::ImageLayout old_layout,
-    vk::ImageLayout new_layout,
-    vk::AccessFlags2 src_access_mask,
-    vk::AccessFlags2 dst_access_mask,
+    vk::Image               image,
+    vk::ImageLayout         old_layout,
+    vk::ImageLayout         new_layout,
+    vk::AccessFlags2        src_access_mask,
+    vk::AccessFlags2        dst_access_mask,
     vk::PipelineStageFlags2 src_stage_mask,
     vk::PipelineStageFlags2 dst_stage_mask,
-    vk::ImageAspectFlags image_aspect_flags) const {
-    vk::ImageMemoryBarrier2 barrier = {
-        .srcStageMask = src_stage_mask,
-        .srcAccessMask = src_access_mask,
-        .dstStageMask = dst_stage_mask,
-        .dstAccessMask = dst_access_mask,
-        .oldLayout = old_layout,
-        .newLayout = new_layout,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = image,
-        .subresourceRange = {
-            .aspectMask = image_aspect_flags,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1
-        }
-    };
-    vk::DependencyInfo dependency_info = {
-        .dependencyFlags = {},
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers = &barrier
-    };
-    frames.commandBuffers[frames.frameIndex].pipelineBarrier2(dependency_info);
+    vk::ImageAspectFlags    image_aspect_flags) const
+{
+	vk::ImageMemoryBarrier2 barrier = {
+	    .srcStageMask        = src_stage_mask,
+	    .srcAccessMask       = src_access_mask,
+	    .dstStageMask        = dst_stage_mask,
+	    .dstAccessMask       = dst_access_mask,
+	    .oldLayout           = old_layout,
+	    .newLayout           = new_layout,
+	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	    .image               = image,
+	    .subresourceRange    = {
+	           .aspectMask     = image_aspect_flags,
+	           .baseMipLevel   = 0,
+	           .levelCount     = 1,
+	           .baseArrayLayer = 0,
+	           .layerCount     = 1}};
+	vk::DependencyInfo dependency_info = {
+	    .dependencyFlags         = {},
+	    .imageMemoryBarrierCount = 1,
+	    .pImageMemoryBarriers    = &barrier};
+	frames.commandBuffers[frames.frameIndex].pipelineBarrier2(dependency_info);
 }
 
-void EngineCore::drawFrame() {
-    if (!renderModeInitialized) {
-        lastSubmittedRenderMode = ui.renderMode;
-        renderModeInitialized = true;
-    } else if (ui.renderMode != lastSubmittedRenderMode) {
-        // Renderer switches can otherwise overlap in-flight GPU work that uses different
-        // pipeline/resource access patterns (especially PT denoiser scratch buffers).
-        vulkan.logicalDevice.waitIdle();
-        ptCameraMoved = true; // force history reset on the first PT frame after a mode switch
-        lastSubmittedRenderMode = ui.renderMode;
-    }
+void EngineCore::drawFrame()
+{
+	if (!renderModeInitialized)
+	{
+		lastSubmittedRenderMode = ui.renderMode;
+		renderModeInitialized   = true;
+	}
+	else if (ui.renderMode != lastSubmittedRenderMode)
+	{
+		// Renderer switches can otherwise overlap in-flight GPU work that uses different
+		// pipeline/resource access patterns (especially PT denoiser scratch buffers).
+		vulkan.logicalDevice.waitIdle();
+		if (ui.renderMode == RenderMode::SurfelPathTracer ||
+		    lastSubmittedRenderMode == RenderMode::SurfelPathTracer)
+		{
+			// Task 7's prepare pass consumes this to reset persistent surfel state.
+			ui.surfelPathTracerSettings.resetSurfels = true;
+		}
+		ptForceHistoryReset     = true;
+		lastSubmittedRenderMode = ui.renderMode;
+	}
 
-    // Note: inFlightFences, presentCompleteSemaphores, and commandBuffers are indexed by frameIndex,
-    //       while renderFinishedSemaphores is indexed by imageIndex
-    auto fenceResult = vulkan.logicalDevice.waitForFences(*frames.inFlightFences[frames.frameIndex], vk::True, UINT64_MAX);
-    if (fenceResult != vk::Result::eSuccess) {
-        throw std::runtime_error("failed to wait for fence!");
-    }
+	// Note: inFlightFences, presentCompleteSemaphores, and commandBuffers are indexed by frameIndex,
+	//       while renderFinishedSemaphores is indexed by imageIndex
+	auto fenceResult = waitForFenceOrThrow(
+	    vulkan.logicalDevice, *frames.inFlightFences[frames.frameIndex], "frame in-flight fence");
+	if (fenceResult != vk::Result::eSuccess)
+	{
+		throw std::runtime_error("failed to wait for fence!");
+	}
 
-    // Runtime skinned BLAS refit currently reuses per-model AS buffers across frames.
-    // Serialize in-flight submissions in this mode to avoid cross-frame AS write hazards.
-    if (resourceManager && resourceManager->hasRuntimeSkinnedModels()) {
-        for (size_t i = 0; i < frames.inFlightFences.size(); ++i) {
-            if (i == frames.frameIndex) {
-                continue;
-            }
-            const auto syncResult = vulkan.logicalDevice.waitForFences(*frames.inFlightFences[i], vk::True, UINT64_MAX);
-            if (syncResult != vk::Result::eSuccess) {
-                throw std::runtime_error("failed to synchronize runtime skinned BLAS updates");
-            }
-        }
-    }
+	// This slot's fence has passed: consume the readbacks recorded when it was last submitted.
+	updateAutoExposure(frames.frameIndex);
+	readPixelProbe(frames.frameIndex);
 
-    if (submittedRenderModes[frames.frameIndex] == RenderMode::PathTracer) {
-        collectPathTracerTimings(frames.frameIndex);
-        updateAdaptivePathTracerSettings();
-    }
+	auto refreshSurfelPathTracerRuntimeResources = [&]() {
+		if (!surfelPathTracerResources.initialized())
+		{
+			return;
+		}
 
-    auto [result, imageIndex] = swapchain.swapChain.acquireNextImage(
-        UINT64_MAX, *frames.presentCompleteSemaphores[frames.frameIndex], nullptr);
+		// Extends the earlier refreshSurfelPathTracerPersistentResources path to cover atlas images.
+		auto waitForSurfelPathTracerIdle = [&](const char *waitLabel) {
+			for (const auto &fence : frames.inFlightFences)
+			{
+				const auto surfelFenceResult = waitForFenceOrThrow(
+				    vulkan.logicalDevice, *fence, waitLabel);
+				if (surfelFenceResult != vk::Result::eSuccess)
+				{
+					throw std::runtime_error("failed to wait for surfel path tracer in-flight work");
+				}
+			}
+		};
 
-    if (result == vk::Result::eErrorOutOfDateKHR) {
-        recreateSwapChain();
-        return;
-    }
-    if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
-        assert(result == vk::Result::eTimeout || result == vk::Result::eNotReady);
-        throw std::runtime_error("failed to acquire swap chain image!");
-    }
+		const auto nextStaticSettings =
+		    makeSurfelPathTracerStaticSettingsSnapshot(ui.surfelPathTracerSettings);
+		if (!surfelPathTracerStaticSettingsInitialized)
+		{
+			surfelPathTracerStaticSettings = nextStaticSettings;
+			surfelPathTracerStaticSettingsInitialized = true;
+		}
 
-    // If this swapchain image is still associated with an older in-flight frame, wait for it.
-    if (imageIndex < imagesInFlight.size() && imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
-        const auto imageFenceResult = vulkan.logicalDevice.waitForFences(
-            std::array<vk::Fence, 1>{imagesInFlight[imageIndex]}, vk::True, UINT64_MAX);
-        if (imageFenceResult != vk::Result::eSuccess) {
-            throw std::runtime_error("failed to wait for in-flight swapchain image fence");
-        }
-    }
+		const bool staticSettingsChanged =
+		    !surfelPathTracerStaticSettingsMatch(surfelPathTracerStaticSettings, nextStaticSettings);
+		const bool atlasSettingsChanged =
+		    surfelPathTracerAtlasSettingsChanged(surfelPathTracerStaticSettings, nextStaticSettings);
+		const bool needsResourceRecreate =
+		    staticSettingsChanged ||
+		    surfelPathTracerResources.needsPersistentResourceRecreate(ui.surfelPathTracerSettings);
 
-    frames.updateUniformBuffer(frames.frameIndex, camera, swapchain.extent, ui.lightDirection, ui.exposure, ui.textureColorSpaceModel);
+		if (needsResourceRecreate)
+		{
+			waitForSurfelPathTracerIdle("surfel path tracer persistent resource fence");
+			// Storage descriptor creation initializes both current and previous
+			// history bindings for every frame slot. Invalidate the old frame-slot
+			// relationship before rebuilding those sets; doing it afterward can
+			// make the previous slot equal the slot currently being initialized.
+			resetSurfelPathTracerTemporalHistory();
+			ptForceHistoryReset = true;
+			surfelPathTracerResources.resetPersistentResources(vulkan, ui.surfelPathTracerSettings);
+			if (atlasSettingsChanged)
+			{
+				surfelPathTracerResources.recreateSwapchainResources(vulkan, swapchain);
+				surfelPathTracerPersistentImageLayoutsInitialized = false;
+				createSurfelPathTracerSkyDescriptorSets();
+			}
+			createSurfelPathTracerStorageDescriptorSets();
+			createSurfelPathTracerRtDescriptorSets();
+			surfelPathTracerStaticSettings = nextStaticSettings;
+			surfelPathTracerStaticSettingsInitialized = true;
+		}
 
-    // Detect camera movement for path tracer history reset.
-    // Any translation or rotation invalidates the reprojected history.
-    ptCameraMoved = (glm::distance(camera.position, ptPrevCameraPos) > 1e-5f ||
-                     std::abs(camera.pitch - ptPrevPitch) > 1e-5f ||
-                     std::abs(camera.yaw - ptPrevYaw) > 1e-5f);
-    ptPrevCameraPos = camera.position;
-    ptPrevPitch = camera.pitch;
-    ptPrevYaw = camera.yaw;
+		ui.surfelPathTracerStats = surfelPathTracerResources.readStats(frames.frameIndex);
+	};
+	if (ui.renderMode == RenderMode::SurfelPathTracer)
+	{
+		refreshSurfelPathTracerRuntimeResources();
+	}
 
-    // Only reset the fence if we are submitting work
-    vulkan.logicalDevice.resetFences(*frames.inFlightFences[frames.frameIndex]);
+	// Runtime skinned BLAS refit currently reuses per-model AS buffers across frames.
+	// Serialize in-flight submissions in this mode to avoid cross-frame AS write hazards.
+	if (resourceManager && resourceManager->hasRuntimeSkinnedModels())
+	{
+		for (size_t i = 0; i < frames.inFlightFences.size(); ++i)
+		{
+			if (i == frames.frameIndex)
+			{
+				continue;
+			}
+			const auto syncResult = waitForFenceOrThrow(
+			    vulkan.logicalDevice, *frames.inFlightFences[i], "runtime skinned BLAS synchronization fence");
+			if (syncResult != vk::Result::eSuccess)
+			{
+				throw std::runtime_error("failed to synchronize runtime skinned BLAS updates");
+			}
+		}
+	}
 
-    frames.commandBuffers[frames.frameIndex].reset();
-    vk::raii::CommandBuffer &commandBuffer = frames.commandBuffers[frames.frameIndex];
-    commandBuffer.begin(vk::CommandBufferBeginInfo{});
+	if (submittedRenderModes[frames.frameIndex] == RenderMode::PathTracer)
+	{
+		collectPathTracerTimings(frames.frameIndex);
+		updateAdaptivePathTracerSettings();
+	}
+	else if (submittedRenderModes[frames.frameIndex] == RenderMode::SurfelPathTracer)
+	{
+		collectSurfelPathTracerTimings(frames.frameIndex);
+	}
 
-    // 2. Main Pass
-    recordCommandBuffer(imageIndex);
-    submittedRenderModes[frames.frameIndex] = ui.renderMode;
-    ptTimestampsValid[frames.frameIndex] = (ui.renderMode == RenderMode::PathTracer);
+	auto [result, imageIndex] = swapchain.swapChain.acquireNextImage(
+	    UINT64_MAX, *frames.presentCompleteSemaphores[frames.frameIndex], nullptr);
 
-    // The swapchain image is accessed at eColorAttachmentOutput (main/ImGui pass) and at
-    // eTransfer (blit in compute and RT paths). Both stages must wait for vkAcquireNextImage.
-    vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eAllCommands);
-    const vk::SubmitInfo submitInfo{
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &*frames.presentCompleteSemaphores[frames.frameIndex],
-        .pWaitDstStageMask = &waitDestinationStageMask,
-        .commandBufferCount = 1,
-        .pCommandBuffers = &*frames.commandBuffers[frames.frameIndex],
-        .signalSemaphoreCount = 1,
-        .pSignalSemaphores = &*frames.renderFinishedSemaphores[imageIndex]
-    };
+	if (result == vk::Result::eErrorOutOfDateKHR)
+	{
+		recreateSwapChain();
+		return;
+	}
+	if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
+	{
+		assert(result == vk::Result::eTimeout || result == vk::Result::eNotReady);
+		throw std::runtime_error("failed to acquire swap chain image!");
+	}
 
-    commandBuffer.end();
+	// If this swapchain image is still associated with an older in-flight frame, wait for it.
+	if (imageIndex < imagesInFlight.size() && imagesInFlight[imageIndex] != VK_NULL_HANDLE)
+	{
+		const auto imageFenceResult = waitForFenceOrThrow(
+		    vulkan.logicalDevice, imagesInFlight[imageIndex], "swapchain image in-flight fence");
+		if (imageFenceResult != vk::Result::eSuccess)
+		{
+			throw std::runtime_error("failed to wait for in-flight swapchain image fence");
+		}
+	}
 
-    vulkan.queue.submit(submitInfo, *frames.inFlightFences[frames.frameIndex]);
-    if (imageIndex < imagesInFlight.size()) {
-        imagesInFlight[imageIndex] = *frames.inFlightFences[frames.frameIndex];
-    }
+	if (ui.renderMode == RenderMode::PathTracer)
+	{
+		const float clampedScale = std::clamp(ui.pathTracerSettings.resolutionScale, 0.5f, 1.0f);
+		const float secondaryScale = ui.pathTracerSettings.reduceSecondaryEffects ? 0.90f : 1.0f;
+		const float effectiveScale = std::clamp(clampedScale * secondaryScale, 0.5f, 1.0f);
+		const vk::Extent2D nextRenderExtent{
+		    std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.width) * effectiveScale)),
+		    std::max(1u, static_cast<uint32_t>(static_cast<float>(swapchain.extent.height) * effectiveScale))};
+		if (ptActiveRenderExtent.width != 0 &&
+		    (ptActiveRenderExtent.width != nextRenderExtent.width ||
+		     ptActiveRenderExtent.height != nextRenderExtent.height))
+		{
+			ptForceHistoryReset = true;
+		}
+		ptActiveRenderExtent = nextRenderExtent;
+	}
 
-    const vk::PresentInfoKHR presentInfoKHR{
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &*frames.renderFinishedSemaphores[imageIndex],
-        .swapchainCount = 1,
-        .pSwapchains = &*swapchain.swapChain,
-        .pImageIndices = &imageIndex
-    };
+	frames.updateUniformBuffer(frames.frameIndex, camera, swapchain.extent, ui.lightDirection, ui.exposure, ui.textureColorSpaceModel);
 
-    // VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS is defined so presentKHR should return
-    // eErrorOutOfDateKHR as a value rather than throw, but behaviour is inconsistent across
-    // loader/driver versions. The try/catch ensures resize detection is never silently lost.
-    try {
-        result = vulkan.queue.presentKHR(presentInfoKHR);
-    } catch (vk::OutOfDateKHRError &) {
-        result = vk::Result::eErrorOutOfDateKHR;
-    } catch (vk::SurfaceLostKHRError &) {
-        result = vk::Result::eErrorOutOfDateKHR;
-    }
+	// Camera motion metric for motion-aware temporal blending.
+	const float translationDelta = glm::distance(camera.position, ptPrevCameraPos);
+	const float pitchDelta       = std::abs(camera.pitch - ptPrevPitch);
+	const float yawDelta         = std::abs(camera.yaw - ptPrevYaw);
+	const float angularDelta     = std::max(pitchDelta, yawDelta);
 
-    if ((result == vk::Result::eSuboptimalKHR) || (result == vk::Result::eErrorOutOfDateKHR) ||
-        swapchain.framebufferResized) {
-        swapchain.framebufferResized = false;
-        recreateSwapChain();
-    } else {
-        assert(result == vk::Result::eSuccess);
-    }
-    frames.frameIndex = (frames.frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
+	constexpr float kTranslationForFullMotion = 0.05f;
+	constexpr float kRotationForFullMotion    = glm::radians(1.5f);
+	const float     normalizedTranslation     = translationDelta / kTranslationForFullMotion;
+	const float     normalizedRotation        = angularDelta / kRotationForFullMotion;
+	const float     rawMotion                 = std::max(normalizedTranslation, normalizedRotation);
+	const float     rawMotion01               = std::clamp(rawMotion, 0.0f, 1.0f);
+	ptSmoothedMotion                          = glm::mix(ptSmoothedMotion, rawMotion01, 0.2f);
+	ptCameraMoved                             = rawMotion01 > 1e-4f;
+
+	// Keep hard history reset only for large jumps/teleports and explicit reset events.
+	const bool largeJump = (translationDelta > std::max(0.25f, ui.pathTracerSettings.historyResetMotionThreshold)) ||
+	                       (angularDelta > glm::radians(75.0f));
+	ptForceHistoryReset                       = ptForceHistoryReset || largeJump;
+	ui.pathTracerPerfStats.cameraMotionFactor = std::clamp(ptSmoothedMotion, 0.0f, 1.0f);
+
+	ptPrevCameraPos = camera.position;
+	ptPrevPitch     = camera.pitch;
+	ptPrevYaw       = camera.yaw;
+
+	// Only reset the fence if we are submitting work
+	vulkan.logicalDevice.resetFences(*frames.inFlightFences[frames.frameIndex]);
+
+	frames.commandBuffers[frames.frameIndex].reset();
+	vk::raii::CommandBuffer &commandBuffer = frames.commandBuffers[frames.frameIndex];
+	commandBuffer.begin(vk::CommandBufferBeginInfo{});
+
+	// 2. Main Pass
+	recordCommandBuffer(imageIndex);
+	if (ui.renderMode == RenderMode::PathTracer)
+	{
+		ptForceHistoryReset = false;
+	}
+	else if (ui.renderMode == RenderMode::SurfelPathTracer)
+	{
+		ptForceHistoryReset = false;
+	}
+	submittedRenderModes[frames.frameIndex] = ui.renderMode;
+	const bool hasRenderableSurfelScene =
+	    ui.renderMode == RenderMode::SurfelPathTracer &&
+	    ui.surfelPathTracerSettings.enabled &&
+	    resourceManager && resourceManager->getModelCount() > 0;
+	gpuTimestampsValid[frames.frameIndex] =
+	    ui.renderMode == RenderMode::PathTracer || hasRenderableSurfelScene;
+
+	// The swapchain image is accessed at eColorAttachmentOutput (main/ImGui pass) and at
+	// eTransfer (blit in compute and RT paths). Both stages must wait for vkAcquireNextImage.
+	vk::PipelineStageFlags waitDestinationStageMask = vk::PipelineStageFlagBits::eTransfer |
+	                                                       vk::PipelineStageFlagBits::eColorAttachmentOutput;
+	const vk::SubmitInfo   submitInfo{
+	      .waitSemaphoreCount   = 1,
+	      .pWaitSemaphores      = &*frames.presentCompleteSemaphores[frames.frameIndex],
+	      .pWaitDstStageMask    = &waitDestinationStageMask,
+	      .commandBufferCount   = 1,
+	      .pCommandBuffers      = &*frames.commandBuffers[frames.frameIndex],
+	      .signalSemaphoreCount = 1,
+	      .pSignalSemaphores    = &*frames.renderFinishedSemaphores[imageIndex]};
+
+	commandBuffer.end();
+
+	vulkan.queue.submit(submitInfo, *frames.inFlightFences[frames.frameIndex]);
+	if (imageIndex < imagesInFlight.size())
+	{
+		imagesInFlight[imageIndex] = *frames.inFlightFences[frames.frameIndex];
+	}
+
+	const vk::PresentInfoKHR presentInfoKHR{
+	    .waitSemaphoreCount = 1,
+	    .pWaitSemaphores    = &*frames.renderFinishedSemaphores[imageIndex],
+	    .swapchainCount     = 1,
+	    .pSwapchains        = &*swapchain.swapChain,
+	    .pImageIndices      = &imageIndex};
+
+	// VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS is defined so presentKHR should return
+	// eErrorOutOfDateKHR as a value rather than throw, but behaviour is inconsistent across
+	// loader/driver versions. The try/catch ensures resize detection is never silently lost.
+	try
+	{
+		result = vulkan.queue.presentKHR(presentInfoKHR);
+	}
+	catch (vk::OutOfDateKHRError &)
+	{
+		result = vk::Result::eErrorOutOfDateKHR;
+	}
+	catch (vk::SurfaceLostKHRError &)
+	{
+		result = vk::Result::eErrorOutOfDateKHR;
+	}
+
+	if ((result == vk::Result::eSuboptimalKHR) || (result == vk::Result::eErrorOutOfDateKHR) ||
+	    swapchain.framebufferResized)
+	{
+		swapchain.framebufferResized = false;
+		recreateSwapChain();
+	}
+	else
+	{
+		assert(result == vk::Result::eSuccess);
+	}
+	frames.frameIndex = (frames.frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 }
-
-

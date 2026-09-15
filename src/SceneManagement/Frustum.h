@@ -30,6 +30,23 @@ struct Frustum
 		return true;
 	}
 
+	[[nodiscard]] bool intersectsAABB(const AABB &bounds) const
+	{
+		for (const glm::vec4 &plane : planes)
+		{
+			const glm::vec3 normal(plane);
+			const glm::vec3 positiveVertex{
+			    normal.x >= 0.0f ? bounds.max.x : bounds.min.x,
+			    normal.y >= 0.0f ? bounds.max.y : bounds.min.y,
+			    normal.z >= 0.0f ? bounds.max.z : bounds.min.z};
+			if (glm::dot(normal, positiveVertex) + plane.w < 0.0f)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	static Frustum fromViewProjection(const glm::mat4 &viewProjection)
 	{
 		Frustum frustum{};
@@ -43,7 +60,8 @@ struct Frustum
 		frustum.planes[1] = row3 - row0; // right
 		frustum.planes[2] = row3 + row1; // bottom
 		frustum.planes[3] = row3 - row1; // top
-		frustum.planes[4] = row3 + row2; // near
+		// GLM_FORCE_DEPTH_ZERO_TO_ONE uses z >= 0 for the near clip inequality.
+		frustum.planes[4] = row2;        // near
 		frustum.planes[5] = row3 - row2; // far
 
 		for (glm::vec4 &plane : frustum.planes)

@@ -48,7 +48,7 @@ struct ScenePushConstants {
     int materialIndex;
     int cascadeIndex;   // which CSM cascade is rendered (shadow pass); unused in main pass
     int padding2;
-    int padding3;
+    uint padding3;
     float4 skyData; // xyz = color, w = threshold
 };
 

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <stdexcept>
 #include <fastgltf/tools.hpp>
 
 GpuResourceRegistry::GpuResourceRegistry(vk::raii::Device &device, vk::raii::PhysicalDevice &physicalDevice, vk::raii::CommandPool &commandPool, vk::raii::Queue &queue,
@@ -299,14 +300,36 @@ void GpuResourceRegistry::createSkinningResources(const fastgltf::Asset &gltf, M
 
 void GpuResourceRegistry::createModelDescriptorSet(ModelResource &modelResource, vk::DescriptorSetLayout layout) const
 {
-	uint32_t variableDescCounts[] = {1000};
+	constexpr uint32_t maxMaterialTextures = 1000;
+	const uint32_t textureDescriptorCount = std::max(
+	    1u, static_cast<uint32_t>(modelResource.textureImageViews.size()));
+	if (textureDescriptorCount > maxMaterialTextures)
+	{
+		throw std::runtime_error("model exceeds the material texture descriptor limit");
+	}
+
+	// Material sets own a right-sized pool. Charging every model the layout's
+	// 1000-descriptor maximum against the global pool made the fourth model fail
+	// regardless of its actual texture count.
+	std::array<vk::DescriptorPoolSize, 2> poolSizes = {
+	    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 1},
+	    vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, textureDescriptorCount}};
+	vk::DescriptorPoolCreateInfo poolInfo{
+	    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet |
+	             vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind,
+	    .maxSets = 1,
+	    .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+	    .pPoolSizes = poolSizes.data()};
+	modelResource.materialDescriptorPool = vk::raii::DescriptorPool(device, poolInfo);
+
+	uint32_t variableDescCounts[] = {textureDescriptorCount};
 	vk::DescriptorSetVariableDescriptorCountAllocateInfo variableDescriptorCountAllocInfo;
 	variableDescriptorCountAllocInfo.descriptorSetCount = 1;
 	variableDescriptorCountAllocInfo.pDescriptorCounts = variableDescCounts;
 
 	vk::DescriptorSetAllocateInfo allocInfo{};
 	allocInfo.pNext = &variableDescriptorCountAllocInfo;
-	allocInfo.descriptorPool = *descriptorPool;
+	allocInfo.descriptorPool = *modelResource.materialDescriptorPool;
 	allocInfo.descriptorSetCount = 1;
 	allocInfo.pSetLayouts = &layout;
 	modelResource.descriptorSet = std::move(vk::raii::DescriptorSets(device, allocInfo).front());
@@ -366,6 +389,9 @@ void GpuResourceRegistry::buildBLAS(ModelResource &modelResource, const std::vec
 	vk::DeviceAddress vertexAddress = Laphria::VulkanUtils::getBufferDeviceAddress(device, modelResource.vertexBuffer);
 	vk::DeviceAddress indexAddress = Laphria::VulkanUtils::getBufferDeviceAddress(device, modelResource.indexBuffer);
 	const vk::DeviceSize scratchAlignment = Laphria::VulkanUtils::getAccelerationStructureScratchAlignment(physicalDevice);
+	auto cmd = Laphria::VulkanUtils::beginSingleTimeCommands(device, commandPool);
+	std::vector<Laphria::VulkanUtils::VmaBuffer> transientScratchBuffers;
+	transientScratchBuffers.reserve(modelResource.meshes.size());
 
 	for (const auto &mesh : modelResource.meshes)
 	{
@@ -446,12 +472,23 @@ void GpuResourceRegistry::buildBLAS(ModelResource &modelResource, const std::vec
 		const vk::DeviceAddress baseScratchAddress = Laphria::VulkanUtils::getBufferDeviceAddress(device, scratchBuffer);
 		buildInfo.scratchData.deviceAddress = Laphria::VulkanUtils::alignDeviceAddress(baseScratchAddress, scratchAlignment);
 
-		auto cmd = Laphria::VulkanUtils::beginSingleTimeCommands(device, commandPool);
 		const vk::AccelerationStructureBuildRangeInfoKHR *pBuildRanges = buildRanges.data();
 		cmd.buildAccelerationStructuresKHR(buildInfo, pBuildRanges);
-		Laphria::VulkanUtils::endSingleTimeCommands(device, queue, commandPool, cmd);
 
 		modelResource.blasElements.push_back(std::move(blas));
-		modelResource.blasScratchBuffers.push_back(std::move(scratchBuffer));
+		if (modelResource.hasRuntimeSkinning)
+		{
+			// Update builds reuse the original per-mesh scratch allocation.
+			modelResource.blasScratchBuffers.push_back(std::move(scratchBuffer));
+		}
+		else
+		{
+			// Static BLAS scratch only has to survive this batched submission.
+			transientScratchBuffers.push_back(std::move(scratchBuffer));
+		}
 	}
+
+	// Submit every mesh build together. The single wait also makes it safe to
+	// release all static-model scratch allocations on return.
+	Laphria::VulkanUtils::endSingleTimeCommands(device, queue, commandPool, cmd);
 }

@@ -11,7 +11,6 @@ struct ImportSettings
 	bool importAnimations = true;
 	bool importMaterials = true;
 	bool importSkins = true;
-	bool strictValidation = false;
 };
 
 struct EditorProject

@@ -117,7 +117,6 @@ class FrameContext
 	void createGBufferResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
 	void createHistoryResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
 	void createAtrousResources(const VulkanDevice &dev, const SwapchainManager &swapchain);
-
 	void createUniformBuffers(const VulkanDevice &dev);
 	void createTLASResources(VulkanDevice &dev);
 	void createShadowResources(const VulkanDevice &dev);

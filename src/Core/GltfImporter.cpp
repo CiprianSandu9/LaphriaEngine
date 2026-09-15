@@ -162,10 +162,22 @@ SceneNode::Ptr GltfImporter::processGltfNode(const fastgltf::Asset &gltf, size_t
 				}
 
 				fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(gltf, posAcc, [&](fastgltf::math::fvec3 p, size_t i) {
-					vertices[vCount + i].pos      = glm::vec3(p.x(), p.y(), p.z());
+					const glm::vec3 position(p.x(), p.y(), p.z());
+					vertices[vCount + i].pos      = position;
 					vertices[vCount + i].color    = glm::vec3(1.0f);
 					vertices[vCount + i].normal   = glm::vec3(0, 1, 0);
 					vertices[vCount + i].texCoord = glm::vec2(0.0f);
+					if (!loadedMesh.hasBounds)
+					{
+						loadedMesh.boundsMin = position;
+						loadedMesh.boundsMax = position;
+						loadedMesh.hasBounds = true;
+					}
+					else
+					{
+						loadedMesh.boundsMin = glm::min(loadedMesh.boundsMin, position);
+						loadedMesh.boundsMax = glm::max(loadedMesh.boundsMax, position);
+					}
 				});
 			}
 
@@ -331,7 +343,6 @@ SceneNode::Ptr GltfImporter::buildSceneNodes(const fastgltf::Asset &gltf, ModelR
 GltfImporter::ParsedAsset GltfImporter::parseAsset(const std::string &path) const
 {
 	fastgltf::Parser parser(enabledGltfExtensions());
-	LOGI("GLTF parse: reading file bytes for %s", path.c_str());
 	auto data = fastgltf::GltfDataBuffer::FromPath(path);
 	if (data.error() != fastgltf::Error::None)
 	{
@@ -344,7 +355,6 @@ GltfImporter::ParsedAsset GltfImporter::parseAsset(const std::string &path) cons
 	                             fastgltf::Options::GenerateMeshIndices | fastgltf::Options::DecomposeNodeMatrices;
 
 	std::filesystem::path modelDir = std::filesystem::path(path).parent_path();
-	LOGI("GLTF parse: starting document parse for %s", path.c_str());
 	auto asset = parser.loadGltf(data.get(), modelDir, gltfOptions);
 	if (asset.error() != fastgltf::Error::None)
 	{
@@ -352,9 +362,6 @@ GltfImporter::ParsedAsset GltfImporter::parseAsset(const std::string &path) cons
 		oss << "Failed to parse glTF: " << fastgltf::getErrorName(asset.error()) << " - " << fastgltf::getErrorMessage(asset.error());
 		throw std::runtime_error(oss.str());
 	}
-	LOGI("GLTF parse: document parsed for %s (meshes=%zu images=%zu materials=%zu)",
-	     path.c_str(), asset.get().meshes.size(), asset.get().images.size(), asset.get().materials.size());
-
 	const bool hasSkinning = detectSkinningAttributes(asset.get());
 	return ParsedAsset{
 	    .asset                 = std::move(asset.get()),
@@ -558,6 +565,24 @@ void GltfImporter::populateMaterials(const fastgltf::Asset &gltf, ModelResource 
 		pbrMat.data.baseColorFactor = glm::vec4(mat.pbrData.baseColorFactor[0], mat.pbrData.baseColorFactor[1], mat.pbrData.baseColorFactor[2], mat.pbrData.baseColorFactor[3]);
 		pbrMat.data.metallicFactor  = mat.pbrData.metallicFactor;
 		pbrMat.data.roughnessFactor = mat.pbrData.roughnessFactor;
+		// alphaCutoff doubles as the "alpha-tested" flag: the any-hit shaders skip the
+		// texture fetch when it is 0, and the surfel cache treats > 0 as thin foliage.
+		// The glTF default of 0.5 only has meaning in MASK mode; leaving it on OPAQUE
+		// materials marked every surface as foliage. BLEND keeps the previous 0.5 test
+		// so translucent cloth still cuts out in the ray-traced paths.
+		switch (mat.alphaMode)
+		{
+			case fastgltf::AlphaMode::Opaque:
+				pbrMat.data.alphaCutoff = 0.0f;
+				break;
+			case fastgltf::AlphaMode::Mask:
+				pbrMat.data.alphaCutoff = std::max(mat.alphaCutoff, 0.001f);
+				break;
+			case fastgltf::AlphaMode::Blend:
+			default:
+				pbrMat.data.alphaCutoff = 0.5f;
+				break;
+		}
 
 		if (mat.pbrData.baseColorTexture.has_value())
 		{

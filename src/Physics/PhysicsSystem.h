@@ -12,7 +12,7 @@ class PhysicsSystem {
 public:
     PhysicsSystem();
 
-    ~PhysicsSystem() = default;
+    ~PhysicsSystem();
 
     // CPU Logic
     void updateCPU(const std::vector<SceneNode::Ptr> &nodes, float deltaTime);
@@ -40,6 +40,7 @@ public:
     void createSSBO(const vk::raii::Device &device, const vk::raii::PhysicalDevice &physDevice, size_t size);
 
     [[nodiscard]] const vk::raii::Buffer &getSSBOBuffer() const { return physicsSSBO; }
+    [[nodiscard]] const vk::raii::Buffer &getCollisionOutputSSBOBuffer() const { return physicsCollisionOutputSSBO; }
 
 private:
     glm::vec3 gravity{0.0f, -9.81f, 0.0f};
@@ -69,6 +70,9 @@ private:
     vk::raii::Buffer physicsSSBO{nullptr};
     vk::raii::DeviceMemory physicsSSBOMemory{nullptr};
     void *physicsSSBOMapped{nullptr};
+    vk::raii::Buffer physicsCollisionOutputSSBO{nullptr};
+    vk::raii::DeviceMemory physicsCollisionOutputSSBOMemory{nullptr};
+    void *physicsCollisionOutputSSBOMapped{nullptr};
     size_t currentSSBOSize = 0;
 
     void updateSSBO(const std::vector<SceneNode::Ptr> &nodes);

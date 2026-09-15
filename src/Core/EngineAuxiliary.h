@@ -60,6 +60,7 @@ enum class RenderMode
 	Rasterizer,   // shadow + starfield compute + raster graphics pipeline
 	RayTracer,    // classic RT: direct illumination with RT shadows, tone-mapped in ClosestHit
 	PathTracer,   // path tracer with temporal reprojection and A-Trous denoiser
+	SurfelPathTracer, // RenderMode::SurfelPathTracer: persistent surfel GI cache with path-traced updates
 };
 
 enum class TextureColorSpaceModel : uint32_t
@@ -141,6 +142,9 @@ struct DenoisePushConstants
 	float   phiNormal;   // normal edge-stopping exponent (typical: 128.0)
 	float   exposureScale; // global exposure multiplier applied on final denoise pass
 	int32_t useRawInput;
+	uint32_t renderWidth;
+	uint32_t renderHeight;
+	int32_t  resetHistory;
 };
 
 struct SkinningPushConstants
@@ -157,7 +161,7 @@ struct ScenePushConstants
 	alignas(4) int materialIndex;
 	alignas(4) int cascadeIndex;        // which CSM cascade is being rendered (shadow pass); padding for main pass
 	alignas(4) int padding2;
-	alignas(4) int padding3;
+	alignas(4) uint32_t padding3;
 	alignas(16) glm::vec4 skyData;        // xyz = color, w = threshold
 };
 
@@ -233,6 +237,9 @@ struct LoadedMesh
 {
 	std::string                name;
 	std::vector<MeshPrimitive> primitives;
+	glm::vec3                  boundsMin{0.0f};
+	glm::vec3                  boundsMax{0.0f};
+	bool                       hasBounds = false;
 };
 }        // namespace Laphria
 

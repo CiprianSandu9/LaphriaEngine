@@ -4,7 +4,7 @@
 
 glm::mat4 Camera::getViewMatrix() const {
     // Build the camera's world transform (T * R), then invert it to get view space.
-    // Inverting is cheaper than computing the inverse analytically here because
+    // Inverting  s cheaper than computing the inverse analytically here because
     // the rotation matrix is orthogonal (inverse == transpose), but GLM handles that.
     glm::mat4 cameraTranslation = glm::translate(glm::mat4(1.f), position);
     glm::mat4 cameraRotation = getRotationMatrix();
